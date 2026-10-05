@@ -1,23 +1,20 @@
-# KV CELL OS PREMIUM V10 ULTIMATE
+# KV CELL OS PREMIUM — V20 ULTIMATE
 
-Versão final focada em operação real LAGOS + MAGÉ, com backend Python padrão, SQLite e frontend sem dependências pesadas.
+Backend/frontend preparado para Square Cloud.
 
-## Recursos principais
-- Dashboard financeiro por unidade.
-- Compras de aparelhos com custo total e venda no mesmo cadastro.
-- Venda: local, preço, fiado, PIX, dinheiro, débito/crédito, parcelas e taxa.
-- Consertos/OS e Desbloqueios separados.
-- Orçamentos com link público, aceite/recusa e resposta registrada no sistema.
-- Películas com pesquisa bidirecional e assistente de IA.
-- Precificação integrada ao KV CELL BOT [I.A].
-- Chat central com IA + LAGOS + MAGÉ + LOG.
-- Auditoria por usuário/unidade e desfazer de ações.
-- Backup ZIP.
-- Aba futura Facebook/Messenger reservada para conexão Meta.
-- Logo e configurações.
+## V20
+- Custos de material, mão de obra e extras em OS e desbloqueios.
+- Custo total e lucro calculados automaticamente.
+- Entradas e custos vinculados ao Financeiro sem duplicidade ao editar.
+- Status operacionais para OS e desbloqueios.
+- Acompanhamento público por link com linha do tempo.
+- Botões de visualização, edição, impressão/PDF, link, 2ª via térmica, WhatsApp, garantia, finalizar e excluir.
+- Garantia vinculada à OS/desbloqueio original.
+- Chat normal não chama IA.
+- IA somente quando a mensagem começa com `/bot`.
+- BOT e LOG são identificadores de mensagens/eventos, não botões do topo.
+- Undo de exclusão restaura o registro quando possível e recompõe os lançamentos financeiros vinculados.
+- Facebook/Messenger permanece preparado como recurso futuro.
 
-## Variáveis Square Cloud
-Use as variáveis do `.env.example`. A chave Gemini fica somente no ambiente do servidor.
-
-## Deploy
-`squarecloud.app` usa `MAIN=app.py` e `AUTORESTART=true`.
+## Segurança
+As chaves Gemini são lidas exclusivamente das variáveis de ambiente `GEMINI_API_KEY` ou `GOOGLE_API_KEY`.
