@@ -333,3 +333,82 @@ const _bootV20=boot; boot=async function(){
  document.body.innerHTML=`<div class="shell"><aside class="sidebar"><div class="brand"><div class="logo-wrap"><div class="logo">KV</div></div><div><b>KV CELL</b><small>OS PREMIUM • V20 ULTIMATE</small></div></div><div class="nav"><div class="navtitle">OPERAÇÃO</div>${['dashboard','services','devices','purchases','unlock','pdv'].map(m=>nav(m)).join('')}<div class="navtitle">GESTÃO</div>${['pricing','quotes','finance','inventory','films','forgotten','customers'].map(m=>nav(m)).join('')}<div class="navtitle">CENTRAL</div>${['chat','facebook'].map(m=>nav(m)).join('')}<div class="navtitle">ADMIN</div>${['users','admin','settings'].map(m=>nav(m)).join('')}</div></aside><main class="main"><div class="topbar"><div><b id="crumb">Painel</b><div class="crumb">KV CELL OS PREMIUM • LAGOS + MAGÉ • V20 ULTIMATE</div></div><div class="top-actions"><select id="unit" class="select unit"><option>TODOS</option><option>LAGOS</option><option>MAGÉ</option></select><button class="btn ghost" onclick="openSearch()">⌕ Buscar</button><button class="btn ghost" onclick="logout()">Sair</button></div></div><div id="content"></div></main></div><div id="modal" class="modal"></div><div id="toast" class="toast"></div>`;
  $('#unit').value=UNIT;$('#unit').onchange=e=>{UNIT=e.target.value;localStorage.setItem('kv_unit',UNIT);render()};try{const st=await api('/api/settings');if(st.logo_data&&$('#brandLogo'))$('#brandLogo').src=st.logo_data}catch{}render();
 };
+
+
+/* KV CELL OS PREMIUM V21 — CORREÇÃO DEFINITIVA: CLIENTE + CANAIS SEPARADOS */
+icons.chat_units='💬'; icons.ai='🤖'; icons.logs='📋';
+names.chat_units='Chat Unidades'; names.ai='Perguntar à I.A.'; names.logs='Logs';
+
+function customerPicker(name='customer_id',label='Cliente'){
+  return `<div class="field full cp-wrap"><label>${label} <span class="muted">Digite o início do nome OU telefone para localizar no banco</span></label><input class="input cp-input" data-cp-name="${name}" placeholder="Ex.: Jéssica ou 2298" autocomplete="off"><input type="hidden" name="${name}" value=""><div class="cp-results"></div></div>`;
+}
+async function wirePickers(){
+  $$('.cp-input').forEach(inp=>{
+    if(inp.dataset.wired==='1') return; inp.dataset.wired='1';
+    const box=inp.closest('.cp-wrap'), hidden=box.querySelector('input[type=hidden]'), res=box.querySelector('.cp-results');
+    inp.oninput=async()=>{
+      const q=inp.value.trim(); hidden.value=''; if(q.length<2){res.innerHTML='';return;}
+      try{const data=await api('/api/customer-search?q='+encodeURIComponent(q));
+        res.innerHTML=data.map(c=>`<button type="button" class="cp-option" data-id="${c.id}"><b>${esc(c.name)}</b><span>${esc(c.phone||'Sem telefone')} • ${c.service_count||0} serviços • Score ${c.score||0}</span></button>`).join('')||'<div class="cp-empty">Nenhum cliente encontrado.</div>';
+        res.querySelectorAll('.cp-option').forEach(b=>b.onclick=()=>{const c=data.find(x=>String(x.id)===b.dataset.id);hidden.value=c.id;inp.value=c.name+(c.phone?' • '+c.phone:'');res.innerHTML=`<div class="cp-selected">✓ ${esc(c.name)} • ${esc(c.phone||'')} <small>Cliente cadastrado #${c.id}</small></div>`});
+      }catch(e){res.innerHTML=`<div class="cp-empty">${esc(e.message)}</div>`}
+    };
+  });
+}
+
+serviceForm=function(){
+  formModal('Nova Ordem de Serviço',`<div class="formgrid">
+    ${f('unit','Unidade','select',['LAGOS','MAGÉ'])}
+    ${customerPicker('customer_id','Cliente')}
+    ${f('technician','Técnico / operador')}
+    ${f('brand','Marca')}${f('model','Modelo')}${f('imei','IMEI (opcional)')}
+    ${f('description','Serviço solicitado','textarea','',true)}
+    ${f('diagnosis','Diagnóstico','textarea','',true)}
+    ${f('price','Valor cobrado','number','0')}
+    ${f('cost_material','Custo de peças / materiais','number','0')}${f('cost_labor','Custo de mão de obra','number','0')}${f('cost_extra','Outros custos / deslocamento','number','0')}
+    ${f('warranty','Garantia','text','90 dias')}${f('status','Status','select',['aberto','aguardando peça','em andamento','pronto','entregue','cancelado'])}
+    <div class="field full"><label>Checklist técnico</label>${checklist()}</div>${photoBox()}${f('notes','Observações','textarea','',true)}
+  </div>`,async()=>{try{const m=$('#modal'),d=formValues(m.querySelector('#modalForm'));d.kind='conserto';d.checklist=collectChecks(m);d.photos=await readPhotos();await api('/api/services',{method:'POST',body:JSON.stringify(d)});closeModal();toast('OS salva • cliente localizado pelo cadastro');render()}catch(e){toast(e.message,'error')}});
+  setTimeout(wirePickers,40);
+};
+
+unlockForm=function(){
+  formModal('Novo Desbloqueio',`<div class="formgrid">
+    ${f('unit','Unidade','select',['LAGOS','MAGÉ'])}
+    ${customerPicker('customer_id','Cliente')}
+    ${f('operator','Operador')}${f('brand','Marca')}${f('model','Modelo')}${f('imei','IMEI')}
+    ${f('kind','Tipo de desbloqueio','select',['FRP / Conta Google','MDM','Desbloqueio de rede','Software','Remoção de PayJoy','Outro'])}
+    ${f('price','Valor cobrado','number','0')}${f('cost_material','Custo de material / ferramenta','number','0')}${f('cost_labor','Custo de mão de obra','number','0')}${f('cost_extra','Outros custos','number','0')}
+    ${f('warranty','Garantia','text','0 dias')}${f('status','Status','select',['aberto','em andamento','pronto','entregue','cancelado'])}
+    <div class="field full"><label>Checklist</label>${checklist()}</div>${photoBox()}${f('notes','Observações','textarea','',true)}
+  </div>`,async()=>{try{const m=$('#modal'),d=formValues(m.querySelector('#modalForm'));d.checklist=collectChecks(m);d.photos=await readPhotos();await api('/api/unlocks',{method:'POST',body:JSON.stringify(d)});closeModal();toast('Desbloqueio salvo • cliente localizado pelo cadastro');render()}catch(e){toast(e.message,'error')}});
+  setTimeout(wirePickers,40);
+};
+
+quoteForm=function(type='servico'){
+  const isUnlock=type==='desbloqueio';
+  formModal(isUnlock?'Orçamento de Desbloqueio':'Orçamento de Serviço Técnico',`<div class="formgrid">${f('unit','Unidade','select',['LAGOS','MAGÉ'])}${customerPicker('customer_id','Cliente')}${f('brand','Marca')}${f('model','Modelo')}${f('imei','IMEI (opcional)')}${isUnlock?f('unlock_type','Desbloqueio','select',['FRP / Conta Google','MDM','Desbloqueio de rede','Software','Outro']):f('service_name','Serviço','select',['Troca de tela','Troca de bateria','Troca de conector','Troca de câmera','Troca de tampa','Software / otimização','Reparo de placa','Película','Outro'])}${quoteItemsEditor()}${f('subtotal','Subtotal','number','0')}${travelField()}${warrantyDaysField()}${f('valid_until','Válido até','date')}${f('status','Status','select',['aberto','aprovado','aguardando','recusado','expirado'])}${f('conditions','Condições','textarea','Orçamento sujeito à avaliação técnica.',true)}${f('observations','Observações','textarea','',true)}</div>`,async()=>{try{const m=$('#modal'),d=formValues(m.querySelector('#modalForm'));d.quote_type=type;d.items=collectQuoteItems();d.total=d.items.reduce((s,x)=>s+(x.total*x.qty),0)+((d.travel_enabled==='1')?Number(d.travel_fee||0):0);d.subtotal=d.items.reduce((s,x)=>s+(x.total*x.qty),0);await api('/api/quotes',{method:'POST',body:JSON.stringify(d)});closeModal();toast('Orçamento salvo');render()}catch(e){toast(e.message,'error')}});setTimeout(()=>{wirePickers();const t=$('#travelToggle');if(t)t.onchange=()=>{$('#travelBox').hidden=!t.checked}},40)
+};
+
+pages.chat_units=async()=>{
+  const d=await api('/api/chat?unit=TODOS');
+  $('#content').innerHTML=head('Chat entre Unidades','Somente comunicação interna entre LAGOS e MAGÉ',`<button class="btn ghost" onclick="render()">↻ Atualizar</button>`)+`<section class="panel"><div class="timeline">${d.slice().reverse().map(x=>`<div class="event"><b>${esc(x.user_name)}</b> <span class="badge y">${esc(x.unit)}</span><div>${esc(x.message)}</div><small class="muted">${esc(x.created_at)}</small></div>`).join('')||'<div class="muted">Nenhuma mensagem.</div>'}</div><form id="unitChatForm" style="display:flex;gap:8px;margin-top:18px"><input class="input" name="message" style="flex:1" placeholder="Mensagem para a equipe LAGOS ↔ MAGÉ" required><button class="btn">Enviar</button></form></section>`;
+  $('#unitChatForm').onsubmit=async e=>{e.preventDefault();const d=formValues(e.target);d.unit=UNIT;await api('/api/chat',{method:'POST',body:JSON.stringify(d)});e.target.reset();render()};
+};
+
+pages.ai=async()=>{
+  const [d,st]=await Promise.all([api('/api/ai/chat'),api('/api/ai/status')]);
+  $('#content').innerHTML=head('Perguntar à I.A.','Canal exclusivo da I.A. — o chat das unidades e os logs ficam separados',`<span class="badge ${st.configured?'g':'r'}">IA ${st.configured?'ONLINE':'SEM CHAVE'}</span>`)+`<section class="panel"><div class="bot-messages" style="max-height:58vh;overflow:auto">${d.slice().reverse().map(x=>`<div class="bot-msg ai"><div><span class="badge y">BOT</span> <b>${esc(x.user_name)}</b> <small>${esc(x.created_at)}</small></div><div><b>Pergunta:</b> ${esc(x.message)}</div><div style="margin-top:8px;white-space:pre-wrap">${esc(x.reply||'')}</div></div>`).join('')||'<div class="muted">Nenhuma pergunta à I.A. ainda.</div>'}</div><form id="aiForm" class="bot-input" style="margin-top:16px"><textarea name="message" class="textarea" rows="3" placeholder="Digite sua pergunta. O sistema adicionará /bot automaticamente." required></textarea><button class="btn" type="submit">🤖 Perguntar</button></form><p class="muted">A I.A. não lê o chat das unidades e não lê os logs automaticamente.</p></section>`;
+  $('#aiForm').onsubmit=async e=>{e.preventDefault();let d=formValues(e.target);d.message='/bot '+String(d.message||'').replace(/^\s*\/bot\s*/i,'');try{const r=await aiSafe(d);e.target.reset();toast(r.reply||'Resposta recebida');render()}catch(x){toast(x.message,'error')}};
+};
+
+pages.logs=async()=>{
+  const d=await api('/api/activity?unit=TODOS');
+  $('#content').innerHTML=head('Logs','Registro técnico de ações do sistema — separado do chat e da I.A.',`<button class="btn ghost" onclick="render()">↻ Atualizar</button>`)+table(d,[['id','#'],['tag','Tipo',r=>`<span class="badge ${r.tag==='BOT'?'y':'g'}">${esc(r.tag||'LOG')}</span>`],['unit','Unidade'],['user_name','Usuário'],['action','Ação'],['entity','Módulo'],['entity_id','ID'],['details','Detalhes'],['created_at','Data']]);
+};
+
+const _bootV21=boot;
+boot=async function(){
+ document.body.innerHTML=`<div class="shell"><aside class="sidebar"><div class="brand"><div class="logo-wrap"><div class="logo">KV</div></div><div><b>KV CELL</b><small>OS PREMIUM • V21</small></div></div><div class="nav"><div class="navtitle">OPERAÇÃO</div>${['dashboard','services','devices','purchases','unlock','pdv'].map(m=>nav(m)).join('')}<div class="navtitle">GESTÃO</div>${['pricing','quotes','finance','inventory','films','forgotten','customers'].map(m=>nav(m)).join('')}<div class="navtitle">CENTRAL</div>${['chat_units','ai','logs'].map(m=>nav(m)).join('')}<div class="navtitle">ADMIN</div>${['users','admin','settings'].map(m=>nav(m)).join('')}</div></aside><main class="main"><div class="topbar"><div><b id="crumb">Painel</b><div class="crumb">KV CELL OS PREMIUM • LAGOS + MAGÉ • V21</div></div><div class="top-actions"><select id="unit" class="select unit"><option>TODOS</option><option>LAGOS</option><option>MAGÉ</option></select><button class="btn ghost" onclick="openSearch()">⌕ Buscar</button><button class="btn ghost" onclick="logout()">Sair</button></div></div><div id="content"></div></main></div><div id="modal" class="modal"></div><div id="toast" class="toast"></div>`;
+ $('#unit').value=UNIT;$('#unit').onchange=e=>{UNIT=e.target.value;localStorage.setItem('kv_unit',UNIT);render()};render();
+};

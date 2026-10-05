@@ -1,12 +1,83 @@
-import os, json, sqlite3, hashlib, secrets, base64, zipfile, io, csv, html, urllib.request, urllib.parse, time, re
+import os, json, sqlite3, hashlib, secrets, base64, zipfile, io, csv, html, urllib.request, urllib.parse, urllib.error, time, re, threading, shutil
 from datetime import datetime, date, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 BASE=os.path.dirname(os.path.abspath(__file__))
-DB=os.path.join(BASE,'kvcell.db')
+DATA_DIR=os.environ.get('KVCELL_DATA_DIR','/application/data')
+try: os.makedirs(DATA_DIR,exist_ok=True)
+except Exception: DATA_DIR=BASE
+DB=os.path.join(DATA_DIR,'kvcell.db')
 PORT=int(os.environ.get('PORT','80'))
 SESSIONS={}
+DB_SYNC_LOCK=threading.Lock()
+DB_SYNC_TIMER=None
+BLOB_KEY=os.environ.get('SQUARE_BLOB_API_KEY','').strip()
+BLOB_ACCOUNT=os.environ.get('SQUARE_BLOB_ACCOUNT_ID','').strip()
+BLOB_NAME=os.environ.get('SQUARE_BLOB_DB_NAME','kvcell_database').strip() or 'kvcell_database'
+BLOB_PREFIX=os.environ.get('SQUARE_BLOB_PREFIX','kvcell').strip(' /') or 'kvcell'
+BLOB_PUBLIC_URL=os.environ.get('SQUARE_BLOB_PUBLIC_URL','').strip()
+BLOB_ENABLED=bool(BLOB_KEY and (BLOB_PUBLIC_URL or BLOB_ACCOUNT))
+FERNET_KEY=os.environ.get('KVCELL_DB_ENCRYPTION_KEY','').strip()
+
+def _blob_url():
+    if BLOB_PUBLIC_URL: return BLOB_PUBLIC_URL.rstrip('/')
+    return f'https://public-blob.squarecloud.dev/{BLOB_ACCOUNT}/{BLOB_PREFIX}/{BLOB_NAME}.enc'
+
+def _fernet():
+    if not FERNET_KEY: return None
+    try:
+        from cryptography.fernet import Fernet
+        return Fernet(FERNET_KEY.encode())
+    except Exception: return None
+
+def _blob_download():
+    if not BLOB_ENABLED: return False
+    try:
+        url=_blob_url()+('?v='+str(int(time.time())) if '?' not in _blob_url() else '&v='+str(int(time.time())))
+        req=urllib.request.Request(url,headers={'Cache-Control':'no-cache'})
+        with urllib.request.urlopen(req,timeout=20) as r: data=r.read()
+        f=_fernet()
+        if not f: raise RuntimeError('KVCELL_DB_ENCRYPTION_KEY ausente/inválida')
+        raw=f.decrypt(data)
+        tmp=DB+'.restore'
+        open(tmp,'wb').write(raw)
+        if os.path.exists(DB): shutil.copy2(DB,DB+'.pre_restore')
+        os.replace(tmp,DB)
+        return True
+    except Exception as e:
+        print('KV CELL BLOB RESTORE:',e,flush=True)
+        return False
+
+def _multipart_upload(data):
+    boundary='----KVCellBlobBoundary'+secrets.token_hex(8)
+    body=(f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{BLOB_NAME}.enc"\r\nContent-Type: application/octet-stream\r\n\r\n').encode()+data+f'\r\n--{boundary}--\r\n'.encode()
+    qs=urllib.parse.urlencode({'name':BLOB_NAME,'prefix':BLOB_PREFIX})
+    req=urllib.request.Request('https://blob.squarecloud.app/v1/objects?'+qs,data=body,headers={'Authorization':BLOB_KEY,'Content-Type':f'multipart/form-data; boundary={boundary}'},method='POST')
+    with urllib.request.urlopen(req,timeout=30) as r: return r.read()
+
+def sync_db_to_blob():
+    if not BLOB_ENABLED: return
+    f=_fernet()
+    if not f:
+        print('KV CELL BLOB SYNC: defina KVCELL_DB_ENCRYPTION_KEY (Fernet) para sincronizar o SQLite.',flush=True); return
+    try:
+        with DB_SYNC_LOCK:
+            if not os.path.exists(DB): return
+            c=sqlite3.connect(DB); c.execute('PRAGMA wal_checkpoint(TRUNCATE)'); c.close()
+            raw=open(DB,'rb').read(); enc=f.encrypt(raw)
+            _multipart_upload(enc)
+            print('KV CELL BLOB SYNC: banco persistido na Square Cloud.',flush=True)
+    except Exception as e: print('KV CELL BLOB SYNC:',e,flush=True)
+
+def schedule_blob_sync():
+    global DB_SYNC_TIMER
+    if not BLOB_ENABLED: return
+    try:
+        if DB_SYNC_TIMER and DB_SYNC_TIMER.is_alive(): return
+        DB_SYNC_TIMER=threading.Timer(1.0,sync_db_to_blob); DB_SYNC_TIMER.daemon=True; DB_SYNC_TIMER.start()
+    except Exception: pass
+
 
 SCHEMA='''
 CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT,email TEXT UNIQUE,password_hash TEXT,role TEXT,unit TEXT,permissions TEXT,active INTEGER DEFAULT 1,created_at TEXT);
@@ -36,6 +107,7 @@ def now(): return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 def db():
     c=sqlite3.connect(DB); c.row_factory=sqlite3.Row; c.executescript(SCHEMA); return c
 def migrate_v10():
+    if BLOB_ENABLED and not os.path.exists(DB): _blob_download()
     c=db()
     cols={r[1] for r in c.execute("PRAGMA table_info(purchases)").fetchall()}
     for name,typ in [("sold","INTEGER DEFAULT 0"),("sale_date","TEXT"),("sale_place","TEXT"),("sale_price","REAL DEFAULT 0"),("sale_payment","TEXT"),("sale_installments","INTEGER DEFAULT 1"),("sale_fee","REAL DEFAULT 0"),("sale_notes","TEXT")]:
@@ -128,7 +200,7 @@ def rows(sql,args=()):
 def one(sql,args=()):
     c=db(); r=c.execute(sql,args).fetchone(); c.close(); return dict(r) if r else None
 def write(sql,args=()):
-    c=db(); cur=c.execute(sql,args); c.commit(); rid=cur.lastrowid; c.close(); return rid
+    c=db(); cur=c.execute(sql,args); c.commit(); rid=cur.lastrowid; c.close(); schedule_blob_sync(); return rid
 
 def audit(uid,action,entity,eid,details=''):
     try: write('INSERT INTO audit(user_id,action,entity,entity_id,details,created_at) VALUES(?,?,?,?,?,?)',(uid,action,entity,eid,details,now()))
@@ -407,7 +479,7 @@ class Handler(BaseHTTPRequestHandler):
         return self.json(rows('SELECT * FROM film_compat WHERE brand LIKE ? OR model LIKE ? OR aliases LIKE ? OR master_code LIKE ? OR group_name LIKE ? ORDER BY brand,model LIMIT 300',(like,like,like,like,like)))
     def ai_status(self):
         key=os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY')
-        return self.json({'configured':bool(key),'model':os.environ.get('GEMINI_MODEL','gemini-2.5-flash')})
+        return self.json({'configured':bool(key),'model':os.environ.get('GEMINI_MODEL','gemini-2.5-flash'),'database_persistent':bool(BLOB_ENABLED and _fernet())})
     def _gemini(self,prompt):
         key=os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY')
         if not key: raise RuntimeError('IA não configurada: defina GEMINI_API_KEY no Square Cloud.')
