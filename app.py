@@ -1,4 +1,4 @@
-import os, json, sqlite3, hashlib, secrets, base64, zipfile, io, csv, html, urllib.request, urllib.parse
+import os, json, sqlite3, hashlib, secrets, base64, zipfile, io, csv, html, urllib.request, urllib.parse, time
 from datetime import datetime, date, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -27,11 +27,33 @@ CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id IN
 CREATE TABLE IF NOT EXISTS settings(k TEXT PRIMARY KEY,v TEXT);
 CREATE TABLE IF NOT EXISTS notifications(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,title TEXT,message TEXT,read INTEGER DEFAULT 0,created_at TEXT);
 CREATE TABLE IF NOT EXISTS film_compat(id INTEGER PRIMARY KEY AUTOINCREMENT,brand TEXT,model TEXT,aliases TEXT,master_code TEXT,group_name TEXT,screen_size TEXT,fit_notes TEXT,source_note TEXT,confidence TEXT DEFAULT 'manual',created_at TEXT);
+CREATE TABLE IF NOT EXISTS ai_chat(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,user_id INTEGER,user_name TEXT,role TEXT,message TEXT,reply TEXT,created_at TEXT);
+CREATE TABLE IF NOT EXISTS activity_log(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,tag TEXT,user_id INTEGER,user_name TEXT,action TEXT,entity TEXT,entity_id INTEGER,details TEXT,created_at TEXT);
+CREATE TABLE IF NOT EXISTS undo_stack(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,user_id INTEGER,action TEXT,table_name TEXT,row_id INTEGER,before_json TEXT,after_json TEXT,undone INTEGER DEFAULT 0,created_at TEXT,undone_at TEXT);
 '''
 
 def now(): return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 def db():
     c=sqlite3.connect(DB); c.row_factory=sqlite3.Row; c.executescript(SCHEMA); return c
+def migrate_v10():
+    c=db()
+    cols={r[1] for r in c.execute("PRAGMA table_info(purchases)").fetchall()}
+    for name,typ in [("sold","INTEGER DEFAULT 0"),("sale_date","TEXT"),("sale_place","TEXT"),("sale_price","REAL DEFAULT 0"),("sale_payment","TEXT"),("sale_installments","INTEGER DEFAULT 1"),("sale_fee","REAL DEFAULT 0"),("sale_notes","TEXT")]:
+        if name not in cols: c.execute("ALTER TABLE purchases ADD COLUMN "+name+" "+typ)
+    cols={r[1] for r in c.execute("PRAGMA table_info(sales)").fetchall()}
+    for name,typ in [("payment_fee","REAL DEFAULT 0"),("net_total","REAL DEFAULT 0"),("payment_details","TEXT")]:
+        if name not in cols: c.execute("ALTER TABLE sales ADD COLUMN "+name+" "+typ)
+    c.commit();c.close()
+migrate_v10()
+
+def activity(u,tag,action,entity='',entity_id=None,details=''):
+    try: write('INSERT INTO activity_log(unit,tag,user_id,user_name,action,entity,entity_id,details,created_at) VALUES(?,?,?,?,?,?,?,?,?)',(u.get('unit','TODOS'),tag,u.get('id'),u.get('name'),action,entity,entity_id,details,now()))
+    except Exception: pass
+
+def push_undo(u,action,table,row_id,before,after):
+    try: write('INSERT INTO undo_stack(unit,user_id,action,table_name,row_id,before_json,after_json,created_at) VALUES(?,?,?,?,?,?,?,?)',(u.get('unit','TODOS'),u.get('id'),action,table,row_id,js(before or {}),js(after or {}),now()))
+    except Exception: pass
+
 def ph(p): return hashlib.sha256(p.encode()).hexdigest()
 def seed():
     c=db();
@@ -177,12 +199,17 @@ class Handler(BaseHTTPRequestHandler):
         if path=='/api/customer-stats': return self.customer_stats(int(qs.get('id',['0'])[0] or 0))
         if path=='/api/films/search': return self.film_search(qs.get('q',[''])[0])
         if path=='/api/ai/status': return self.ai_status()
+        if path=='/api/activity': return self.activity_api(qs)
+        if path=='/api/undo': return self.undo_list()
+        if path=='/api/ai/chat': return self.ai_chat_list()
         if path.startswith('/api/'): return self.list_api(path[5:],qs)
         self.send(404,b'Not found','text/plain')
     def do_POST(self):
         p=urlparse(self.path); path=p.path; data=self.body()
         if path=='/api/login': return self.login(data)
         if path=='/api/logout': return self.logout()
+        if path.startswith('/public/quote/'):
+            return self.public_quote_action(path.split('/')[-1], data)
         if path.startswith('/public/'): return self.send(405,b'','text/plain')
         u=self.require()
         if not u:return
@@ -191,6 +218,8 @@ class Handler(BaseHTTPRequestHandler):
         if path=='/api/mark-notifications': return self.json({'ok':True})
         if path=='/api/ai/evaluate': return self.ai_evaluate(data,u)
         if path=='/api/ai/price': return self.ai_price(data,u)
+        if path=='/api/ai/chat': return self.ai_chat(data,u)
+        if path=='/api/undo': return self.undo_action(data,u)
         if path.startswith('/api/'):
             try:return self.create_api(path[5:],data,u)
             except sqlite3.IntegrityError as e:return self.json({'error':'Registro inválido ou duplicado: '+str(e)},400)
@@ -236,15 +265,22 @@ class Handler(BaseHTTPRequestHandler):
             t=token(); rid=write('INSERT INTO unlocks(unit,customer_id,device_id,brand,model,imei,kind,checklist,status,operator,price,photos,notes,public_token,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('device_id') or None,d.get('brand'),d.get('model'),d.get('imei'),d.get('kind'),js(d.get('checklist',{})),d.get('status','aberto'),d.get('operator'),float(d.get('price') or 0),js(d.get('photos',[])),d.get('notes'),t,now()))
             if float(d.get('price') or 0)>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),'entrada','Desbloqueio',d.get('kind') or 'Desbloqueio',float(d.get('price') or 0),'unlock',rid,now()))
         elif r=='purchases':
-            total=float(d.get('amount') or 0)+float(d.get('expenses') or 0)+float(d.get('freight') or 0); sp=float(d.get('suggested_price') or 0); rid=write('INSERT INTO purchases(unit,customer_id,brand,model,imei,purchase_date,amount,expenses,freight,total_cost,suggested_price,expected_profit,photos,checklist,observations,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('brand'),d.get('model'),d.get('imei'),d.get('purchase_date') or date.today().isoformat(),float(d.get('amount') or 0),float(d.get('expenses') or 0),float(d.get('freight') or 0),total,sp,sp-total,js(d.get('photos',[])),js(d.get('checklist',{})),d.get('observations'),'vitrine',now()))
+            total=float(d.get('amount') or 0)+float(d.get('expenses') or 0)+float(d.get('freight') or 0); sp=float(d.get('suggested_price') or 0); sold=1 if str(d.get('sold','')).lower() in ('1','true','sim','on') else 0
+            status='vendido' if sold else d.get('status','vitrine')
+            rid=write('INSERT INTO purchases(unit,customer_id,brand,model,imei,purchase_date,amount,expenses,freight,total_cost,suggested_price,expected_profit,photos,checklist,observations,status,created_at,sold,sale_date,sale_place,sale_price,sale_payment,sale_installments,sale_fee,sale_notes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('brand'),d.get('model'),d.get('imei'),d.get('purchase_date') or date.today().isoformat(),float(d.get('amount') or 0),float(d.get('expenses') or 0),float(d.get('freight') or 0),total,sp,sp-total,js(d.get('photos',[])),js(d.get('checklist',{})),d.get('observations'),status,now(),sold,d.get('sale_date'),d.get('sale_place'),float(d.get('sale_price') or 0),d.get('sale_payment'),int(d.get('sale_installments') or 1),float(d.get('sale_fee') or 0),d.get('sale_notes')))
             write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),'saida','Compra de aparelho',f"{d.get('brand','')} {d.get('model','')}",total,'purchase',rid,now()))
+            if sold and float(d.get('sale_price') or 0)>0:
+                net=float(d.get('sale_price') or 0)-float(d.get('sale_fee') or 0)
+                write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),'entrada','Venda de aparelho',f"{d.get('brand','')} {d.get('model','')}",net,'purchase_sale',rid,now()))
         elif r=='inventory': rid=write('INSERT INTO inventory(unit,code,name,type,category,qty,min_qty,cost,price,supplier,compatibility,notes,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('code'),d.get('name'),d.get('type','Peça'),d.get('category'),float(d.get('qty') or 0),float(d.get('min_qty') or 0),float(d.get('cost') or 0),float(d.get('price') or 0),d.get('supplier'),d.get('compatibility'),d.get('notes'),now()))
         elif r=='models': rid=write('INSERT INTO models(brand,model,service_prices,margin,warranty,notes,created_at) VALUES(?,?,?,?,?,?,?)',(d.get('brand'),d.get('model'),js(d.get('service_prices',{})),float(d.get('margin') or 0),d.get('warranty'),d.get('notes'),now()))
         elif r=='quotes':
             num='ORC-'+datetime.now().strftime('%Y%m')+'-'+str(secrets.randbelow(9000)+1000); t=token(); items=d.get('items',[]); total=float(d.get('total') or 0); travel_enabled=1 if str(d.get('travel_enabled','0')).lower() in ('1','true','sim','on') else 0; travel_fee=float(d.get('travel_fee') or 0) if travel_enabled else 0; warranty_days=int(d.get('warranty_days') or 0); rid=write('INSERT INTO quotes(number,unit,customer_id,device_id,items,subtotal,total,warranty_type,warranty_days,travel_enabled,travel_fee,quote_type,conditions,observations,valid_until,status,public_token,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(num,d.get('unit','TODOS'),d.get('customer_id') or None,d.get('device_id') or None,js(items),float(d.get('subtotal') or total),total,d.get('warranty_type','personalizada'),warranty_days,travel_enabled,travel_fee,d.get('quote_type','servico'),d.get('conditions'),d.get('observations'),d.get('valid_until'),d.get('status','aberto'),t,now()))
             return self.json({'ok':True,'id':rid,'number':num,'public_url':f'/public/quote/{t}'})
         elif r=='sales':
-            rid=write('INSERT INTO sales(unit,customer_id,items,total,payment,created_at) VALUES(?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('items'),float(d.get('total') or 0),d.get('payment'),now())); write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),'entrada','Venda',d.get('items') or 'Venda',float(d.get('total') or 0),'sale',rid,now()))
+            total=float(d.get('total') or 0); fee=float(d.get('payment_fee') or 0); net=float(d.get('net_total') or (total-fee))
+            rid=write('INSERT INTO sales(unit,customer_id,items,total,payment,created_at,payment_fee,net_total,payment_details) VALUES(?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('items'),total,d.get('payment'),now(),fee,net,d.get('payment_details')))
+            write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),'entrada','Venda',d.get('items') or 'Venda',net,'sale',rid,now()))
         elif r=='finance': rid=write('INSERT INTO finance(unit,type,category,description,amount,due_date,paid,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('type','entrada'),d.get('category'),d.get('description'),float(d.get('amount') or 0),d.get('due_date'),1 if d.get('paid',True) else 0,now()))
         elif r=='forgotten': rid=write('INSERT INTO forgotten(unit,brand,model,imei,possible_owner,phone,photos,checklist,notes,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('brand'),d.get('model'),d.get('imei'),d.get('possible_owner'),d.get('phone'),js(d.get('photos',[])),js(d.get('checklist',{})),d.get('notes'),d.get('status','aguardando identificação'),now()))
         elif r=='contracts': rid=write('INSERT INTO contracts(unit,type,customer_id,device_id,payload,customer_signature,store_signature,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('type'),d.get('customer_id') or None,d.get('device_id') or None,js(d.get('payload',{})),d.get('customer_signature'),d.get('store_signature'),now()))
@@ -254,16 +290,31 @@ class Handler(BaseHTTPRequestHandler):
         elif r=='film_compat': rid=write('INSERT INTO film_compat(brand,model,aliases,master_code,group_name,screen_size,fit_notes,source_note,confidence,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)',(d.get('brand'),d.get('model'),d.get('aliases'),d.get('master_code'),d.get('group_name'),d.get('screen_size'),d.get('fit_notes'),d.get('source_note','cadastro interno'),d.get('confidence','manual'),now()))
         elif r=='chat': rid=write('INSERT INTO chat(unit,user_name,message,created_at) VALUES(?,?,?,?)',(d.get('unit','TODOS'),u['name'],d.get('message'),now()))
         else:return self.json({'error':'Recurso não suportado'},404)
-        audit(u['id'],'create',r,rid,js(d)); return self.json({'ok':True,'id':rid})
+        audit(u['id'],'create',r,rid,js(d)); uu=dict(u); uu['unit']=d.get('unit',u.get('unit','TODOS')); activity(uu,'LOG',f'Criou {r}',r,rid,js(d)); push_undo(uu,f'Criou {r}',r,rid,{},d); return self.json({'ok':True,'id':rid})
     def update_api(self,r,d,u):
-        table=r; rid=d.get('id');
-        allowed={'services':['status','diagnosis','technician','price','warranty','notes','checklist','photos'],'unlocks':['status','operator','price','notes','checklist','photos'],'devices':['status','notes','photos'],'forgotten':['status','notes','possible_owner','photos'],'quotes':['status','valid_until','observations'],'inventory':['qty','min_qty','price','cost','compatibility','notes']}
+        table=r; rid=d.get('id')
+        allowed={'services':['status','diagnosis','technician','price','warranty','notes','checklist','photos'],'unlocks':['status','operator','price','notes','checklist','photos'],'devices':['status','notes','photos'],'forgotten':['status','notes','possible_owner','photos'],'quotes':['status','valid_until','observations'],'inventory':['qty','min_qty','price','cost','compatibility','notes'],'purchases':['sold','sale_date','sale_place','sale_price','sale_payment','sale_installments','sale_fee','sale_notes','status','suggested_price','observations']}
         if table not in allowed:return self.json({'error':'Atualização não permitida'},400)
+        before=one('SELECT * FROM '+table+' WHERE id=?',(rid,))
+        if not before:return self.json({'error':'Registro não encontrado'},404)
         fields=[f for f in allowed[table] if f in d]; vals=[]
         if not fields:return self.json({'error':'Nenhum campo'},400)
         for f in fields:
             v=d[f]; v=js(v) if f in ('checklist','photos') and not isinstance(v,str) else v; vals.append(v)
-        vals.append(rid); write('UPDATE '+table+' SET '+','.join(f+'=?' for f in fields)+' WHERE id=?',vals); audit(u['id'],'update',table,rid,js(d)); return self.json({'ok':True})
+        vals.append(rid); write('UPDATE '+table+' SET '+','.join(f+'=?' for f in fields)+' WHERE id=?',vals)
+        after=one('SELECT * FROM '+table+' WHERE id=?',(rid,)); audit(u['id'],'update',table,rid,js(d)); uu=dict(u); uu['unit']=before['unit'] if 'unit' in before.keys() else u.get('unit','TODOS'); activity(uu,'LOG',f'Alterou {table}',table,rid,js(d)); push_undo(uu,f'Alterou {table}',table,rid,dict(before),dict(after)); return self.json({'ok':True})
+    def do_DELETE(self):
+        p=urlparse(self.path); u=self.require()
+        if not u:return
+        if not p.path.startswith('/api/'): return self.send(404,b'Not found','text/plain')
+        resource=p.path[5:]; qs=parse_qs(p.query); rid=int(qs.get('id',['0'])[0] or 0)
+        maps={'customers':'customers','devices':'devices','services':'services','unlocks':'unlocks','purchases':'purchases','inventory':'inventory','models':'models','quotes':'quotes','sales':'sales','finance':'finance','forgotten':'forgotten','film_compat':'film_compat','chat':'chat'}
+        if resource not in maps:return self.json({'error':'Recurso inválido'},404)
+        row=one('SELECT * FROM '+maps[resource]+' WHERE id=?',(rid,))
+        if not row:return self.json({'error':'Registro não encontrado'},404)
+        if u['role']!='admin' and resource in ('users','finance'):return self.json({'error':'Sem permissão'},403)
+        write('DELETE FROM '+maps[resource]+' WHERE id=?',(rid,)); uu=dict(u); uu['unit']=row['unit'] if 'unit' in row.keys() else u.get('unit','TODOS'); activity(uu,'LOG',f'Excluiu {resource}',resource,rid,js(dict(row))); push_undo(uu,f'Excluiu {resource}',maps[resource],rid,dict(row),{}); return self.json({'ok':True})
+
     def upload(self,d,u):
         # Images are data URLs stored in DB through caller; endpoint returns a compact data URL for the frontend.
         s=d.get('data','');
@@ -325,27 +376,84 @@ class Handler(BaseHTTPRequestHandler):
         return self.json({'configured':bool(key),'model':os.environ.get('GEMINI_MODEL','gemini-2.5-flash')})
     def _gemini(self,prompt):
         key=os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY')
-        if not key: raise RuntimeError('IA não configurada. Defina GEMINI_API_KEY ou GOOGLE_API_KEY nas variáveis de ambiente da Square Cloud.')
+        if not key: raise RuntimeError('IA não configurada: defina GEMINI_API_KEY no Square Cloud.')
         model=os.environ.get('GEMINI_MODEL','gemini-2.5-flash')
-        url='https://generativelanguage.googleapis.com/v1beta/models/'+urllib.parse.quote(model,safe='')+':generateContent?key='+urllib.parse.quote(key,safe='')
-        payload={'contents':[{'parts':[{'text':prompt}]}]}
-        req=urllib.request.Request(url,data=json.dumps(payload).encode(),headers={'Content-Type':'application/json'},method='POST')
-        with urllib.request.urlopen(req,timeout=25) as resp: obj=json.loads(resp.read().decode())
-        return obj.get('candidates',[{}])[0].get('content',{}).get('parts',[{}])[0].get('text','').strip()
+        url='https://generativelanguage.googleapis.com/v1beta/models/'+urllib.parse.quote(model,safe='')+':generateContent'
+        payload={'contents':[{'parts':[{'text':prompt}]}],'generationConfig':{'temperature':0.4,'maxOutputTokens':1200}}
+        body=json.dumps(payload,ensure_ascii=False).encode('utf-8')
+        last='erro desconhecido'
+        for attempt in range(3):
+            try:
+                req=urllib.request.Request(url,data=body,headers={'Content-Type':'application/json','x-goog-api-key':key},method='POST')
+                with urllib.request.urlopen(req,timeout=35) as resp: obj=json.loads(resp.read().decode('utf-8'))
+                if obj.get('error'): raise RuntimeError(obj['error'].get('message','Erro Gemini'))
+                parts=(obj.get('candidates') or [{}])[0].get('content',{}).get('parts',[])
+                text=''.join(x.get('text','') for x in parts if isinstance(x,dict)).strip()
+                if not text: raise RuntimeError('A IA retornou uma resposta vazia.')
+                return text
+            except urllib.error.HTTPError as e:
+                try: detail=e.read().decode('utf-8')
+                except: detail=''
+                last=f'HTTP {e.code}: {detail}'
+                if e.code not in (429,500,502,503,504): break
+                if attempt<2: time.sleep(2**attempt)
+            except Exception as e:
+                last=str(e)
+                if attempt<2: time.sleep(2**attempt)
+        raise RuntimeError('Gemini indisponível após 3 tentativas. '+last[:800])
     def ai_evaluate(self,d,u):
         if u['role'] not in ('admin','gerente','tecnico'): return self.json({'error':'Sem permissão para IA'},403)
-        prompt='''Você é o avaliador interno da KV CELL. Analise o aparelho usado abaixo para apoiar a equipe. NÃO invente preço de mercado como fato. Entregue em português: riscos/defeitos prováveis; checklist recomendado; faixa de custo de reparo a conferir; faixa de preço de compra conservadora; faixa de venda sugerida; perguntas que o técnico deve fazer. Deixe claro que preço é estimativa e deve ser validado localmente.
-DADOS:
-'''+json.dumps(d,ensure_ascii=False)
+        prompt=('Você é o KV CELL BOT [I.A], assistente interno da KV CELL. Responda em português-BR. Seja prático, comercial e técnico. Nunca invente fatos ou compatibilidade física como certeza. Para preços, dê estimativa.\nTAREFA:\n')+json.dumps(d,ensure_ascii=False)
         try:return self.json({'ok':True,'result':self._gemini(prompt)})
-        except Exception as e:return self.json({'error':str(e)},503)
+        except Exception as e:return self.json({'error':str(e),'retryable':True},503)
     def ai_price(self,d,u):
-        if u['role'] not in ('admin','gerente'): return self.json({'error':'Sem permissão para precificação por IA'},403)
-        prompt='''Você é o assistente de precificação da KV CELL. Analise marca/modelo/armazenamento/estado/custo e sugira uma faixa de preço de venda e margem. NÃO trate a resposta como cotação oficial; indique dados que precisam ser confirmados. Responda em português, objetivo, com recomendação conservadora e agressiva.
-DADOS:
-'''+json.dumps(d,ensure_ascii=False)
+        if u['role'] not in ('admin','gerente','tecnico'): return self.json({'error':'Sem permissão para precificação por IA'},403)
+        prompt=('Você é o KV CELL BOT [I.A]. Ajude a definir preço de serviço/aparelho. Calcule custo, margem, faixa conservadora, recomendada e agressiva quando houver dados. Se faltar informação, faça perguntas. Não apresente preço de mercado como fato.\nDADOS:\n')+json.dumps(d,ensure_ascii=False)
         try:return self.json({'ok':True,'result':self._gemini(prompt)})
-        except Exception as e:return self.json({'error':str(e)},503)
+        except Exception as e:return self.json({'error':str(e),'retryable':True},503)
+    def ai_chat(self,d,u):
+        if u['role'] not in ('admin','gerente','tecnico','atendente'): return self.json({'error':'Sem permissão para o BOT'},403)
+        msg=str(d.get('message','')).strip()
+        if not msg:return self.json({'error':'Digite uma pergunta.'},400)
+        history=d.get('history',[])
+        context='\n'.join([f"{x.get('role','user')}: {x.get('message','')}" for x in history[-8:]])
+        prompt=('Você é o KV CELL BOT [I.A], assistente oficial interno da KV CELL. A plataforma possui unidades LAGOS e MAGÉ. Ajude com precificação, orçamento, textos para clientes, diagnóstico, gestão, vendas, películas, desbloqueios e dúvidas do sistema.\nRegras: responda em português-BR; seja claro; quando criar orçamento entregue texto pronto para WhatsApp; quando calcular preço mostre custo/margem e diga que é estimativa; nunca invente compatibilidade de película; nunca peça ou revele API keys; não execute alterações no banco pela conversa.\nHISTÓRICO:\n')+context+'\n\nPERGUNTA:\n'+msg
+        try:
+            reply=self._gemini(prompt)
+            rid=write('INSERT INTO ai_chat(unit,user_id,user_name,role,message,reply,created_at) VALUES(?,?,?,?,?,?,?)',(u.get('unit','TODOS'),u['id'],u['name'],'user',msg,reply,now()))
+            activity(u,'BOT','Perguntou à IA','ai_chat',rid,msg)
+            return self.json({'ok':True,'reply':reply,'id':rid,'tag':'BOT'})
+        except Exception as e:
+            reply='A IA está temporariamente indisponível. Verifique GEMINI_API_KEY/GEMINI_MODEL no Square Cloud e tente novamente. Nenhuma alteração foi feita.'
+            rid=write('INSERT INTO ai_chat(unit,user_id,user_name,role,message,reply,created_at) VALUES(?,?,?,?,?,?,?)',(u.get('unit','TODOS'),u['id'],u['name'],'user',msg,reply,now()))
+            return self.json({'ok':False,'reply':reply,'error':str(e),'id':rid},200)
+    def ai_chat_list(self): return self.json(rows('SELECT * FROM ai_chat ORDER BY id DESC LIMIT 100'))
+    def activity_api(self,qs):
+        unit=qs.get('unit',['TODOS'])[0]
+        if unit=='TODOS': return self.json(rows('SELECT * FROM activity_log ORDER BY id DESC LIMIT 200'))
+        return self.json(rows('SELECT * FROM activity_log WHERE unit=? ORDER BY id DESC LIMIT 200',(unit,)))
+    def undo_list(self): return self.json(rows('SELECT * FROM undo_stack WHERE undone=0 ORDER BY id DESC LIMIT 50'))
+    def undo_action(self,d,u):
+        uid=int(d.get('id') or 0); r=one('SELECT * FROM undo_stack WHERE id=? AND undone=0',(uid,))
+        if not r:return self.json({'error':'Ação não encontrada ou já desfeita.'},404)
+        if r['user_id']!=u['id'] and u['role']!='admin':return self.json({'error':'Somente o autor ou administrador pode desfazer.'},403)
+        table=r['table_name']; rid=r['row_id']; before=json.loads(r['before_json'] or '{}')
+        if r['action'].startswith('Criou '): write('DELETE FROM '+table+' WHERE id=?',(rid,))
+        elif before:
+            fields=[k for k in before if k!='id']
+            if fields: write('UPDATE '+table+' SET '+','.join(k+'=?' for k in fields)+' WHERE id=?',[before[k] for k in fields]+[rid])
+        write('UPDATE undo_stack SET undone=1,undone_at=? WHERE id=?',(now(),uid)); activity(u,'LOG','Desfez ação',table,rid,r['action']); return self.json({'ok':True})
+    def public_quote_action(self,token,d):
+        q=one('SELECT * FROM quotes WHERE public_token=?',(token,))
+        if not q:return self.json({'error':'Orçamento não encontrado'},404)
+        action=d.get('action')
+        if action not in ('aprovado','recusado'):return self.json({'error':'Ação inválida'},400)
+        write('UPDATE quotes SET status=? WHERE id=?',(action,q['id']))
+        unit=q['unit']; msg=f"Orçamento {q['number']} foi {action} pelo cliente."
+        write('INSERT INTO notifications(unit,title,message,created_at) VALUES(?,?,?,?)',(unit,'Resposta de orçamento',msg,now()))
+        write('INSERT INTO chat(unit,user_name,message,created_at) VALUES(?,?,?,?)',(unit,'CLIENTE',msg,now()))
+        activity({'unit':unit,'id':None,'name':'CLIENTE'},'LOG',msg,'quotes',q['id'],d.get('message',''))
+        return self.json({'ok':True,'status':action})
 
     def inventory_csv(self):
         data=rows('SELECT * FROM inventory ORDER BY id DESC'); out=io.StringIO();w=csv.writer(out);w.writerow(data[0].keys() if data else ['id']);[w.writerow(x.values()) for x in data];return self.send(200,out.getvalue(),'text/csv')
@@ -374,8 +482,8 @@ DADOS:
 
 def public_quote(q,c):
     items=json.loads(q['items'] or '[]'); rows=''.join(f"<tr><td>{safe(x.get('description',x.get('name','Serviço')))}</td><td>{safe(x.get('qty',1))}</td><td>R$ {float(x.get('total',x.get('price',0))):,.2f}</td></tr>" for x in items)
-    return f'''<!doctype html><html lang="pt-BR"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{safe(q['number'])} • KV CELL</title><style>{PUBLIC_CSS}</style><main><header><b>KV CELL</b><span>ORÇAMENTO • ACOMPANHAMENTO</span></header><section class="hero"><small>ORÇAMENTO</small><h1>{safe(q['number'])}</h1><p>{safe(c['name'] if c else 'Cliente')} • Unidade {safe(q['unit'])}</p></section><div class="grid"><div class="box"><b>Itens</b><table><tr><th>Serviço</th><th>Qtd.</th><th>Total</th></tr>{rows}</table></div><div class="box"><b>Status</b><div class="status">{safe(q['status'])}</div><p>Tipo: {safe(q.get('quote_type','servico'))}</p><p>Garantia: {int(q.get('warranty_days') or 0)} dias</p><p>Deslocamento: {'R$ %.2f' % float(q.get('travel_fee') or 0) if q.get('travel_enabled') else 'Não'}</p><p>Válido até: {safe(q['valid_until'])}</p><strong>Total: R$ {float(q['total'] or 0):,.2f}</strong></div></div><div class="box"><b>Condições</b><p>{safe(q['conditions'])}</p><p>{safe(q['observations'])}</p></div><footer>KV CELL • Acompanhe este orçamento pelo celular</footer></main></html>'''
-
+    buttons='' if q['status'] in ('aprovado','recusado','expirado') else '<div class="box"><h3>Responder orçamento</h3><div class="actions"><button class="ok" onclick="respond(\'aprovado\')">✓ Aceitar orçamento</button><button class="no" onclick="respond(\'recusado\')">✕ Recusar orçamento</button></div><p id="msg"></p></div>'
+    return f'''<!doctype html><html lang="pt-BR"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{safe(q['number'])} • KV CELL</title><style>{PUBLIC_CSS}.actions{{display:flex;gap:10px;flex-wrap:wrap}}button{{border:0;border-radius:12px;padding:14px 20px;font-weight:800;cursor:pointer}}.ok{{background:#ffd400;color:#090909}}.no{{background:#2a2a2a;color:#fff}}</style><main><header><b>KV CELL</b><span>ORÇAMENTO • RESPOSTA ONLINE</span></header><section class="hero"><small>ORÇAMENTO</small><h1>{safe(q['number'])}</h1><p>{safe(c['name'] if c else 'Cliente')} • Unidade {safe(q['unit'])}</p></section><div class="grid"><div class="box"><b>Itens</b><table><tr><th>Serviço</th><th>Qtd.</th><th>Total</th></tr>{rows}</table></div><div class="box"><b>Status</b><div class="status" id="status">{safe(q['status'])}</div><p>Garantia: {int(q.get('warranty_days') or 0)} dias</p><p>Válido até: {safe(q['valid_until'])}</p><strong>Total: R$ {float(q['total'] or 0):,.2f}</strong></div></div><div class="box"><b>Condições</b><p>{safe(q['conditions'])}</p><p>{safe(q['observations'])}</p></div>{buttons}<footer>KV CELL • Lagos + Magé</footer></main><script>async function respond(a){{let msg=prompt(a==='aprovado'?'Mensagem opcional para a KV CELL:':'Motivo da recusa (opcional):','');let r=await fetch(location.pathname,{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{action:a,message:msg||''}})}});let d=await r.json();document.getElementById('msg').textContent=d.ok?'Resposta enviada à KV CELL.':'Não foi possível enviar. Tente novamente.';if(d.ok)document.getElementById('status').textContent=a}}</script></html>'''
 def public_os(s,c):
     ck=json.loads(s['checklist'] or '{}'); done=sum(1 for v in ck.values() if v); total=max(len(ck),1); photos=json.loads(s['photos'] or '[]'); thumbs=''.join(f'<img src="{x}" />' for x in photos[:8])
     return f'''<!doctype html><html lang="pt-BR"><meta name="viewport" content="width=device-width,initial-scale=1"><title>OS #{s['id']} • KV CELL</title><style>{PUBLIC_CSS}.check{{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}}.check div{{padding:10px;background:#151515;border-radius:10px}}.photos img{{width:100px;height:100px;object-fit:cover;border-radius:10px;margin:5px}}</style><main><header><b>KV CELL</b><span>ACOMPANHAMENTO DA OS</span></header><section class="hero"><small>ORDEM DE SERVIÇO</small><h1>#{s['id']}</h1><p>{safe(c['name'] if c else 'Cliente')} • {safe(s['unit'])}</p></section><div class="box"><h2>{safe(s['status'])}</h2><p>{safe(s['description'])}</p><p>Garantia: {safe(s['warranty'])}</p></div><div class="box"><b>Checklist técnico</b><div class="check">{''.join(f'<div>{"☑" if v else "☐"} {safe(k)}</div>' for k,v in ck.items())}</div><p>{done}/{total} itens conferidos</p></div><div class="box photos"><b>Fotos do aparelho</b><div>{thumbs or '<span>Sem fotos cadastradas.</span>'}</div></div><footer>KV CELL • Link de acompanhamento</footer></main></html>'''
