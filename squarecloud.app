@@ -1,0 +1,2 @@
+MAIN=app.py
+AUTORESTART=true

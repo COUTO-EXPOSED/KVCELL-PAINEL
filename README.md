@@ -1,34 +1,28 @@
-# KV CELL OS PREMIUM — Ultimate
+# KV CELL OS PREMIUM — Ultimate V4
 
-Sistema web próprio para gestão de assistência técnica, desbloqueios, vendas e duas unidades (LAGOS/MAGÉ).
+Sistema web próprio da KV CELL para LAGOS e MAGÉ.
 
-## Stack
-- Python 3 + biblioteca padrão
-- SQLite
-- HTML/CSS/JavaScript responsivo
-- Sem FastAPI, Pydantic, Rust, Maturin ou dependências externas
-- Compatível com deploy web na Square Cloud usando `PORT`
+## Segurança
+- Nenhuma chave da IA fica no código ou no frontend.
+- Configure `GEMINI_API_KEY` ou `GOOGLE_API_KEY` somente nas variáveis de ambiente da Square Cloud.
+- Configure `ADMIN_EMAIL` e `ADMIN_PASSWORD` na Square Cloud.
+- O `.env` real não deve ser enviado ao GitHub.
 
-## Acesso inicial
-- E-mail: `admin@kvcell.local`
-- Senha: `kvcell123`
+## IA
+- Avaliação de aparelho usado.
+- Sugestão de preço/margem.
+- Sugestão assistiva para compatibilidade de películas.
+- A IA nunca deve ser tratada como cotação oficial ou confirmação física de película.
 
-Altere a senha em produção antes de uso real. A versão inicial cria o administrador automaticamente no primeiro boot.
-
-## Módulos
-Painel com gráficos, clientes, aparelhos, compras/vitrine, consertos/OS, desbloqueios, PDV, precificação, orçamentos com link público, financeiro, estoque, compatibilidade de películas, aparelhos esquecidos, contratos com assinatura, usuários/permissões (estrutura), chat, administração/backup, auditoria e configurações.
-
-## Checklist técnico em OS e desbloqueios
-Inclui caixas seletoras para tela, conector, bateria, Wi-Fi, Bluetooth, áudio, microfone, câmeras, biometria, botões, rede, IMEI, conta, toque, carcaça e alimentação.
-
-## Fotos
-OS, desbloqueios, aparelhos comprados e aparelhos esquecidos aceitam múltiplas fotos e armazenam as imagens no registro.
-
-## Links públicos
-- Orçamento: `/public/quote/<token>`
-- OS: `/public/os/<token>`
-
-Esses links não exigem login e foram pensados para o cliente acompanhar pelo celular.
+## Películas
+Módulo de compatibilidade pesquisável por marca, modelo, alias, código master e grupo. A base inicial é um catálogo interno; compatibilidade física deve ser confirmada com o lote/fornecedor.
 
 ## Square Cloud
-No upload/deploy, habilite **Publicação Web**. O servidor escuta `0.0.0.0:$PORT` e por padrão usa porta 80 se `PORT` não for informado.
+- Publicação Web: ativada.
+- `MAIN=app.py`.
+- Porta: `PORT` (fallback 80).
+- `0.0.0.0`.
+- `AUTORESTART=true`.
+
+## Primeiro acesso
+Use as credenciais definidas nas variáveis `ADMIN_EMAIL` e `ADMIN_PASSWORD`.

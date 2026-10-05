@@ -1,4 +1,4 @@
-import os, json, sqlite3, hashlib, secrets, base64, zipfile, io, csv, html
+import os, json, sqlite3, hashlib, secrets, base64, zipfile, io, csv, html, urllib.request, urllib.parse
 from datetime import datetime, date, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS chat(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,u
 CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER,action TEXT,entity TEXT,entity_id INTEGER,details TEXT,created_at TEXT);
 CREATE TABLE IF NOT EXISTS settings(k TEXT PRIMARY KEY,v TEXT);
 CREATE TABLE IF NOT EXISTS notifications(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,title TEXT,message TEXT,read INTEGER DEFAULT 0,created_at TEXT);
+CREATE TABLE IF NOT EXISTS film_compat(id INTEGER PRIMARY KEY AUTOINCREMENT,brand TEXT,model TEXT,aliases TEXT,master_code TEXT,group_name TEXT,screen_size TEXT,fit_notes TEXT,source_note TEXT,confidence TEXT DEFAULT 'manual',created_at TEXT);
 '''
 
 def now(): return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -35,9 +36,47 @@ def ph(p): return hashlib.sha256(p.encode()).hexdigest()
 def seed():
     c=db();
     if c.execute('SELECT COUNT(*) FROM users').fetchone()[0]==0:
-        c.execute('INSERT INTO users(name,email,password_hash,role,unit,permissions,created_at) VALUES(?,?,?,?,?,?,?)',('Administrador','admin@kvcell.local',ph('kvcell123'),'admin','TODOS',json.dumps({'all':True}),'2026-10-04 00:00:00'))
+        admin_email=os.environ.get('ADMIN_EMAIL','admin@kvcell.local').strip().lower()
+        admin_password=os.environ.get('ADMIN_PASSWORD') or secrets.token_urlsafe(12)
+        c.execute('INSERT INTO users(name,email,password_hash,role,unit,permissions,created_at) VALUES(?,?,?,?,?,?,?)',('Administrador',admin_email,ph(admin_password),'admin','TODOS',json.dumps({'all':True}),'2026-10-04 00:00:00'))
+        print('KV CELL INITIAL ADMIN:',admin_email,flush=True)
+        if not os.environ.get('ADMIN_PASSWORD'): print('KV CELL INITIAL ADMIN PASSWORD:',admin_password,flush=True)
     defaults={'company_name':'KV CELL','tagline':'OS PREMIUM • Laboratório avançado • Desde 2023','phone':'(21) 98042-1531','instagram':'@KV._CELL','units':'LAGOS,MAGÉ','currency':'BRL','theme':'yellow-black'}
     for k,v in defaults.items(): c.execute('INSERT OR IGNORE INTO settings(k,v) VALUES(?,?)',(k,v))
+    film_count=c.execute('SELECT COUNT(*) FROM film_compat').fetchone()[0]
+    if film_count==0:
+        groups={
+          'SAM-A15': [('Samsung','Galaxy A15'),('Samsung','Galaxy A15 5G'),('Samsung','Galaxy A15 LTE')],
+          'SAM-A16': [('Samsung','Galaxy A16'),('Samsung','Galaxy A16 5G'),('Samsung','Galaxy A16 LTE')],
+          'SAM-A24': [('Samsung','Galaxy A24'),('Samsung','Galaxy A24 4G')],
+          'SAM-A25': [('Samsung','Galaxy A25 5G')], 'SAM-A26': [('Samsung','Galaxy A26 5G')],
+          'SAM-A34': [('Samsung','Galaxy A34 5G')], 'SAM-A35': [('Samsung','Galaxy A35 5G')],
+          'SAM-A54': [('Samsung','Galaxy A54 5G')], 'SAM-A55': [('Samsung','Galaxy A55 5G')],
+          'SAM-S23': [('Samsung','Galaxy S23')], 'SAM-S24': [('Samsung','Galaxy S24')],
+          'SAM-S24P': [('Samsung','Galaxy S24 Plus')], 'SAM-S24U': [('Samsung','Galaxy S24 Ultra')],
+          'MOT-G14': [('Motorola','Moto G14')], 'MOT-G24': [('Motorola','Moto G24')],
+          'MOT-G34': [('Motorola','Moto G34 5G')], 'MOT-G35': [('Motorola','Moto G35 5G')],
+          'MOT-G54': [('Motorola','Moto G54 5G')], 'MOT-G55': [('Motorola','Moto G55 5G')],
+          'MOT-G84': [('Motorola','Moto G84 5G')], 'MOT-G85': [('Motorola','Moto G85 5G')],
+          'MOT-G75': [('Motorola','Moto G75 5G')], 'MOT-EDGE50': [('Motorola','Edge 50 Fusion')],
+          'REDMI-NOTE13': [('Xiaomi','Redmi Note 13'),('Xiaomi','Redmi Note 13 4G')],
+          'REDMI-NOTE13-5G': [('Xiaomi','Redmi Note 13 5G')], 'REDMI-NOTE13-PRO': [('Xiaomi','Redmi Note 13 Pro')],
+          'REDMI-NOTE13-PRO5G': [('Xiaomi','Redmi Note 13 Pro 5G')], 'REDMI-NOTE14': [('Xiaomi','Redmi Note 14'),('Xiaomi','Redmi Note 14 4G')],
+          'REDMI-NOTE14-5G': [('Xiaomi','Redmi Note 14 5G')], 'REDMI-13': [('Xiaomi','Redmi 13'),('Xiaomi','Redmi 13 4G')],
+          'POCO-X6': [('Xiaomi','POCO X6 5G')], 'POCO-X6PRO': [('Xiaomi','POCO X6 Pro 5G')],
+          'IPH-11': [('Apple','iPhone 11')], 'IPH-11PRO': [('Apple','iPhone 11 Pro')], 'IPH-11PROMAX': [('Apple','iPhone 11 Pro Max')],
+          'IPH-12': [('Apple','iPhone 12')], 'IPH-12PRO': [('Apple','iPhone 12 Pro')], 'IPH-12PROMAX': [('Apple','iPhone 12 Pro Max')],
+          'IPH-13': [('Apple','iPhone 13')], 'IPH-13PRO': [('Apple','iPhone 13 Pro')], 'IPH-13PROMAX': [('Apple','iPhone 13 Pro Max')],
+          'IPH-14': [('Apple','iPhone 14')], 'IPH-14PLUS': [('Apple','iPhone 14 Plus')], 'IPH-14PRO': [('Apple','iPhone 14 Pro')], 'IPH-14PROMAX': [('Apple','iPhone 14 Pro Max')],
+          'IPH-15': [('Apple','iPhone 15')], 'IPH-15PLUS': [('Apple','iPhone 15 Plus')], 'IPH-15PRO': [('Apple','iPhone 15 Pro')], 'IPH-15PROMAX': [('Apple','iPhone 15 Pro Max')],
+          'IPH-16': [('Apple','iPhone 16')], 'IPH-16PLUS': [('Apple','iPhone 16 Plus')], 'IPH-16PRO': [('Apple','iPhone 16 Pro')], 'IPH-16PROMAX': [('Apple','iPhone 16 Pro Max')]
+        }
+        for group,pairs in groups.items():
+            for brand,model in pairs:
+                size=''
+                if brand=='Samsung' and model.startswith('Galaxy A15'): size='6.5'
+                if brand=='Samsung' and model.startswith('Galaxy A16'): size='6.7'
+                c.execute('INSERT INTO film_compat(brand,model,aliases,master_code,group_name,screen_size,fit_notes,source_note,confidence,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)',(brand,model,model,group,group,size,'Compatibilidade inicial; confirmar recorte e lote da película com o fornecedor.','base interna + conferência de especificações públicas','manual',now()))
     c.commit(); c.close()
 
 def migrate():
@@ -136,6 +175,8 @@ class Handler(BaseHTTPRequestHandler):
         if path=='/api/search': return self.search(qs.get('q',[''])[0])
         if path=='/api/customer-search': return self.customer_search(qs.get('q',[''])[0])
         if path=='/api/customer-stats': return self.customer_stats(int(qs.get('id',['0'])[0] or 0))
+        if path=='/api/films/search': return self.film_search(qs.get('q',[''])[0])
+        if path=='/api/ai/status': return self.ai_status()
         if path.startswith('/api/'): return self.list_api(path[5:],qs)
         self.send(404,b'Not found','text/plain')
     def do_POST(self):
@@ -148,6 +189,8 @@ class Handler(BaseHTTPRequestHandler):
         if path=='/api/upload': return self.upload(data,u)
         if path=='/api/settings': return self.save_settings(data,u)
         if path=='/api/mark-notifications': return self.json({'ok':True})
+        if path=='/api/ai/evaluate': return self.ai_evaluate(data,u)
+        if path=='/api/ai/price': return self.ai_price(data,u)
         if path.startswith('/api/'):
             try:return self.create_api(path[5:],data,u)
             except sqlite3.IntegrityError as e:return self.json({'error':'Registro inválido ou duplicado: '+str(e)},400)
@@ -208,6 +251,7 @@ class Handler(BaseHTTPRequestHandler):
         elif r=='users':
             if u['role']!='admin':return self.json({'error':'Somente administrador'},403)
             rid=write('INSERT INTO users(name,email,password_hash,role,unit,permissions,created_at) VALUES(?,?,?,?,?,?,?)',(d.get('name'),d.get('email'),ph(d.get('password','123456')),d.get('role','atendente'),d.get('unit','TODOS'),js(d.get('permissions',{'dashboard':True})),now()))
+        elif r=='film_compat': rid=write('INSERT INTO film_compat(brand,model,aliases,master_code,group_name,screen_size,fit_notes,source_note,confidence,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)',(d.get('brand'),d.get('model'),d.get('aliases'),d.get('master_code'),d.get('group_name'),d.get('screen_size'),d.get('fit_notes'),d.get('source_note','cadastro interno'),d.get('confidence','manual'),now()))
         elif r=='chat': rid=write('INSERT INTO chat(unit,user_name,message,created_at) VALUES(?,?,?,?)',(d.get('unit','TODOS'),u['name'],d.get('message'),now()))
         else:return self.json({'error':'Recurso não suportado'},404)
         audit(u['id'],'create',r,rid,js(d)); return self.json({'ok':True,'id':rid})
@@ -270,6 +314,38 @@ class Handler(BaseHTTPRequestHandler):
                 total+=float(one(f'SELECT COALESCE(SUM(amount),0) n FROM finance WHERE ref_type=? AND ref_id IN ({marks})',(rt,*ids))['n'] or 0)
         last=one('SELECT MAX(created_at) v FROM services WHERE customer_id=?',(cid,))['v']
         return self.json({'id':cid,'service_count':count,'score':min(100,int(count)*10),'last_service':last,'total_spent':float(total or 0)})
+
+    def film_search(self,q):
+        q=(q or '').strip()
+        if not q: return self.json(rows('SELECT * FROM film_compat ORDER BY brand,model LIMIT 300'))
+        like='%'+q+'%'
+        return self.json(rows('SELECT * FROM film_compat WHERE brand LIKE ? OR model LIKE ? OR aliases LIKE ? OR master_code LIKE ? OR group_name LIKE ? ORDER BY brand,model LIMIT 300',(like,like,like,like,like)))
+    def ai_status(self):
+        key=os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY')
+        return self.json({'configured':bool(key),'model':os.environ.get('GEMINI_MODEL','gemini-2.5-flash')})
+    def _gemini(self,prompt):
+        key=os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY')
+        if not key: raise RuntimeError('IA não configurada. Defina GEMINI_API_KEY ou GOOGLE_API_KEY nas variáveis de ambiente da Square Cloud.')
+        model=os.environ.get('GEMINI_MODEL','gemini-2.5-flash')
+        url='https://generativelanguage.googleapis.com/v1beta/models/'+urllib.parse.quote(model,safe='')+':generateContent?key='+urllib.parse.quote(key,safe='')
+        payload={'contents':[{'parts':[{'text':prompt}]}]}
+        req=urllib.request.Request(url,data=json.dumps(payload).encode(),headers={'Content-Type':'application/json'},method='POST')
+        with urllib.request.urlopen(req,timeout=25) as resp: obj=json.loads(resp.read().decode())
+        return obj.get('candidates',[{}])[0].get('content',{}).get('parts',[{}])[0].get('text','').strip()
+    def ai_evaluate(self,d,u):
+        if u['role'] not in ('admin','gerente','tecnico'): return self.json({'error':'Sem permissão para IA'},403)
+        prompt='''Você é o avaliador interno da KV CELL. Analise o aparelho usado abaixo para apoiar a equipe. NÃO invente preço de mercado como fato. Entregue em português: riscos/defeitos prováveis; checklist recomendado; faixa de custo de reparo a conferir; faixa de preço de compra conservadora; faixa de venda sugerida; perguntas que o técnico deve fazer. Deixe claro que preço é estimativa e deve ser validado localmente.
+DADOS:
+'''+json.dumps(d,ensure_ascii=False)
+        try:return self.json({'ok':True,'result':self._gemini(prompt)})
+        except Exception as e:return self.json({'error':str(e)},503)
+    def ai_price(self,d,u):
+        if u['role'] not in ('admin','gerente'): return self.json({'error':'Sem permissão para precificação por IA'},403)
+        prompt='''Você é o assistente de precificação da KV CELL. Analise marca/modelo/armazenamento/estado/custo e sugira uma faixa de preço de venda e margem. NÃO trate a resposta como cotação oficial; indique dados que precisam ser confirmados. Responda em português, objetivo, com recomendação conservadora e agressiva.
+DADOS:
+'''+json.dumps(d,ensure_ascii=False)
+        try:return self.json({'ok':True,'result':self._gemini(prompt)})
+        except Exception as e:return self.json({'error':str(e)},503)
 
     def inventory_csv(self):
         data=rows('SELECT * FROM inventory ORDER BY id DESC'); out=io.StringIO();w=csv.writer(out);w.writerow(data[0].keys() if data else ['id']);[w.writerow(x.values()) for x in data];return self.send(200,out.getvalue(),'text/csv')
