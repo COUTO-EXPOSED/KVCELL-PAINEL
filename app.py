@@ -478,74 +478,99 @@ class Handler(BaseHTTPRequestHandler):
         like='%'+q+'%'
         return self.json(rows('SELECT * FROM film_compat WHERE brand LIKE ? OR model LIKE ? OR aliases LIKE ? OR master_code LIKE ? OR group_name LIKE ? ORDER BY brand,model LIMIT 300',(like,like,like,like,like)))
     def ai_status(self):
-        key=os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY')
-        model=os.environ.get('GEMINI_MODEL','gemini-2.5-flash').strip() or 'gemini-2.5-flash'
-        prefix='AQ.' if key and key.startswith('AQ.') else ('AIza' if key and key.startswith('AIza') else ('configurada' if key else 'ausente'))
-        return self.json({
-            'configured':bool(key),
-            'model':model,
-            'key_type':prefix,
-            'key_length':len(key) if key else 0,
-            'database_persistent':bool(BLOB_ENABLED and _fernet()),
-            'transport':'interactions -> generateContent fallback'
-        })
-    def _gemini_request(self,url,payload,key):
-        body=json.dumps(payload,ensure_ascii=False).encode('utf-8')
-        req=urllib.request.Request(url,data=body,headers={'Content-Type':'application/json','Accept':'application/json','x-goog-api-key':key},method='POST')
+        or_key=(os.environ.get('OPENROUTER_API_KEY') or '').strip()
+        gkey=(os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY') or '').strip()
+        or_model=(os.environ.get('OPENROUTER_MODEL') or 'openrouter/free').strip() or 'openrouter/free'
+        gmodel=(os.environ.get('GEMINI_MODEL') or 'gemini-2.5-flash').strip() or 'gemini-2.5-flash'
+        return self.json({'configured':bool(or_key or gkey),'primary_configured':bool(or_key),'secondary_configured':bool(gkey),'provider':'OpenRouter Free','primary_model':or_model,'secondary_model':gmodel,'model':or_model if or_key else gmodel,'key_type':'openrouter' if or_key else ('gemini' if gkey else 'ausente'),'key_length':len(or_key) if or_key else len(gkey),'database_persistent':bool(BLOB_ENABLED and _fernet()),'transport':'OpenRouter Free -> Gemini fallback'})
+
+    def _safe_ai_error(self,provider,status):
+        try: status=int(status)
+        except: status=0
+        p='OpenRouter' if provider=='openrouter' else 'Gemini'
+        messages={400:f'{p}: requisição inválida (HTTP 400).',401:f'{p}: chave inválida ou ausente (HTTP 401).',402:f'{p}: pagamento/crédito exigido (HTTP 402).',403:f'{p}: acesso negado (HTTP 403).',404:f'{p}: modelo ou endpoint não encontrado (HTTP 404).',408:f'{p}: tempo de resposta esgotado (HTTP 408).',409:f'{p}: conflito temporário (HTTP 409).',429:f'{p}: limite temporário atingido (HTTP 429). Tente novamente em instantes.'}
+        if status in messages:return RuntimeError(messages[status])
+        if status>=500:return RuntimeError(f'{p}: serviço temporariamente indisponível (HTTP {status}).')
+        return RuntimeError(f'{p}: não foi possível obter resposta.')
+
+    def _openrouter_request(self,prompt):
+        key=(os.environ.get('OPENROUTER_API_KEY') or '').strip()
+        if not key: raise RuntimeError('OpenRouter não configurado.')
+        model=(os.environ.get('OPENROUTER_MODEL') or 'openrouter/free').strip() or 'openrouter/free'
+        payload={'model':model,'messages':[{'role':'user','content':prompt}],'temperature':0.4,'max_tokens':1200}
+        req=urllib.request.Request('https://openrouter.ai/api/v1/chat/completions',data=json.dumps(payload,ensure_ascii=False).encode('utf-8'),headers={'Content-Type':'application/json','Accept':'application/json','Authorization':'Bearer '+key,'HTTP-Referer':os.environ.get('OPENROUTER_HTTP_REFERER','https://kvcell.squareweb.app/'),'X-Title':'KV CELL OS PREMIUM'},method='POST')
         try:
             with urllib.request.urlopen(req,timeout=45) as resp:
-                raw=resp.read().decode('utf-8','replace')
-                return resp.status,json.loads(raw or '{}')
+                obj=json.loads(resp.read().decode('utf-8','replace') or '{}')
+                choices=obj.get('choices') or []
+                if not choices: raise self._safe_ai_error('openrouter',resp.status)
+                content=(choices[0].get('message') or {}).get('content','')
+                if isinstance(content,list): content=''.join((x.get('text','') if isinstance(x,dict) else str(x)) for x in content)
+                if not str(content).strip(): raise self._safe_ai_error('openrouter',resp.status)
+                return str(content).strip()
         except urllib.error.HTTPError as e:
-            raw=e.read().decode('utf-8','replace')
-            try: obj=json.loads(raw or '{}')
-            except: obj={'error':{'message':raw}}
-            return e.code,obj
+            # Never return the provider body to the browser.
+            raise self._safe_ai_error('openrouter',e.code)
+        except urllib.error.URLError:
+            raise RuntimeError('OpenRouter: falha de conexão com o provedor.')
+        except TimeoutError:
+            raise RuntimeError('OpenRouter: tempo de resposta esgotado.')
+
+    def _gemini_request(self,url,payload,key):
+        req=urllib.request.Request(url,data=json.dumps(payload,ensure_ascii=False).encode('utf-8'),headers={'Content-Type':'application/json','Accept':'application/json','x-goog-api-key':key},method='POST')
+        try:
+            with urllib.request.urlopen(req,timeout=45) as resp:
+                return resp.status,json.loads(resp.read().decode('utf-8','replace') or '{}')
+        except urllib.error.HTTPError as e:
+            return e.code,{}
+        except urllib.error.URLError:
+            return 0,{}
+        except TimeoutError:
+            return 408,{}
+
     def _gemini(self,prompt):
         key=(os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY') or '').strip()
-        if not key: raise RuntimeError('IA não configurada no servidor: GEMINI_API_KEY ausente.')
+        if not key: raise RuntimeError('Gemini secundário não configurado.')
         model=(os.environ.get('GEMINI_MODEL') or 'gemini-2.5-flash').strip()
-        # Caminho atual recomendado pelo Google: Interactions API.
-        attempts=[]
-        interaction_url='https://generativelanguage.googleapis.com/v1/interactions'
-        interaction_payload={'model':model,'input':prompt,'store':False}
-        status,obj=self._gemini_request(interaction_url,interaction_payload,key)
-        if status>=200 and status<300:
+        status,obj=self._gemini_request('https://generativelanguage.googleapis.com/v1/interactions',{'model':model,'input':prompt,'store':False},key)
+        if 200<=status<300:
             out=obj.get('output_text')
             if not out:
                 for step in obj.get('steps') or []:
                     if step.get('type')=='model_output':
                         for part in step.get('content') or []:
                             if isinstance(part,dict) and part.get('type')=='text': out=(out or '')+part.get('text','')
-            if (out or '').strip(): return out.strip()
-            attempts.append(f'Interactions HTTP {status}: resposta vazia')
-        else:
-            err=obj.get('error') if isinstance(obj,dict) else {}
-            msg=(err.get('message') if isinstance(err,dict) else None) or str(obj)
-            attempts.append(f'Interactions HTTP {status}: {msg[:700]}')
-        # Compatibilidade: fallback para generateContent.
-        gen_url='https://generativelanguage.googleapis.com/v1beta/models/'+urllib.parse.quote(model,safe='')+':generateContent'
-        gen_payload={'contents':[{'parts':[{'text':prompt}]}],'generationConfig':{'temperature':0.4,'maxOutputTokens':1200}}
-        status,obj=self._gemini_request(gen_url,gen_payload,key)
-        if status>=200 and status<300:
+            if str(out or '').strip():return str(out).strip()
+        url='https://generativelanguage.googleapis.com/v1beta/models/'+urllib.parse.quote(model,safe='')+':generateContent'
+        status,obj=self._gemini_request(url,{'contents':[{'parts':[{'text':prompt}]}],'generationConfig':{'temperature':0.4,'maxOutputTokens':1200}},key)
+        if 200<=status<300:
             parts=(obj.get('candidates') or [{}])[0].get('content',{}).get('parts',[])
             out=''.join(x.get('text','') for x in parts if isinstance(x,dict)).strip()
             if out:return out
-            attempts.append(f'generateContent HTTP {status}: resposta vazia')
-        else:
-            err=obj.get('error') if isinstance(obj,dict) else {}
-            msg=(err.get('message') if isinstance(err,dict) else None) or str(obj)
-            attempts.append(f'generateContent HTTP {status}: {msg[:700]}')
-        raise RuntimeError(' | '.join(attempts))
+        raise self._safe_ai_error('gemini',status or 503)
+
+    def _ai(self,prompt):
+        primary_err=None
+        if os.environ.get('OPENROUTER_API_KEY','').strip():
+            try:return self._openrouter_request(prompt)
+            except Exception as e: primary_err=e
+        if os.environ.get('GEMINI_API_KEY','').strip() or os.environ.get('GOOGLE_API_KEY','').strip():
+            try:return self._gemini(prompt)
+            except Exception as e:
+                if primary_err: raise RuntimeError('IA indisponível nos dois provedores. OpenRouter: '+str(primary_err)+' Gemini: '+str(e))
+                raise
+        if primary_err: raise RuntimeError(str(primary_err))
+        raise RuntimeError('IA não configurada. Cadastre OPENROUTER_API_KEY no Square Cloud. O OpenRouter Free não exige cartão para começar.')
+
     def ai_evaluate(self,d,u):
         if u['role'] not in ('admin','gerente','tecnico'): return self.json({'error':'Sem permissão para IA'},403)
         prompt=('Você é o KV CELL BOT [I.A], assistente interno da KV CELL. Responda em português-BR. Seja prático, comercial e técnico. Nunca invente fatos ou compatibilidade física como certeza. Para preços, dê estimativa.\nTAREFA:\n')+json.dumps(d,ensure_ascii=False)
-        try:return self.json({'ok':True,'result':self._gemini(prompt)})
+        try:return self.json({'ok':True,'result':self._ai(prompt)})
         except Exception as e:return self.json({'error':str(e),'retryable':True},503)
     def ai_price(self,d,u):
         if u['role'] not in ('admin','gerente','tecnico'): return self.json({'error':'Sem permissão para precificação por IA'},403)
         prompt=('Você é o KV CELL BOT [I.A]. Ajude a definir preço de serviço/aparelho. Calcule custo, margem, faixa conservadora, recomendada e agressiva quando houver dados. Se faltar informação, faça perguntas. Não apresente preço de mercado como fato.\nDADOS:\n')+json.dumps(d,ensure_ascii=False)
-        try:return self.json({'ok':True,'result':self._gemini(prompt)})
+        try:return self.json({'ok':True,'result':self._ai(prompt)})
         except Exception as e:return self.json({'error':str(e),'retryable':True},503)
     def ai_chat(self,d,u):
         if u['role'] not in ('admin','gerente','tecnico','atendente'): return self.json({'error':'Sem permissão para o BOT'},403)
@@ -553,32 +578,19 @@ class Handler(BaseHTTPRequestHandler):
         if not re.match(r'^\s*/bot(?:\s|$)',msg,re.I): return self.json({'error':'A IA só pode ser acionada usando /bot.'},400)
         msg=re.sub(r'^\s*/bot\s*','',msg,flags=re.I).strip()
         if not msg:return self.json({'error':'Digite uma pergunta após /bot.'},400)
-        context=''
-        prompt=('Você é o KV CELL BOT [I.A], assistente oficial interno da KV CELL. A plataforma possui unidades LAGOS e MAGÉ. Ajude com precificação, orçamento, textos para clientes, diagnóstico, gestão, vendas, películas, desbloqueios e dúvidas do sistema.\nRegras: responda em português-BR; seja claro; quando criar orçamento entregue texto pronto para WhatsApp; quando calcular preço mostre custo/margem e diga que é estimativa; nunca invente compatibilidade de película; nunca peça ou revele API keys; não execute alterações no banco pela conversa.\nHISTÓRICO:\n')+context+'\n\nPERGUNTA:\n'+msg
+        prompt=('Você é o KV CELL BOT [I.A], assistente oficial interno da KV CELL. A plataforma possui unidades LAGOS e MAGÉ. Ajude com precificação, orçamento, textos para clientes, diagnóstico, gestão, vendas, películas, desbloqueios e dúvidas do sistema.\nRegras: responda em português-BR; seja claro; quando criar orçamento entregue texto pronto para WhatsApp; quando calcular preço mostre custo/margem e diga que é estimativa; nunca invente compatibilidade de película; nunca peça ou revele API keys; não execute alterações no banco pela conversa.\nHISTÓRICO:\n\nPERGUNTA:\n')+msg
         try:
-            reply=self._gemini(prompt)
+            reply=self._ai(prompt)
             rid=write('INSERT INTO ai_chat(unit,user_id,user_name,role,message,reply,created_at) VALUES(?,?,?,?,?,?,?)',(u.get('unit','TODOS'),u['id'],u['name'],'user',msg,reply,now()))
             activity(u,'BOT','Perguntou à IA','ai_chat',rid,msg)
             return self.json({'ok':True,'reply':reply,'id':rid,'tag':'BOT'})
         except Exception as e:
-            detail=str(e)
-            # Não expõe a chave; expõe apenas diagnóstico seguro para o administrador.
-            safe_detail=detail.replace(os.environ.get('GEMINI_API_KEY',''),'[CHAVE_OCULTA]')
-            safe_detail=safe_detail.replace(os.environ.get('GOOGLE_API_KEY',''),'[CHAVE_OCULTA]')
-            if 'HTTP 401' in safe_detail or '401' in safe_detail:
-                reason='O Gemini rejeitou a credencial (HTTP 401). Gere uma nova chave de autenticação no Google AI Studio e atualize GEMINI_API_KEY no Square Cloud.'
-            elif 'HTTP 403' in safe_detail or '403' in safe_detail:
-                reason='O Gemini recusou o acesso (HTTP 403). Verifique projeto, permissões, restrições da chave e acesso à API Gemini.'
-            elif 'HTTP 429' in safe_detail or '429' in safe_detail:
-                reason='O Gemini informou limite/quota (HTTP 429). Verifique quota e faturamento do projeto.'
-            elif 'HTTP 400' in safe_detail or '400' in safe_detail:
-                reason='O Gemini recusou a requisição (HTTP 400). Verifique GEMINI_MODEL e o formato da solicitação.'
-            else:
-                reason='O servidor não conseguiu obter resposta do Gemini.'
-            reply=reason+'\n\nDiagnóstico técnico: '+safe_detail[:1400]
+            reply=str(e)
+            for secret in (os.environ.get('OPENROUTER_API_KEY',''),os.environ.get('GEMINI_API_KEY',''),os.environ.get('GOOGLE_API_KEY','')):
+                if secret: reply=reply.replace(secret,'[CHAVE_OCULTA]')
             rid=write('INSERT INTO ai_chat(unit,user_id,user_name,role,message,reply,created_at) VALUES(?,?,?,?,?,?,?)',(u.get('unit','TODOS'),u['id'],u['name'],'user',msg,reply,now()))
-            activity(u,'BOT','Falha ao consultar IA','ai_chat',rid,safe_detail[:1000])
-            return self.json({'ok':False,'reply':reply,'error':safe_detail,'id':rid,'tag':'BOT'},503)
+            activity(u,'BOT','Falha ao consultar IA','ai_chat',rid,'provider_error')
+            return self.json({'ok':False,'reply':reply,'error':reply,'id':rid,'tag':'BOT','retryable':True,'code':'AI_PROVIDER_ERROR'},503)
     def ai_chat_list(self): return self.json(rows('SELECT * FROM ai_chat ORDER BY id DESC LIMIT 100'))
     def activity_api(self,qs):
         unit=qs.get('unit',['TODOS'])[0]

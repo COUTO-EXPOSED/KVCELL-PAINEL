@@ -17,7 +17,7 @@ Backend/frontend preparado para Square Cloud.
 - Facebook/Messenger permanece preparado como recurso futuro.
 
 ## Segurança
-As chaves Gemini são lidas exclusivamente das variáveis de ambiente `GEMINI_API_KEY` ou `GOOGLE_API_KEY`.
+A IA usa `OPENROUTER_API_KEY` como provedor principal, com o modelo `openrouter/free` (gratuito). O Gemini (`GEMINI_API_KEY`/`GOOGLE_API_KEY`) fica apenas como fallback secundário. Nenhuma chave fica no frontend ou no GitHub.
 
 
 ## V21 — persistência e canais
@@ -26,4 +26,12 @@ As chaves Gemini são lidas exclusivamente das variáveis de ambiente `GEMINI_AP
 - Perguntar à I.A.: canal exclusivo; somente perguntas explícitas recebem Gemini.
 - Logs: canal separado de auditoria/eventos.
 - Persistência: SQLite criptografado sincronizado com Square Cloud Blob quando `SQUARE_BLOB_API_KEY`, `SQUARE_BLOB_ACCOUNT_ID` e `KVCELL_DB_ENCRYPTION_KEY` estão configurados. O Blob Storage da Square Cloud suporta SQLite leve como armazenamento persistente.
-- Gemini padrão: `gemini-2.5-flash`; mantenha a chave somente nas variáveis de ambiente do Square Cloud.
+- IA principal: OpenRouter Free (`openrouter/free`). Gemini `gemini-2.5-flash` fica como fallback secundário; mantenha todas as chaves somente nas variáveis de ambiente do Square Cloud.
+
+
+## IA V23
+- Provedor principal: OpenRouter Free via `https://openrouter.ai/api/v1/chat/completions`.
+- Modelo padrão: `openrouter/free`, que seleciona automaticamente um modelo gratuito disponível.
+- Fallback: Gemini somente se OpenRouter falhar e houver chave Gemini configurada.
+- O frontend nunca recebe chaves nem corpos brutos dos provedores.
+- Erros dos provedores são normalizados e não vazam payloads/chaves.
