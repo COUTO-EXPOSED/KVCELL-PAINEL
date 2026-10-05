@@ -479,34 +479,64 @@ class Handler(BaseHTTPRequestHandler):
         return self.json(rows('SELECT * FROM film_compat WHERE brand LIKE ? OR model LIKE ? OR aliases LIKE ? OR master_code LIKE ? OR group_name LIKE ? ORDER BY brand,model LIMIT 300',(like,like,like,like,like)))
     def ai_status(self):
         key=os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY')
-        return self.json({'configured':bool(key),'model':os.environ.get('GEMINI_MODEL','gemini-2.5-flash'),'database_persistent':bool(BLOB_ENABLED and _fernet())})
-    def _gemini(self,prompt):
-        key=os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY')
-        if not key: raise RuntimeError('IA não configurada: defina GEMINI_API_KEY no Square Cloud.')
-        model=os.environ.get('GEMINI_MODEL','gemini-2.5-flash')
-        url='https://generativelanguage.googleapis.com/v1beta/models/'+urllib.parse.quote(model,safe='')+':generateContent'
-        payload={'contents':[{'parts':[{'text':prompt}]}],'generationConfig':{'temperature':0.4,'maxOutputTokens':1200}}
+        model=os.environ.get('GEMINI_MODEL','gemini-2.5-flash').strip() or 'gemini-2.5-flash'
+        prefix='AQ.' if key and key.startswith('AQ.') else ('AIza' if key and key.startswith('AIza') else ('configurada' if key else 'ausente'))
+        return self.json({
+            'configured':bool(key),
+            'model':model,
+            'key_type':prefix,
+            'key_length':len(key) if key else 0,
+            'database_persistent':bool(BLOB_ENABLED and _fernet()),
+            'transport':'interactions -> generateContent fallback'
+        })
+    def _gemini_request(self,url,payload,key):
         body=json.dumps(payload,ensure_ascii=False).encode('utf-8')
-        last='erro desconhecido'
-        for attempt in range(3):
-            try:
-                req=urllib.request.Request(url,data=body,headers={'Content-Type':'application/json','x-goog-api-key':key},method='POST')
-                with urllib.request.urlopen(req,timeout=35) as resp: obj=json.loads(resp.read().decode('utf-8'))
-                if obj.get('error'): raise RuntimeError(obj['error'].get('message','Erro Gemini'))
-                parts=(obj.get('candidates') or [{}])[0].get('content',{}).get('parts',[])
-                text=''.join(x.get('text','') for x in parts if isinstance(x,dict)).strip()
-                if not text: raise RuntimeError('A IA retornou uma resposta vazia.')
-                return text
-            except urllib.error.HTTPError as e:
-                try: detail=e.read().decode('utf-8')
-                except: detail=''
-                last=f'HTTP {e.code}: {detail}'
-                if e.code not in (429,500,502,503,504): break
-                if attempt<2: time.sleep(2**attempt)
-            except Exception as e:
-                last=str(e)
-                if attempt<2: time.sleep(2**attempt)
-        raise RuntimeError('Gemini indisponível após 3 tentativas. '+last[:800])
+        req=urllib.request.Request(url,data=body,headers={'Content-Type':'application/json','Accept':'application/json','x-goog-api-key':key},method='POST')
+        try:
+            with urllib.request.urlopen(req,timeout=45) as resp:
+                raw=resp.read().decode('utf-8','replace')
+                return resp.status,json.loads(raw or '{}')
+        except urllib.error.HTTPError as e:
+            raw=e.read().decode('utf-8','replace')
+            try: obj=json.loads(raw or '{}')
+            except: obj={'error':{'message':raw}}
+            return e.code,obj
+    def _gemini(self,prompt):
+        key=(os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY') or '').strip()
+        if not key: raise RuntimeError('IA não configurada no servidor: GEMINI_API_KEY ausente.')
+        model=(os.environ.get('GEMINI_MODEL') or 'gemini-2.5-flash').strip()
+        # Caminho atual recomendado pelo Google: Interactions API.
+        attempts=[]
+        interaction_url='https://generativelanguage.googleapis.com/v1/interactions'
+        interaction_payload={'model':model,'input':prompt,'store':False}
+        status,obj=self._gemini_request(interaction_url,interaction_payload,key)
+        if status>=200 and status<300:
+            out=obj.get('output_text')
+            if not out:
+                for step in obj.get('steps') or []:
+                    if step.get('type')=='model_output':
+                        for part in step.get('content') or []:
+                            if isinstance(part,dict) and part.get('type')=='text': out=(out or '')+part.get('text','')
+            if (out or '').strip(): return out.strip()
+            attempts.append(f'Interactions HTTP {status}: resposta vazia')
+        else:
+            err=obj.get('error') if isinstance(obj,dict) else {}
+            msg=(err.get('message') if isinstance(err,dict) else None) or str(obj)
+            attempts.append(f'Interactions HTTP {status}: {msg[:700]}')
+        # Compatibilidade: fallback para generateContent.
+        gen_url='https://generativelanguage.googleapis.com/v1beta/models/'+urllib.parse.quote(model,safe='')+':generateContent'
+        gen_payload={'contents':[{'parts':[{'text':prompt}]}],'generationConfig':{'temperature':0.4,'maxOutputTokens':1200}}
+        status,obj=self._gemini_request(gen_url,gen_payload,key)
+        if status>=200 and status<300:
+            parts=(obj.get('candidates') or [{}])[0].get('content',{}).get('parts',[])
+            out=''.join(x.get('text','') for x in parts if isinstance(x,dict)).strip()
+            if out:return out
+            attempts.append(f'generateContent HTTP {status}: resposta vazia')
+        else:
+            err=obj.get('error') if isinstance(obj,dict) else {}
+            msg=(err.get('message') if isinstance(err,dict) else None) or str(obj)
+            attempts.append(f'generateContent HTTP {status}: {msg[:700]}')
+        raise RuntimeError(' | '.join(attempts))
     def ai_evaluate(self,d,u):
         if u['role'] not in ('admin','gerente','tecnico'): return self.json({'error':'Sem permissão para IA'},403)
         prompt=('Você é o KV CELL BOT [I.A], assistente interno da KV CELL. Responda em português-BR. Seja prático, comercial e técnico. Nunca invente fatos ou compatibilidade física como certeza. Para preços, dê estimativa.\nTAREFA:\n')+json.dumps(d,ensure_ascii=False)
@@ -531,9 +561,24 @@ class Handler(BaseHTTPRequestHandler):
             activity(u,'BOT','Perguntou à IA','ai_chat',rid,msg)
             return self.json({'ok':True,'reply':reply,'id':rid,'tag':'BOT'})
         except Exception as e:
-            reply='A IA está temporariamente indisponível. Verifique GEMINI_API_KEY/GEMINI_MODEL no Square Cloud e tente novamente. Nenhuma alteração foi feita.'
+            detail=str(e)
+            # Não expõe a chave; expõe apenas diagnóstico seguro para o administrador.
+            safe_detail=detail.replace(os.environ.get('GEMINI_API_KEY',''),'[CHAVE_OCULTA]')
+            safe_detail=safe_detail.replace(os.environ.get('GOOGLE_API_KEY',''),'[CHAVE_OCULTA]')
+            if 'HTTP 401' in safe_detail or '401' in safe_detail:
+                reason='O Gemini rejeitou a credencial (HTTP 401). Gere uma nova chave de autenticação no Google AI Studio e atualize GEMINI_API_KEY no Square Cloud.'
+            elif 'HTTP 403' in safe_detail or '403' in safe_detail:
+                reason='O Gemini recusou o acesso (HTTP 403). Verifique projeto, permissões, restrições da chave e acesso à API Gemini.'
+            elif 'HTTP 429' in safe_detail or '429' in safe_detail:
+                reason='O Gemini informou limite/quota (HTTP 429). Verifique quota e faturamento do projeto.'
+            elif 'HTTP 400' in safe_detail or '400' in safe_detail:
+                reason='O Gemini recusou a requisição (HTTP 400). Verifique GEMINI_MODEL e o formato da solicitação.'
+            else:
+                reason='O servidor não conseguiu obter resposta do Gemini.'
+            reply=reason+'\n\nDiagnóstico técnico: '+safe_detail[:1400]
             rid=write('INSERT INTO ai_chat(unit,user_id,user_name,role,message,reply,created_at) VALUES(?,?,?,?,?,?,?)',(u.get('unit','TODOS'),u['id'],u['name'],'user',msg,reply,now()))
-            return self.json({'ok':False,'reply':reply,'error':str(e),'id':rid},200)
+            activity(u,'BOT','Falha ao consultar IA','ai_chat',rid,safe_detail[:1000])
+            return self.json({'ok':False,'reply':reply,'error':safe_detail,'id':rid,'tag':'BOT'},503)
     def ai_chat_list(self): return self.json(rows('SELECT * FROM ai_chat ORDER BY id DESC LIMIT 100'))
     def activity_api(self,qs):
         unit=qs.get('unit',['TODOS'])[0]
