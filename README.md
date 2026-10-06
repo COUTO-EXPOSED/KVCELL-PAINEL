@@ -1,37 +1,92 @@
-# KV CELL OS PREMIUM — V20 ULTIMATE
+# KV CELL OS PREMIUM — ULTIMATE SUPREME V100
 
-Backend/frontend preparado para Square Cloud.
+Versão V100 consolidada do KV CELL OS PREMIUM para Square Cloud.
 
-## V20
-- Custos de material, mão de obra e extras em OS e desbloqueios.
-- Custo total e lucro calculados automaticamente.
-- Entradas e custos vinculados ao Financeiro sem duplicidade ao editar.
-- Status operacionais para OS e desbloqueios.
-- Acompanhamento público por link com linha do tempo.
-- Botões de visualização, edição, impressão/PDF, link, 2ª via térmica, WhatsApp, garantia, finalizar e excluir.
-- Garantia vinculada à OS/desbloqueio original.
-- Chat normal não chama IA.
-- IA somente quando a mensagem começa com `/bot`.
-- BOT e LOG são identificadores de mensagens/eventos, não botões do topo.
-- Undo de exclusão restaura o registro quando possível e recompõe os lançamentos financeiros vinculados.
-- Facebook/Messenger permanece preparado como recurso futuro.
+## Principais módulos
 
-## Segurança
-A IA usa `OPENROUTER_API_KEY` como provedor principal, com o modelo `openrouter/free` (gratuito). O Gemini (`GEMINI_API_KEY`/`GOOGLE_API_KEY`) fica apenas como fallback secundário. Nenhuma chave fica no frontend ou no GitHub.
+- Dashboard com filtro global TODOS / LAGOS / MAGÉ
+- Ordens de Serviço unificadas: assistência técnica + desbloqueios
+- OS técnica completa com cliente, aparelho, IMEI/SN, PIN/padrão, checklist, mapa de avarias, fotos, peças, produtos, custos, técnico, bancada, previsão e aprovação pública
+- OS de desbloqueio profissional sem checklist e sem garantia após finalização
+- Busca de cliente por início do nome ou telefone; ao selecionar, o ID interno nunca é exibido ao usuário
+- Agenda
+- Orçamentos com link público e aprovação/recusa
+- Precificação
+- Garantias
+- Controle de Fiado integrado a OS, desbloqueios e vendas, com parcelas e recebimento
+- Clientes / CRM / Radar de Recompra
+- Técnicos e fornecedores
+- Compra e Venda / Vitrine
+- Estoque
+- Financeiro e lucro
+- PDV / vendas
+- Catálogo Digital
+- Películas / compatibilidade
+- Comunidade e área preparada para Messenger
+- Serviços e Indicações
+- Funcionários / permissões
+- Administração / backup
+- Chat entre unidades separado da I.A. e dos Logs
+- I.A. separada: OpenRouter Free como principal e Gemini como fallback
+- Persistência opcional do SQLite via Square Cloud Blob
 
+## IA
 
-## V21 — persistência e canais
-- Cliente: busca por início do nome ou telefone; nenhum ID de cliente/aparelho é exigido ao usuário.
-- Chat Unidades: comunicação LAGOS ↔ MAGÉ separada.
-- Perguntar à I.A.: canal exclusivo; somente perguntas explícitas recebem Gemini.
-- Logs: canal separado de auditoria/eventos.
-- Persistência: SQLite criptografado sincronizado com Square Cloud Blob quando `SQUARE_BLOB_API_KEY`, `SQUARE_BLOB_ACCOUNT_ID` e `KVCELL_DB_ENCRYPTION_KEY` estão configurados. O Blob Storage da Square Cloud suporta SQLite leve como armazenamento persistente.
-- IA principal: OpenRouter Free (`openrouter/free`). Gemini `gemini-2.5-flash` fica como fallback secundário; mantenha todas as chaves somente nas variáveis de ambiente do Square Cloud.
+Configure no Square Cloud:
 
+```text
+OPENROUTER_API_KEY=...
+OPENROUTER_MODEL=openrouter/free
+OPENROUTER_HTTP_REFERER=https://kvcell.squareweb.app/
+```
 
-## IA V23
-- Provedor principal: OpenRouter Free via `https://openrouter.ai/api/v1/chat/completions`.
-- Modelo padrão: `openrouter/free`, que seleciona automaticamente um modelo gratuito disponível.
-- Fallback: Gemini somente se OpenRouter falhar e houver chave Gemini configurada.
-- O frontend nunca recebe chaves nem corpos brutos dos provedores.
-- Erros dos provedores são normalizados e não vazam payloads/chaves.
+Gemini fica somente como fallback:
+
+```text
+GEMINI_API_KEY=...
+GEMINI_MODEL=gemini-2.5-flash
+```
+
+A IA continua exigindo `/bot` no endpoint técnico. O frontend da aba I.A. adiciona esse prefixo automaticamente.
+
+## Banco persistente
+
+Para não perder o banco ao publicar outro ZIP, configure:
+
+```text
+SQUARE_BLOB_API_KEY=...
+SQUARE_BLOB_ACCOUNT_ID=...
+SQUARE_BLOB_DB_NAME=kvcell_database
+SQUARE_BLOB_PREFIX=kvcell
+SQUARE_BLOB_PUBLIC_URL=
+KVCELL_DB_ENCRYPTION_KEY=<Fernet key>
+KVCELL_DATA_DIR=/application/data
+```
+
+Nunca coloque chaves reais no GitHub ou no ZIP.
+
+## Square Cloud
+
+- Porta: 80
+- Bind: 0.0.0.0
+- Publicação Web habilitada para o domínio squareweb.app
+
+## Testes realizados
+
+- `python -m py_compile app.py`
+- `node --check static/app.js`
+- health/login
+- criação de cliente
+- criação de OS técnica
+- criação de OS de desbloqueio sem checklist
+- busca/seleção de cliente
+- fiado e recebimento
+- agenda
+- técnicos
+- fornecedores
+- garantias
+- comunidade
+- indicações
+- catálogo
+- aprovação pública de OS
+- integridade do ZIP
