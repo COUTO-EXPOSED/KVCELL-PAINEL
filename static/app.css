@@ -61,3 +61,5 @@
   .v100-shell .os-tabs button{white-space:nowrap;min-height:42px;touch-action:manipulation}
   .item-row{grid-template-columns:1fr 64px 80px 40px}
 }
+
+.crud-icons{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}.crud-icons .iconbtn{min-width:36px;min-height:36px}

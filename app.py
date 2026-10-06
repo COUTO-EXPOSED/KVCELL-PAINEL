@@ -375,6 +375,7 @@ class Handler(BaseHTTPRequestHandler):
         sql='SELECT * FROM '+table+(' WHERE '+' AND '.join(wh) if wh else '')+' ORDER BY id DESC LIMIT 500'
         data=rows(sql,args)
         for x in data:
+            x['__resource']=table
             cid=x.get('customer_id')
             if cid:
                 c=one('SELECT name,phone,document FROM customers WHERE id=?',(cid,))
@@ -389,6 +390,7 @@ class Handler(BaseHTTPRequestHandler):
         sql+=' ORDER BY f.id DESC LIMIT 500'
         data=rows(sql,args); today=date.today().isoformat()
         for x in data:
+            x['__resource']='fiado'
             x['balance']=max(0,float(x.get('total') or 0)-float(x.get('down_payment') or 0)-float(x.get('paid_total') or 0))
             if x['balance']<=0: x['status']='pago'
             elif x.get('due_date') and x['due_date']<today: x['status']='atrasado'
@@ -508,12 +510,35 @@ class Handler(BaseHTTPRequestHandler):
         else:return self.json({'error':'Recurso não suportado'},404)
         audit(u['id'],'create',r,rid,js(d)); uu=dict(u); uu['unit']=d.get('unit',u.get('unit','TODOS')); activity(uu,'LOG',f'Criou {r}',r,rid,js(d)); push_undo(uu,f'Criou {r}',r,rid,{},d); return self.json({'ok':True,'id':rid})
     def update_api(self,r,d,u):
-        table=r; rid=d.get('id')
-        allowed={'services':['status','diagnosis','technician','technician_id','price','warranty','notes','checklist','photos','cost_material','cost_labor','cost_extra','warranty_of_id','details_json'],'unlocks':['status','operator','technician_id','price','notes','checklist','photos','cost_material','cost_labor','cost_extra','warranty_of_id','details_json'],'devices':['status','notes','photos'],'forgotten':['status','notes','possible_owner','photos'],'quotes':['status','valid_until','observations'],'inventory':['qty','min_qty','price','cost','compatibility','notes'],'purchases':['sold','sale_date','sale_place','sale_price','sale_payment','sale_installments','sale_fee','sale_notes','status','suggested_price','observations','storage','condition','color','battery_health','description','accessories'],'appointments':['title','service_type','start_at','end_at','status','technician','notes'],'technicians':['name','phone','email','specialties','active'],'suppliers':['name','document','phone','email','city','notes'],'guarantees':['status','end_date','notes'],'community':['title','message','type','status'],'referrals':['service_name','commission','referrer','link','status'],'catalog-products':['name','category','price','stock','image','active']}
-        if table not in allowed:return self.json({'error':'Atualização não permitida'},400)
+        resource=r; table={'community':'community_posts','catalog-products':'catalog_products','fiado':'fiado_accounts'}.get(r,r); rid=d.get('id')
+        allowed={
+            'users':['name','email','role','unit','permissions','active'],
+            'customers':['type','name','document_type','document','phone_type','phone','email','address','city','birth_date','balance','observations'],
+            'services':['unit','customer_id','device_id','kind','description','diagnosis','status','technician','technician_id','price','warranty','notes','checklist','photos','cost_material','cost_labor','cost_extra','warranty_of_id','details_json'],
+            'unlocks':['unit','customer_id','device_id','brand','model','imei','kind','status','operator','technician_id','price','notes','checklist','photos','cost_material','cost_labor','cost_extra','warranty_of_id','details_json'],
+            'devices':['unit','customer_id','brand','model','imei','serial','color','storage','status','photos','notes'],
+            'forgotten':['unit','brand','model','imei','possible_owner','phone','status','notes','photos','checklist'],
+            'quotes':['unit','customer_id','device_id','items','subtotal','total','warranty_type','warranty_days','travel_enabled','travel_fee','quote_type','conditions','observations','valid_until','status'],
+            'inventory':['unit','code','name','type','category','qty','min_qty','price','cost','supplier','compatibility','notes'],
+            'purchases':['unit','customer_id','brand','model','imei','purchase_date','amount','expenses','freight','suggested_price','status','sold','sale_date','sale_place','sale_price','sale_payment','sale_installments','sale_fee','sale_notes','observations','storage','condition','color','battery_health','description','accessories','photos','checklist'],
+            'sales':['unit','customer_id','items','total','payment'],
+            'finance':['unit','type','category','description','amount','ref_type','ref_id','due_date','paid'],
+            'models':['brand','model','service_prices','margin','warranty','notes'],
+            'appointments':['unit','customer_id','title','service_type','start_at','end_at','status','technician','notes'],
+            'technicians':['unit','name','phone','email','specialties','active'],
+            'suppliers':['unit','name','document','phone','email','city','notes'],
+            'guarantees':['unit','customer_id','source_type','source_id','device','description','start_date','end_date','status','notes'],
+            'community':['unit','user_name','title','message','type','status'],
+            'referrals':['unit','customer_id','service_name','commission','referrer','link','status'],
+            'catalog-products':['unit','name','category','price','stock','image','active'],
+            'contracts':['unit','type','customer_id','device_id','payload','customer_signature','store_signature'],
+            'chat':['unit','message'],
+            'fiado':['unit','customer_id','source_type','source_id','description','total','down_payment','balance','due_date','status','notes','installments','installment_value','frequency']
+        }
+        if resource not in allowed:return self.json({'error':'Atualização não permitida'},400)
         before=one('SELECT * FROM '+table+' WHERE id=?',(rid,))
         if not before:return self.json({'error':'Registro não encontrado'},404)
-        fields=[f for f in allowed[table] if f in d]; vals=[]
+        fields=[f for f in allowed[resource] if f in d]; vals=[]
         if not fields:return self.json({'error':'Nenhum campo'},400)
         for f in fields:
             v=d[f]; v=js(v) if f in ('checklist','photos','details_json') and not isinstance(v,str) else v; vals.append(v)
@@ -524,6 +549,19 @@ class Handler(BaseHTTPRequestHandler):
         if table=='services' and 'updated_at' not in fields: fields.append('updated_at'); vals.append(now())
         vals.append(rid); write('UPDATE '+table+' SET '+','.join(f+'=?' for f in fields)+' WHERE id=?',vals)
         after=one('SELECT * FROM '+table+' WHERE id=?',(rid,))
+        if table=='purchases' and after:
+            total=float(after['amount'] or 0)+float(after['expenses'] or 0)+float(after['freight'] or 0)
+            suggested=float(after['suggested_price'] or 0)
+            sold=1 if str(after['sold'] or '').lower() in ('1','true','sim','on') or str(after['status'] or '').lower()=='vendido' else 0
+            write('UPDATE purchases SET total_cost=?,expected_profit=?,sold=?,status=? WHERE id=?',(total,suggested-total,sold,'vendido' if sold else after['status'],rid))
+            after=one('SELECT * FROM purchases WHERE id=?',(rid,))
+            inv=one('SELECT * FROM inventory WHERE purchase_id=?',(rid,))
+            if inv:
+                write('UPDATE inventory SET qty=? , name=?, price=?, cost=? WHERE id=?',(0 if sold else 1, f"{after['brand'] or ''} {after['model'] or ''}".strip(), suggested,total,inv['id']))
+        if table=='sales' and after:
+            write('DELETE FROM finance WHERE ref_type=? AND ref_id=?',('sale',rid))
+            if float(after['total'] or 0)>0:
+                write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(after['unit'],'entrada','Venda',after['items'] or 'Venda',float(after['total'] or 0),'sale',rid,now()))
         # V100: on finalization, process parts/products linked to the OS exactly once.
         if table=='services' and after and str(after['status'] or '') in ('entregue','pronto') and str(before['status'] or '') not in ('entregue','pronto'):
             try:
@@ -553,7 +591,7 @@ class Handler(BaseHTTPRequestHandler):
             write('DELETE FROM finance WHERE ref_type IN (?,?) AND ref_id=?',(rt,costrt,rid))
             if float(after['price'] or 0)>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(after['unit'],'entrada',label,after['description'] if table=='services' else after['kind'],float(after['price'] or 0),rt,rid,now()))
             if float(after['cost_total'] or 0)>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(after['unit'],'saida','Custo '+('OS' if table=='services' else 'Desbloqueio'),after['description'] if table=='services' else after['kind'],float(after['cost_total'] or 0),costrt,rid,now()))
-        audit(u['id'],'update',table,rid,js(d)); uu=dict(u); uu['unit']=before['unit'] if 'unit' in before.keys() else u.get('unit','TODOS'); activity(uu,'LOG',f'Alterou {table}',table,rid,js(d)); push_undo(uu,f'Alterou {table}',table,rid,dict(before),dict(after)); return self.json({'ok':True,'profit':float(after.get('profit',0) or 0)})
+        audit(u['id'],'update',resource,rid,js(d)); uu=dict(u); uu['unit']=before['unit'] if 'unit' in before.keys() else u.get('unit','TODOS'); activity(uu,'LOG',f'Alterou {resource}',resource,rid,js(d)); push_undo(uu,f'Alterou {resource}',table,rid,dict(before),dict(after)); return self.json({'ok':True,'profit':float(after.get('profit',0) or 0)})
     def do_DELETE(self):
         p=urlparse(self.path); u=self.require()
         if not u:return
