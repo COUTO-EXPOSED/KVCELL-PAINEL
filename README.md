@@ -1,8 +1,8 @@
-# KV CELL ULTIMATE SUPREME V101
+# KV CELL ULTIMATE SUPREME V300
 
 Atualização do KV CELL OS PREMIUM com foco em fidelidade operacional às telas de referência enviadas pelo cliente, analytics e vínculo real entre Técnicos e Ordens de Serviço.
 
-## V101 — principais mudanças
+## V300 — principais mudanças
 
 - Remove da navegação lateral: Meu Plano, Catálogo Digital e Serviços e Indicações.
 - Controle de Fiado remodelado no padrão da referência:
@@ -55,7 +55,17 @@ KVCELL_DATA_DIR=/application/data
 
 - Python `py_compile`: OK
 - JavaScript `node --check`: OK
-- API smoke V101: OK
+- API smoke V300: OK
 - ZIP integrity: verificar antes do deploy
 
 Não coloque chaves de API reais no GitHub nem no frontend.
+
+
+## V300 — restauração operacional
+- OS técnica voltou a ter botões de status na própria listagem; cada alteração atualiza o mesmo link público do cliente.
+- Botão direto de Garantia em cada OS técnica.
+- OS de desbloqueio separada, sem IMEI, número de série, operadora original, credenciais de conta, PIN/padrão ou fotos no formulário.
+- OS técnica mantém fotos e ganhou seleção de senha por Desenho ou PIN de 4–6 dígitos com grade de 9 bolinhas.
+- Técnico continua vindo do cadastro de Técnicos e fica vinculado por `technician_id`.
+- Aparelhos e Abandonados foram unificados em uma única central, com estados rápidos na própria tabela.
+- As demais funções V101 foram preservadas; V300 adiciona os fluxos acima em vez de remover recursos úteis.

@@ -687,3 +687,149 @@ boot=async function(){
  document.body.innerHTML=`<div class="shell v100-shell"><aside class="sidebar"><div class="brand"><div class="logo-wrap"><div class="logo">KV</div></div><div><b>KV CELL</b><small>ULTIMATE SUPREME • V101</small></div></div><div class="nav"><div class="navtitle">PAINEL</div>${['dashboard'].map(nav).join('')}<div class="navtitle">ATENDIMENTO</div>${['services','agenda','quotes','pricing','adb','guarantees','fiado'].map(nav).join('')}<div class="navtitle">CADASTROS</div>${['customers','radar','technicians','purchases','suppliers'].map(nav).join('')}<div class="navtitle">OPERAÇÃO</div>${['inventory','finance','pdv','devices','forgotten'].map(nav).join('')}<div class="navtitle">DIGITAL</div>${['films','community'].map(nav).join('')}<div class="navtitle">SISTEMA</div>${['employees','chat_units','ai','logs','admin','settings'].map(nav).join('')}</div></aside><main class="main"><div class="topbar"><div><b id="crumb">Painel</b><div class="crumb">KV CELL ULTIMATE SUPREME • LAGOS + MAGÉ • V101</div></div><div class="top-actions"><select id="unit" class="select unit"><option>TODOS</option><option>LAGOS</option><option>MAGÉ</option></select><button class="btn ghost" onclick="openSearch()">⌕ Buscar</button><button class="btn ghost" onclick="logout()">Sair</button></div></div><div id="content"></div></main></div><div id="modal" class="modal"></div><div id="toast" class="toast"></div>`;
  $('#unit').value=UNIT;$('#unit').onchange=e=>{UNIT=e.target.value;localStorage.setItem('kv_unit',UNIT);render()};render();
 };
+// KV CELL ULTIMATE SUPREME V300 — restore useful OS workflow + preserve V101 features
+
+names.devices='Aparelhos / Abandonados';
+
+// Customer picker: never expose internal database IDs and populate visible client fields.
+window.wirePickers=function(){
+  $$('.cp-input').forEach(inp=>{
+    if(inp.dataset.wiredV300==='1') return;
+    inp.dataset.wiredV300='1';
+    const box=inp.closest('.cp-wrap'), hidden=box.querySelector('input[type=hidden]'), res=box.querySelector('.cp-results');
+    inp.oninput=async()=>{
+      const q=inp.value.trim(); hidden.value='';
+      const modal=box.closest('#modalForm');
+      if(modal){['customer_name','customer_phone','customer_document'].forEach(n=>{const el=modal.querySelector(`[name="${n}"]`);if(el)el.value=''})}
+      if(q.length<2){res.innerHTML='';return;}
+      try{
+        const data=await api('/api/customer-search?q='+encodeURIComponent(q));
+        res.innerHTML=data.map(c=>`<button type="button" class="cp-option" data-id="${c.id}"><b>${esc(c.name)}</b><span>${esc(c.phone||'Sem telefone')} • ${c.service_count||0} serviços • Score ${c.score||0}</span></button>`).join('')||'<div class="cp-empty">Nenhum cliente encontrado.</div>';
+        res.querySelectorAll('.cp-option').forEach(b=>b.onclick=()=>{
+          const c=data.find(x=>String(x.id)===b.dataset.id); if(!c)return;
+          hidden.value=c.id; inp.value=c.name+(c.phone?' • '+c.phone:'');
+          res.innerHTML=`<div class="cp-selected">✓ <b>${esc(c.name)}</b> · ${esc(c.phone||'Sem telefone')}</div>`;
+          if(modal){
+            const n=modal.querySelector('[name="customer_name"]'), p=modal.querySelector('[name="customer_phone"]'), doc=modal.querySelector('[name="customer_document"]');
+            if(n)n.value=c.name||''; if(p)p.value=c.phone||''; if(doc)doc.value=c.document||'';
+          }
+        });
+      }catch(e){res.innerHTML=`<div class="cp-empty">${esc(e.message)}</div>`}
+    };
+  });
+};
+
+// Pattern/PIN lock UI for normal technical OS.
+function lockCredentialFields(){
+  return `<div class="field full lock-mode-wrap"><label>Senha do aparelho</label><div class="lock-mode-tabs"><button type="button" class="lock-tab active" onclick="setLockMode('pattern',this)">🔘 Desenho</button><button type="button" class="lock-tab" onclick="setLockMode('pin',this)">🔢 PIN</button></div><input type="hidden" name="lock_type" value="pattern"><input type="hidden" name="pattern" value=""><input type="hidden" name="pin" value=""><div id="patternBox" class="pattern-box"><div class="pattern-grid">${Array.from({length:9},(_,i)=>`<button type="button" class="pattern-dot" data-i="${i}" onpointerdown="patternStart(event,${i})" onpointerenter="patternEnter(${i})"></button>`).join('')}</div><div class="pattern-readout" id="patternReadout">Deslize ligando as bolinhas na ordem da senha.</div><button type="button" class="mini" onclick="clearPattern()">Limpar desenho</button></div><div id="pinBox" class="pin-box" hidden><input class="input pin-input" name="pin_visible" inputmode="numeric" maxlength="6" minlength="4" pattern="[0-9]{4,6}" placeholder="PIN de 4 a 6 dígitos" oninput="syncPin(this)"><small class="muted">Somente números, de 4 a 6 dígitos.</small></div></div>`;
+}
+let _patternActive=false,_patternSeq=[];
+window.setLockMode=function(mode,btn){
+  const m=$('#modalForm'); if(!m)return;
+  m.querySelector('[name="lock_type"]').value=mode;
+  m.querySelectorAll('.lock-tab').forEach(x=>x.classList.remove('active')); btn.classList.add('active');
+  $('#patternBox').hidden=mode!=='pattern'; $('#pinBox').hidden=mode!=='pin';
+  if(mode==='pin'){clearPattern(); const p=m.querySelector('[name="pin_visible"]'); if(p)p.focus();}
+};
+window.patternStart=function(e,i){e.preventDefault();_patternActive=true;_patternSeq=[];clearPattern();patternEnter(i);window.addEventListener('pointerup',patternStop,{once:true})};
+window.patternEnter=function(i){if(!_patternActive||_patternSeq.includes(i))return;_patternSeq.push(i);const b=$(`#patternBox .pattern-dot[data-i="${i}"]`);if(b)b.classList.add('selected');const m=$('#modalForm');if(m){const val=_patternSeq.join('-');m.querySelector('[name="pattern"]').value=val;const out=$('#patternReadout');if(out)out.textContent='Ordem: '+_patternSeq.map(x=>x+1).join(' → ')}};
+window.patternStop=function(){_patternActive=false};
+window.clearPattern=function(){_patternActive=false;_patternSeq=[];$$('#patternBox .pattern-dot').forEach(x=>x.classList.remove('selected'));const m=$('#modalForm');if(m){const p=m.querySelector('[name="pattern"]');if(p)p.value='';const out=$('#patternReadout');if(out)out.textContent='Deslize ligando as bolinhas na ordem da senha.'}};
+window.syncPin=function(el){const v=String(el.value||'').replace(/\D/g,'').slice(0,6);el.value=v;const m=$('#modalForm');if(m){const p=m.querySelector('[name="pin"]');if(p)p.value=v}};
+
+// OS status workflow: these buttons change the public portal status immediately.
+function osStatusButtons(id,current){
+  return `<div class="os-status-bar"><span class="status-label">Atualizar status:</span>${statusOptions('service').map(st=>`<button type="button" class="status-chip ${st===current?'active':''}" onclick="statusService(${id},'${String(st).replace(/'/g,"\\'")}')">${esc(st)}</button>`).join('')}</div>`;
+}
+
+async function statusService(id,status){
+  try{await api('/api/services',{method:'PUT',body:JSON.stringify({id,status})});toast(`OS #${id} → ${status} • link do cliente atualizado`);render()}catch(e){toast(e.message,'error')}
+}
+
+// Direct warranty action remains available right beside the OS.
+async function warrantyService(id){
+  const d=(await api('/api/services?unit=TODOS')).find(x=>x.id===id); if(!d)return;
+  formModal('Garantia da OS #'+id,`<div class="v300-warranty-head"><b>🛡️ Garantia vinculada à OS #${id}</b><span>${esc(d.customer_name||'Cliente')} · ${esc(d.model||'Aparelho')}</span></div><div class="formgrid">${f('status','Status da garantia','select',['garantia em análise','garantia em reparo','pronto','entregue','cancelado'])}${f('description','Motivo do retorno','textarea','Descreva o problema apresentado no retorno em garantia.',true)}${f('warranty','Prazo de garantia original','text',d.warranty||'90 dias')}${f('cost_material','Custo de material','number','0')}${f('cost_labor','Custo de mão de obra','number','0')}${f('cost_extra','Outros custos','number','0')}${f('notes','Observações','textarea','Atendimento de garantia vinculado à OS #'+id,true)}</div>`,async()=>{
+    const m=$('#modal'),x=formValues(m.querySelector('#modalForm')); x.unit=d.unit;x.customer_id=d.customer_id;x.device_id=d.device_id;x.technician=d.technician;x.technician_id=d.technician_id;x.kind='garantia';x.warranty_of_id=id;x.price=0;x.checklist=JSON.parse(d.checklist||'{}');x.photos=[];
+    try{await api('/api/services',{method:'POST',body:JSON.stringify(x)});closeModal();toast('Garantia criada e vinculada à OS original');render()}catch(e){toast(e.message,'error')}
+  });
+}
+
+// Rich service detail: status buttons, public link, warranty and print stay together.
+async function serviceDetails(id){
+  const d=(await api('/api/services?unit=TODOS')).find(x=>x.id===id); if(!d)return;
+  const ck=JSON.parse(d.checklist||'{}'),photos=JSON.parse(d.photos||'[]'),det=JSON.parse(d.details_json||'{}');
+  formModal('OS #'+id,`<div class="os-detail-v300"><div class="cards"><div class="metric"><div class="label">STATUS</div><div class="value" style="font-size:18px">${badge(d.status)}</div></div><div class="metric"><div class="label">VALOR</div><div class="value">${money(d.price)}</div></div><div class="metric"><div class="label">GARANTIA</div><div class="value" style="font-size:18px">${esc(d.warranty||'—')}</div></div><div class="metric"><div class="label">TÉCNICO</div><div class="value" style="font-size:16px">${esc(d.technician||'Não atribuído')}</div></div></div><div class="detail-actions"><button class="btn" onclick="copyOSLink('${d.public_token}')">🔗 Copiar link do cliente</button><button class="btn ghost" onclick="downloadOS('${d.public_token}')">🖨️ PDF / Imprimir</button><button class="btn ghost" onclick="thermalOS(${id})">🧾 2ª via térmica</button><button class="btn ghost" onclick="warrantyService(${id})">🛡️ Garantia</button><button class="btn ghost" onclick="whatsappService(${id},'${String(d.status||'').replace(/'/g,"\\'")}')">💬 WhatsApp</button></div>${osStatusButtons(id,d.status)}<section class="panel"><h3>Cliente</h3><p><b>${esc(d.customer_name||'Cliente')}</b> · ${esc(d.customer_phone||'')} · ${esc(d.customer_document||'')}</p><p>Aparelho: ${esc(det.brand||d.brand||'')} ${esc(det.model||d.model||'')} · IMEI: ${esc(det.imei||'')} · S/N: ${esc(det.serial||'')}</p></section><section class="panel"><h3>Serviço</h3><p>${esc(d.description||'')}</p><p>${esc(d.diagnosis||'')}</p></section><section class="panel"><h3>Checklist de entrada</h3><div class="checkgrid">${Object.entries(ck).map(([k,v])=>`<div class="check"><label>${v?'☑':'☐'} ${esc(k)}</label></div>`).join('')||'<span class="muted">Nenhum item registrado.</span>'}</div></section><section class="panel"><h3>Fotos do aparelho</h3><div class="photos">${photos.map(x=>`<img class="photo" src="${x}">`).join('')||'Sem fotos.'}</div></section></div>`,async()=>closeModal());
+}
+
+// Technical OS V300 — restore the full form, with pattern/PIN and photos only here.
+serviceForm=function(){
+  formModal('Nova Ordem de Serviço',`<div class="v100-modal-title">Assistência Técnica · OS completa</div><div class="formgrid">
+    ${f('unit','Unidade','select',['LAGOS','MAGÉ'])}${customerPicker('customer_id','Selecionar Cliente')}${detailedClientFields()}
+    ${f('brand','Marca')}${f('model','Modelo *')}${f('imei','IMEI')}${f('serial','S/N (Serial)')}${lockCredentialFields()}
+    ${f('description','Problema relatado *','textarea','',true)}<div class="field full"><label>Checklist de Entrada</label>${entryChecklist()}</div>
+    ${f('service_type','Tipo de Serviço','select',['Troca de tela','Troca de bateria','Troca de conector','Troca de câmera','Troca de tampa','Software / otimização','Reparo de placa','Película','Outro'])}${f('service_provided','Serviço Prestado','textarea','',true)}
+    ${damageMap()}${photoBox()}${partsEditor()}${productsEditor()}
+    ${f('price','Valor do Serviço (R$) *','number','0')}${f('entry_value','Valor de Entrada (R$)','number','0')}${f('cost_manual','Custo da OS (R$)','number','0')}${f('warranty','Garantia','text','90 dias')}
+    ${technicianPicker('technician_id','Técnico Responsável')}${f('bench_location','Localização na Bancada','text','')}${f('created_expected','Previsão','date')}${f('status','Status','select',['aberto','aguardando peça','em andamento','pronto','entregue','cancelado','garantia','garantia em análise','garantia em reparo'])}
+    <div class="field full approval-box"><label class="switchline"><input name="approval_required" type="checkbox"><span>Aprovação de OS pelo Cliente</span></label><small>Gera um link público para o cliente revisar e aprovar antes de iniciar.</small></div>
+    ${f('notes','Observações','textarea','',true)}
+  </div>`,async()=>{
+    try{
+      const m=$('#modal'),d=formValues(m.querySelector('#modalForm')),tech=selectedTechData(m.querySelector('#modalForm'));
+      if(d.lock_type==='pin' && !/^\d{4,6}$/.test(d.pin||'')){toast('O PIN precisa ter de 4 a 6 dígitos.','error');return}
+      if(d.lock_type==='pattern' && _patternSeq.length<4){toast('Faça um desenho com pelo menos 4 bolinhas.','error');return}
+      d.kind='conserto';d.technician_id=tech.id;d.technician=tech.name;d.checklist=collectChecks(m);d.photos=await readPhotos();d.cost_material=Number(d.cost_manual||0);d.cost_labor=0;d.cost_extra=0;
+      d.details={customer_name:d.customer_name,customer_phone:d.customer_phone,customer_document:d.customer_document,brand:d.brand,model:d.model,imei:d.imei,serial:d.serial,lock_type:d.lock_type,pin:d.pin,pattern:d.pattern,service_type:d.service_type,service_provided:d.service_provided,entry_value:Number(d.entry_value||0),bench_location:d.bench_location,expected_date:d.created_expected,approval_required:!!d.approval_required,technician_id:tech.id,technician_name:tech.name,parts:readItemRows('partsRows'),products:readItemRows('productRows'),damage_map:d.damage_map||'{}'};
+      d.notes=(d.notes||'')+'\n[V300_DETAILS]'+JSON.stringify(d.details);await api('/api/services',{method:'POST',body:JSON.stringify(d)});closeModal();toast(tech.name?'OS criada • técnico vinculado: '+tech.name:'OS criada • sem técnico atribuído');render();
+    }catch(e){toast(e.message,'error')}
+  });
+  setTimeout(()=>{wirePickers();wirePhotoLimit();wireTechnicianPickers();addPart();addProductLine()},80);
+};
+
+// Unlock OS V300 — intentionally stripped of IMEI/SN/operator/account credentials/photos/checklist.
+unlockForm=function(){
+  formModal('Nova OS de Desbloqueio',`<div class="v100-modal-title unlock-title">UNLOCKER PRO · operação de desbloqueio</div><div class="formgrid">
+    ${f('unit','Unidade','select',['LAGOS','MAGÉ'])}${customerPicker('customer_id','Selecionar Cliente')}${detailedClientFields()}
+    ${f('brand','Marca *')}${f('model','Modelo *')}${f('kind','Tipo de Desbloqueio *','select',['FRP / Conta Google','MDM','Desbloqueio de rede','Software','Remoção de PayJoy','Outro'])}${f('provider','Servidor / Provedor')}${technicianPicker('technician_id','Técnico Responsável')}${f('description','Descrição do Serviço *','textarea','',true)}
+    ${f('expected_date','Previsão de entrega','date')}${f('estimated_time','Tempo estimado')}${f('priority','Prioridade','select',['Normal','Alta','Urgente'])}
+    ${f('price','Valor do Serviço (R$) *','number','0')}${f('entry_value','Sinal / Entrada (R$)','number','0')}${f('cost_material','Custo de material / ferramenta','number','0')}${f('cost_labor','Custo de mão de obra','number','0')}${f('cost_extra','Outros custos','number','0')}
+    ${f('notes','Observações Adicionais','textarea','',true)}<div class="field full guarantee-alert"><b>⚠ SEM GARANTIA</b><span>Ordens de Serviço de desbloqueio são finalizadas SEM GARANTIA.</span></div>
+  </div>`,async()=>{
+    try{const m=$('#modal'),d=formValues(m.querySelector('#modalForm')),tech=selectedTechData(m.querySelector('#modalForm'));d.status='aberto';d.warranty='0 dias';d.checklist={};d.photos=[];d.technician_id=tech.id;d.operator=tech.name;d.details={customer_name:d.customer_name,customer_phone:d.customer_phone,customer_document:d.customer_document,brand:d.brand,model:d.model,provider:d.provider,description:d.description,expected_date:d.expected_date,estimated_time:d.estimated_time,priority:d.priority,entry_value:Number(d.entry_value||0),technician_id:tech.id,technician_name:tech.name};d.notes=(d.notes||'')+'\n[V300_UNLOCK]'+JSON.stringify(d.details);await api('/api/unlocks',{method:'POST',body:JSON.stringify(d)});closeModal();toast(tech.name?'Desbloqueio criado • técnico vinculado: '+tech.name:'Desbloqueio criado');render()}catch(e){toast(e.message,'error')}
+  });setTimeout(()=>{wirePickers();wireTechnicianPickers()},80);
+};
+
+// Unified OS table with the status workflow restored. Unlocks deliberately get a simpler action set.
+pages.services=async()=>{
+  const [s,u]=await Promise.all([list('services'),list('unlocks')]);
+  const rows=[...s.map(x=>({...x,_type:'Técnica',_client:x.customer_name||'-',_device:x.model||'-',_value:x.price||0,_status:x.status})),...u.map(x=>({...x,_type:'Desbloqueio',_client:x.customer_name||'-',_device:[x.brand,x.model].filter(Boolean).join(' '),_value:x.price||0,_status:x.status}))].sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
+  const actions=r=>r._type==='Desbloqueio'
+    ? `<div class="row-actions"><button class="iconbtn" onclick="unlockDetails(${r.id})">👁️</button><button class="iconbtn" onclick="editUnlock(${r.id})">📝</button><button class="iconbtn" onclick="statusUnlock(${r.id},'pronto')">✓</button><button class="iconbtn" onclick="whatsappUnlock(${r.id},'${String(r._status||'').replace(/'/g,"\\'")}')">💬</button></div>`
+    : `<div class="os-actions-v300"><div class="row-actions"><button class="iconbtn" title="Abrir OS" onclick="serviceDetails(${r.id})">👁️</button><button class="iconbtn" title="Editar" onclick="editService(${r.id})">📝</button><button class="iconbtn" title="Copiar link do cliente" onclick="copyOSLink('${r.public_token}')">🔗</button><button class="iconbtn" title="Garantia desta OS" onclick="warrantyService(${r.id})">🛡️</button><button class="iconbtn" title="WhatsApp conforme status" onclick="whatsappService(${r.id},'${String(r._status||'').replace(/'/g,"\\'")}')">💬</button></div>${osStatusButtons(r.id,r._status)}</div>`;
+  $('#content').innerHTML=head('Ordens de Serviço','OS técnica com acompanhamento público por status • desbloqueio separado',`<button class="btn" onclick="serviceForm()">＋ Nova OS Técnica</button><button class="btn dark" onclick="unlockForm()">🔓 Novo Desbloqueio</button>`)+`<div class="os-tabs"><button class="active" onclick="filterUnifiedOS('todos',this)">Todas <b>${rows.length}</b></button><button onclick="filterUnifiedOS('tecnica',this)">Técnicas <b>${s.length}</b></button><button onclick="filterUnifiedOS('unlock',this)">Desbloqueios <b>${u.length}</b></button></div><div id="unifiedOsTable">${table(rows,[['_type','Tipo',r=>r._type==='Desbloqueio'?'<span class="badge y">🔓 Desbloqueio</span>':'<span class="badge g">🔧 Técnica</span>'],['_client','Cliente'],['_device','Aparelho'],['_status','Status',r=>badge(r._status)],['_value','Valor',r=>money(r._value)],['created_at','Entrada']],actions)}</div>`;
+};
+
+// Combined device + abandoned/forgotten area. No separate sidebar tab.
+async function statusDevice(id,status){try{await api('/api/devices',{method:'PUT',body:JSON.stringify({id,status})});toast('Estado do aparelho atualizado');render()}catch(e){toast(e.message,'error')}}
+async function statusForgotten(id,status){try{await api('/api/forgotten',{method:'PUT',body:JSON.stringify({id,status})});toast('Estado do aparelho abandonado atualizado');render()}catch(e){toast(e.message,'error')}}
+function deviceStateButtons(source,id,current){
+ const sts=['Em bancada','Em conserto','Aguardando cliente','Pronto','Entregue','Abandonado','Aguardando dono','Liberado'];
+ const fn=source==='forgotten'?'statusForgotten':'statusDevice';
+ return `<div class="device-state-bar">${sts.map(st=>`<button type="button" class="status-chip ${st.toLowerCase()===String(current||'').toLowerCase()?'active':''}" onclick="${fn}(${id},'${st}')">${st}</button>`).join('')}</div>`;
+}
+pages.devices=async()=>{
+ const [dev,old]=await Promise.all([list('devices'),list('forgotten')]);
+ const rows=[...dev.map(x=>({...x,_source:'device',_condition:x.status||'Em bancada',_owner:x.customer_name||'-'})),...old.map(x=>({...x,_source:'forgotten',_condition:x.status||'Abandonado',_owner:x.possible_owner||'-'}))].sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
+ const actions=r=>`<div class="device-actions-v300"><button class="btn ghost" onclick="${r._source==='forgotten'?`forgottenDetails(${r.id})`:`deviceDetailsV300(${r.id})`}">🔍 Avaliar</button>${deviceStateButtons(r._source,r.id,r._condition)}</div>`;
+ $('#content').innerHTML=head('Aparelhos / Abandonados','Uma única bancada para aparelhos cadastrados, em conserto, prontos, entregues ou abandonados',`<button class="btn" onclick="deviceForm()">＋ Novo aparelho</button><button class="btn dark" onclick="forgottenForm()">＋ Registrar abandono</button>`)+`<div class="cards"><div class="metric"><div class="label">TOTAL</div><div class="value">${rows.length}</div><div class="sub">Aparelhos na central</div></div><div class="metric"><div class="label">EM BANCADA</div><div class="value">${rows.filter(x=>['Em bancada','Em conserto'].includes(x._condition)).length}</div><div class="sub">Em operação</div></div><div class="metric"><div class="label">ABANDONADOS</div><div class="value red">${rows.filter(x=>/abandonado|aguardando dono/i.test(x._condition)).length}</div><div class="sub">Sem retirada / identificação</div></div><div class="metric"><div class="label">PRONTOS</div><div class="value green">${rows.filter(x=>/pronto/i.test(x._condition)).length}</div><div class="sub">Aguardando retirada</div></div></div><section class="panel" style="margin-top:16px">${table(rows,[['_source','Origem',r=>r._source==='forgotten'?'<span class="badge r">Abandonado</span>':'<span class="badge g">Cadastro</span>'],['unit','Unidade'],['brand','Marca'],['model','Modelo'],['imei','IMEI'],['_owner','Cliente / possível dono'],['_condition','Estado',r=>badge(r._condition)],['created_at','Data']],actions)}</section>`;
+};
+pages.forgotten=pages.devices;
+
+function deviceDetailsV300(id){api('/api/devices?unit=TODOS').then(ds=>{const d=ds.find(x=>x.id===id);if(!d)return;formModal('Aparelho #'+id,`<div class="cards"><div class="metric"><div class="label">ESTADO</div><div class="value" style="font-size:18px">${badge(d.status)}</div></div><div class="metric"><div class="label">MODELO</div><div class="value" style="font-size:16px">${esc(d.brand||'')} ${esc(d.model||'')}</div></div></div><div class="panel"><p>IMEI: ${esc(d.imei||'—')}</p><p>S/N: ${esc(d.serial||'—')}</p><p>${esc(d.notes||'')}</p></div><div class="panel">${deviceStateButtons('device',id,d.status)}</div>`,async()=>closeModal())})}
+
+// Sidebar V300: removes only the redundant separate abandoned tab; all other useful modules remain.
+boot=async function(){
+ document.body.innerHTML=`<div class="shell v100-shell"><aside class="sidebar"><div class="brand"><div class="logo-wrap"><div class="logo">KV</div></div><div><b>KV CELL</b><small>ULTIMATE SUPREME • V300</small></div></div><div class="nav"><div class="navtitle">PAINEL</div>${['dashboard'].map(nav).join('')}<div class="navtitle">ATENDIMENTO</div>${['services','agenda','quotes','pricing','adb','guarantees','fiado'].map(nav).join('')}<div class="navtitle">CADASTROS</div>${['customers','radar','technicians','purchases','suppliers'].map(nav).join('')}<div class="navtitle">OPERAÇÃO</div>${['inventory','finance','pdv','devices'].map(nav).join('')}<div class="navtitle">DIGITAL</div>${['films','community'].map(nav).join('')}<div class="navtitle">SISTEMA</div>${['employees','chat_units','ai','logs','admin','settings'].map(nav).join('')}</div></aside><main class="main"><div class="topbar"><div><b id="crumb">Painel</b><div class="crumb">KV CELL ULTIMATE SUPREME • LAGOS + MAGÉ • V300</div></div><div class="top-actions"><select id="unit" class="select unit"><option>TODOS</option><option>LAGOS</option><option>MAGÉ</option></select><button class="btn ghost" onclick="openSearch()">⌕ Buscar</button><button class="btn ghost" onclick="logout()">Sair</button></div></div><div id="content"></div></main></div><div id="modal" class="modal"></div><div id="toast" class="toast"></div>`;
+ $('#unit').value=UNIT;$('#unit').onchange=e=>{UNIT=e.target.value;localStorage.setItem('kv_unit',UNIT);render()};render();
+};
