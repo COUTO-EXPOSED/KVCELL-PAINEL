@@ -580,16 +580,93 @@ class Handler(BaseHTTPRequestHandler):
         return self.json(data)
     def customer_stats(self,cid):
         c=one('SELECT * FROM customers WHERE id=?',(cid,))
-        if not c:return self.json({'error':'Cliente não encontrado'},404)
-        count=one('SELECT COUNT(*) n FROM services WHERE customer_id=?',(cid,))['n']
+        if not c:
+            return self.json({'error':'Cliente não encontrado'},404)
+
+        # Conta todos os atendimentos do cliente:
+        # OS técnicas + desbloqueios, ignorando cancelados
+        service_count=one("""
+            SELECT
+                (
+                    SELECT COUNT(*)
+                    FROM services
+                    WHERE customer_id=?
+                      AND LOWER(COALESCE(status,'')) NOT IN ('cancelado','cancelada')
+                )
+                +
+                (
+                    SELECT COUNT(*)
+                    FROM unlocks
+                    WHERE customer_id=?
+                      AND LOWER(COALESCE(status,'')) NOT IN ('cancelado','cancelada')
+                ) n
+        """,(cid,cid))['n']
+
+        count=int(service_count or 0)
+
+        # Total efetivamente registrado no financeiro
         total=0.0
-        for rt,table in [('service','services'),('unlock','unlocks'),('sale','sales')]:
-            ids=[r['id'] for r in rows(f'SELECT id FROM {table} WHERE customer_id=?',(cid,))]
+
+        for rt,table in [
+            ('service','services'),
+            ('unlock','unlocks'),
+            ('sale','sales')
+        ]:
+            ids=[
+                r['id']
+                for r in rows(
+                    f'SELECT id FROM {table} WHERE customer_id=?',
+                    (cid,)
+                )
+            ]
+
             if ids:
                 marks=','.join('?' for _ in ids)
-                total+=float(one(f'SELECT COALESCE(SUM(amount),0) n FROM finance WHERE ref_type=? AND ref_id IN ({marks})',(rt,*ids))['n'] or 0)
-        last=one('SELECT MAX(created_at) v FROM services WHERE customer_id=?',(cid,))['v']
-        return self.json({'id':cid,'service_count':count,'score':min(100,int(count)*10),'last_service':last,'total_spent':float(total or 0)})
+
+                total+=float(
+                    one(
+                        f'''
+                        SELECT COALESCE(SUM(amount),0) n
+                        FROM finance
+                        WHERE ref_type=?
+                          AND ref_id IN ({marks})
+                        ''',
+                        (rt,*ids)
+                    )['n'] or 0
+                )
+
+        # Último atendimento:
+        # considera tanto OS técnica quanto desbloqueio
+        last=one("""
+            SELECT MAX(created_at) v
+            FROM (
+                SELECT created_at
+                FROM services
+                WHERE customer_id=?
+                  AND LOWER(COALESCE(status,'')) NOT IN ('cancelado','cancelada')
+
+                UNION ALL
+
+                SELECT created_at
+                FROM unlocks
+                WHERE customer_id=?
+                  AND LOWER(COALESCE(status,'')) NOT IN ('cancelado','cancelada')
+            )
+        """,(cid,cid))['v']
+
+        # Score do cliente
+        score=min(100,count*10)
+
+        return self.json({
+            'id':cid,
+            'name':c['name'],
+            'phone':c['phone'],
+            'document':c['document'],
+            'service_count':count,
+            'score':score,
+            'last_service':last,
+            'total_spent':float(total or 0)
+        })
 
     def technician_stats(self,unit):
         cond=''; args=[]
