@@ -120,8 +120,10 @@ def migrate_v10():
     if BLOB_ENABLED and not os.path.exists(DB): _blob_download()
     c=db()
     cols={r[1] for r in c.execute("PRAGMA table_info(purchases)").fetchall()}
-    for name,typ in [("sold","INTEGER DEFAULT 0"),("sale_date","TEXT"),("sale_place","TEXT"),("sale_price","REAL DEFAULT 0"),("sale_payment","TEXT"),("sale_installments","INTEGER DEFAULT 1"),("sale_fee","REAL DEFAULT 0"),("sale_notes","TEXT")]:
+    for name,typ in [("sold","INTEGER DEFAULT 0"),("sale_date","TEXT"),("sale_place","TEXT"),("sale_price","REAL DEFAULT 0"),("sale_payment","TEXT"),("sale_installments","INTEGER DEFAULT 1"),("sale_fee","REAL DEFAULT 0"),("sale_notes","TEXT"),("storage","TEXT"),("condition","TEXT"),("color","TEXT"),("battery_health","TEXT"),("description","TEXT"),("accessories","TEXT"),("inventory_id","INTEGER DEFAULT NULL")]:
         if name not in cols: c.execute("ALTER TABLE purchases ADD COLUMN "+name+" "+typ)
+    cols={r[1] for r in c.execute("PRAGMA table_info(inventory)").fetchall()}
+    if 'purchase_id' not in cols: c.execute("ALTER TABLE inventory ADD COLUMN purchase_id INTEGER DEFAULT NULL")
     cols={r[1] for r in c.execute("PRAGMA table_info(sales)").fetchall()}
     for name,typ in [("payment_fee","REAL DEFAULT 0"),("net_total","REAL DEFAULT 0"),("payment_details","TEXT")]:
         if name not in cols: c.execute("ALTER TABLE sales ADD COLUMN "+name+" "+typ)
@@ -326,6 +328,7 @@ class Handler(BaseHTTPRequestHandler):
         if path=='/api/undo': return self.undo_action(data,u)
         if path=='/api/admin/reset-db': return self.admin_reset_db(data,u)
         if path=='/api/fiado/payment': return self.fiado_payment(data,u)
+        if path=='/api/pdv/sell-device': return self.pdv_sell_device(data,u)
         if path.startswith('/api/'):
             try:return self.create_api(path[5:],data,u)
             except sqlite3.IntegrityError as e:return self.json({'error':'Registro inválido ou duplicado: '+str(e)},400)
@@ -407,6 +410,35 @@ class Handler(BaseHTTPRequestHandler):
         activity(u,'LOG','Recebeu parcela do fiado','fiado',aid,js({'amount':amount,'payment':d.get('payment','PIX')}))
         return self.json({'ok':True,'id':rid,'balance':newbal,'status':status})
 
+    def pdv_sell_device(self,d,u):
+        purchase_id=int(d.get('purchase_id') or 0)
+        if not purchase_id: return self.json({'error':'Selecione um aparelho da vitrine.'},400)
+        purchase=one('SELECT * FROM purchases WHERE id=?',(purchase_id,))
+        if not purchase: return self.json({'error':'Aparelho não encontrado.'},404)
+        if int(purchase.get('sold') or 0)==1 or str(purchase.get('status') or '').lower()=='vendido':
+            return self.json({'error':'Este aparelho já foi vendido.'},400)
+        price=float(d.get('sale_price') or d.get('total') or purchase.get('suggested_price') or 0)
+        if price<=0: return self.json({'error':'Informe o valor da venda.'},400)
+        fee=float(d.get('payment_fee') or 0); net=max(0,price-fee)
+        items=d.get('items') or f"{purchase.get('brand') or ''} {purchase.get('model') or ''} • {purchase.get('storage') or ''}".strip()
+        payment=d.get('payment') or 'PIX'
+        customer_id=d.get('customer_id') or None
+        sale_id=write('INSERT INTO sales(unit,customer_id,items,total,payment,created_at,payment_fee,net_total,payment_details) VALUES(?,?,?,?,?,?,?,?,?)',(purchase['unit'],customer_id,items,price,payment,now(),fee,net,d.get('payment_details')))
+        write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(purchase['unit'],'entrada','Venda de aparelho',items,net,'sale',sale_id,now()))
+        if str(payment).lower()=='fiado':
+            due=d.get('due_date'); down=float(d.get('down_payment') or 0); balance=max(0,price-down); installments=max(1,int(d.get('sale_installments') or 1)); inst_value=float(d.get('installment_value') or (balance/installments if installments else balance)); frequency=d.get('frequency') or 'Mensal (30 dias)'
+            fid=write('INSERT INTO fiado_accounts(unit,customer_id,source_type,source_id,description,total,down_payment,balance,due_date,status,notes,installments,installment_value,frequency,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(purchase['unit'],customer_id,'sale',sale_id,items,price,down,balance,due,'aberto',d.get('payment_details'),installments,inst_value,frequency,now()))
+            if down>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(purchase['unit'],'entrada','Fiado / Entrada',items,down,'fiado',fid,now()))
+        write("UPDATE purchases SET sold=1,status='vendido',sale_date=?,sale_place=?,sale_price=?,sale_payment=?,sale_installments=?,sale_fee=?,sale_notes=? WHERE id=?",(d.get('sale_date') or date.today().isoformat(),d.get('sale_place'),price,payment,int(d.get('sale_installments') or 1),fee,d.get('sale_notes'),purchase_id))
+        inv_id=purchase.get('inventory_id')
+        if inv_id:
+            write('UPDATE inventory SET qty=0 WHERE id=?',(inv_id,))
+        else:
+            inv=one('SELECT id FROM inventory WHERE purchase_id=?',(purchase_id,))
+            if inv: write('UPDATE inventory SET qty=0 WHERE id=?',(inv['id'],))
+        audit(u['id'],'sell','purchases',purchase_id,js(d)); activity(u,'LOG',f"Vendeu aparelho {purchase.get('brand') or ''} {purchase.get('model') or ''}",'purchases',purchase_id,js(d)); schedule_blob_sync()
+        return self.json({'ok':True,'sale_id':sale_id,'purchase_id':purchase_id,'net_total':net})
+
     def create_api(self,r,d,u):
         if r=='customers':
             rid=write('INSERT INTO customers(type,name,document_type,document,phone_type,phone,email,address,city,birth_date,balance,observations,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('type','PF'),d.get('name'),d.get('document_type','CPF'),d.get('document'),d.get('phone_type','Celular'),d.get('phone'),d.get('email'),d.get('address'),d.get('city'),d.get('birth_date'),float(d.get('balance') or 0),d.get('observations'),now()))
@@ -425,8 +457,11 @@ class Handler(BaseHTTPRequestHandler):
         elif r=='purchases':
             total=float(d.get('amount') or 0)+float(d.get('expenses') or 0)+float(d.get('freight') or 0); sp=float(d.get('suggested_price') or 0); sold=1 if str(d.get('sold','')).lower() in ('1','true','sim','on') else 0
             status='vendido' if sold else d.get('status','vitrine')
-            rid=write('INSERT INTO purchases(unit,customer_id,brand,model,imei,purchase_date,amount,expenses,freight,total_cost,suggested_price,expected_profit,photos,checklist,observations,status,created_at,sold,sale_date,sale_place,sale_price,sale_payment,sale_installments,sale_fee,sale_notes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('brand'),d.get('model'),d.get('imei'),d.get('purchase_date') or date.today().isoformat(),float(d.get('amount') or 0),float(d.get('expenses') or 0),float(d.get('freight') or 0),total,sp,sp-total,js(d.get('photos',[])),js(d.get('checklist',{})),d.get('observations'),status,now(),sold,d.get('sale_date'),d.get('sale_place'),float(d.get('sale_price') or 0),d.get('sale_payment'),int(d.get('sale_installments') or 1),float(d.get('sale_fee') or 0),d.get('sale_notes')))
+            rid=write('INSERT INTO purchases(unit,customer_id,brand,model,imei,purchase_date,amount,expenses,freight,total_cost,suggested_price,expected_profit,photos,checklist,observations,status,created_at,sold,sale_date,sale_place,sale_price,sale_payment,sale_installments,sale_fee,sale_notes,storage,condition,color,battery_health,description,accessories,inventory_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('brand'),d.get('model'),d.get('imei'),d.get('purchase_date') or date.today().isoformat(),float(d.get('amount') or 0),float(d.get('expenses') or 0),float(d.get('freight') or 0),total,sp,sp-total,js(d.get('photos',[])),js(d.get('checklist',{})),d.get('observations'),status,now(),sold,d.get('sale_date'),d.get('sale_place'),float(d.get('sale_price') or 0),d.get('sale_payment'),int(d.get('sale_installments') or 1),float(d.get('sale_fee') or 0),d.get('sale_notes'),d.get('storage'),d.get('condition'),d.get('color'),d.get('battery_health'),d.get('description'),d.get('accessories'),None))
             write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),'saida','Compra de aparelho',f"{d.get('brand','')} {d.get('model','')}",total,'purchase',rid,now()))
+            # Cada aparelho comprado também entra no estoque como unidade física.
+            inv_id=write('INSERT INTO inventory(unit,code,name,type,category,qty,min_qty,cost,price,supplier,compatibility,notes,created_at,purchase_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('imei') or f"AP-{rid}",f"{d.get('brand','')} {d.get('model','')}".strip(),'Aparelho','Vitrine',0 if sold else 1,0,total,sp,None,d.get('storage'),(d.get('description') or '')+' '+(d.get('accessories') or ''),now(),rid))
+            write('UPDATE purchases SET inventory_id=? WHERE id=?',(inv_id,rid))
             if sold and float(d.get('sale_price') or 0)>0:
                 net=float(d.get('sale_price') or 0)-float(d.get('sale_fee') or 0)
                 write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),'entrada','Venda de aparelho',f"{d.get('brand','')} {d.get('model','')}",net,'purchase_sale',rid,now()))
@@ -474,7 +509,7 @@ class Handler(BaseHTTPRequestHandler):
         audit(u['id'],'create',r,rid,js(d)); uu=dict(u); uu['unit']=d.get('unit',u.get('unit','TODOS')); activity(uu,'LOG',f'Criou {r}',r,rid,js(d)); push_undo(uu,f'Criou {r}',r,rid,{},d); return self.json({'ok':True,'id':rid})
     def update_api(self,r,d,u):
         table=r; rid=d.get('id')
-        allowed={'services':['status','diagnosis','technician','technician_id','price','warranty','notes','checklist','photos','cost_material','cost_labor','cost_extra','warranty_of_id','details_json'],'unlocks':['status','operator','technician_id','price','notes','checklist','photos','cost_material','cost_labor','cost_extra','warranty_of_id','details_json'],'devices':['status','notes','photos'],'forgotten':['status','notes','possible_owner','photos'],'quotes':['status','valid_until','observations'],'inventory':['qty','min_qty','price','cost','compatibility','notes'],'purchases':['sold','sale_date','sale_place','sale_price','sale_payment','sale_installments','sale_fee','sale_notes','status','suggested_price','observations'],'appointments':['title','service_type','start_at','end_at','status','technician','notes'],'technicians':['name','phone','email','specialties','active'],'suppliers':['name','document','phone','email','city','notes'],'guarantees':['status','end_date','notes'],'community':['title','message','type','status'],'referrals':['service_name','commission','referrer','link','status'],'catalog-products':['name','category','price','stock','image','active']}
+        allowed={'services':['status','diagnosis','technician','technician_id','price','warranty','notes','checklist','photos','cost_material','cost_labor','cost_extra','warranty_of_id','details_json'],'unlocks':['status','operator','technician_id','price','notes','checklist','photos','cost_material','cost_labor','cost_extra','warranty_of_id','details_json'],'devices':['status','notes','photos'],'forgotten':['status','notes','possible_owner','photos'],'quotes':['status','valid_until','observations'],'inventory':['qty','min_qty','price','cost','compatibility','notes'],'purchases':['sold','sale_date','sale_place','sale_price','sale_payment','sale_installments','sale_fee','sale_notes','status','suggested_price','observations','storage','condition','color','battery_health','description','accessories'],'appointments':['title','service_type','start_at','end_at','status','technician','notes'],'technicians':['name','phone','email','specialties','active'],'suppliers':['name','document','phone','email','city','notes'],'guarantees':['status','end_date','notes'],'community':['title','message','type','status'],'referrals':['service_name','commission','referrer','link','status'],'catalog-products':['name','category','price','stock','image','active']}
         if table not in allowed:return self.json({'error':'Atualização não permitida'},400)
         before=one('SELECT * FROM '+table+' WHERE id=?',(rid,))
         if not before:return self.json({'error':'Registro não encontrado'},404)
@@ -580,93 +615,16 @@ class Handler(BaseHTTPRequestHandler):
         return self.json(data)
     def customer_stats(self,cid):
         c=one('SELECT * FROM customers WHERE id=?',(cid,))
-        if not c:
-            return self.json({'error':'Cliente não encontrado'},404)
-
-        # Conta todos os atendimentos do cliente:
-        # OS técnicas + desbloqueios, ignorando cancelados
-        service_count=one("""
-            SELECT
-                (
-                    SELECT COUNT(*)
-                    FROM services
-                    WHERE customer_id=?
-                      AND LOWER(COALESCE(status,'')) NOT IN ('cancelado','cancelada')
-                )
-                +
-                (
-                    SELECT COUNT(*)
-                    FROM unlocks
-                    WHERE customer_id=?
-                      AND LOWER(COALESCE(status,'')) NOT IN ('cancelado','cancelada')
-                ) n
-        """,(cid,cid))['n']
-
-        count=int(service_count or 0)
-
-        # Total efetivamente registrado no financeiro
+        if not c:return self.json({'error':'Cliente não encontrado'},404)
+        count=one('SELECT COUNT(*) n FROM services WHERE customer_id=?',(cid,))['n']
         total=0.0
-
-        for rt,table in [
-            ('service','services'),
-            ('unlock','unlocks'),
-            ('sale','sales')
-        ]:
-            ids=[
-                r['id']
-                for r in rows(
-                    f'SELECT id FROM {table} WHERE customer_id=?',
-                    (cid,)
-                )
-            ]
-
+        for rt,table in [('service','services'),('unlock','unlocks'),('sale','sales')]:
+            ids=[r['id'] for r in rows(f'SELECT id FROM {table} WHERE customer_id=?',(cid,))]
             if ids:
                 marks=','.join('?' for _ in ids)
-
-                total+=float(
-                    one(
-                        f'''
-                        SELECT COALESCE(SUM(amount),0) n
-                        FROM finance
-                        WHERE ref_type=?
-                          AND ref_id IN ({marks})
-                        ''',
-                        (rt,*ids)
-                    )['n'] or 0
-                )
-
-        # Último atendimento:
-        # considera tanto OS técnica quanto desbloqueio
-        last=one("""
-            SELECT MAX(created_at) v
-            FROM (
-                SELECT created_at
-                FROM services
-                WHERE customer_id=?
-                  AND LOWER(COALESCE(status,'')) NOT IN ('cancelado','cancelada')
-
-                UNION ALL
-
-                SELECT created_at
-                FROM unlocks
-                WHERE customer_id=?
-                  AND LOWER(COALESCE(status,'')) NOT IN ('cancelado','cancelada')
-            )
-        """,(cid,cid))['v']
-
-        # Score do cliente
-        score=min(100,count*10)
-
-        return self.json({
-            'id':cid,
-            'name':c['name'],
-            'phone':c['phone'],
-            'document':c['document'],
-            'service_count':count,
-            'score':score,
-            'last_service':last,
-            'total_spent':float(total or 0)
-        })
+                total+=float(one(f'SELECT COALESCE(SUM(amount),0) n FROM finance WHERE ref_type=? AND ref_id IN ({marks})',(rt,*ids))['n'] or 0)
+        last=one('SELECT MAX(created_at) v FROM services WHERE customer_id=?',(cid,))['v']
+        return self.json({'id':cid,'service_count':count,'score':min(100,int(count)*10),'last_service':last,'total_spent':float(total or 0)})
 
     def technician_stats(self,unit):
         cond=''; args=[]
