@@ -324,6 +324,7 @@ class Handler(BaseHTTPRequestHandler):
         if path=='/api/ai/price': return self.ai_price(data,u)
         if path=='/api/ai/chat': return self.ai_chat(data,u)
         if path=='/api/undo': return self.undo_action(data,u)
+        if path=='/api/admin/reset-db': return self.admin_reset_db(data,u)
         if path=='/api/fiado/payment': return self.fiado_payment(data,u)
         if path.startswith('/api/'):
             try:return self.create_api(path[5:],data,u)
@@ -730,6 +731,43 @@ class Handler(BaseHTTPRequestHandler):
         if unit=='TODOS': return self.json(rows('SELECT * FROM activity_log ORDER BY id DESC LIMIT 200'))
         return self.json(rows('SELECT * FROM activity_log WHERE unit=? ORDER BY id DESC LIMIT 200',(unit,)))
     def undo_list(self): return self.json(rows('SELECT * FROM undo_stack WHERE undone=0 ORDER BY id DESC LIMIT 50'))
+    def admin_reset_db(self,d,u):
+        if u.get('role')!='admin':
+            return self.json({'error':'Somente administrador pode resetar o banco.'},403)
+        if str(d.get('confirmation','')).strip()!='ZERAR KV CELL':
+            return self.json({'error':'Confirmação inválida. Digite ZERAR KV CELL.'},400)
+        # Reset only operational/user-entered data. Keep the current administrator,
+        # settings and the built-in film compatibility catalog so the system remains
+        # immediately usable after the reset.
+        keep_user_id=int(u.get('id') or 0)
+        keep_tables={'users','settings','film_compat','sqlite_sequence'}
+        try:
+            c=db()
+            tables=[r['name'] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchall()]
+            cleared=[]
+            c.execute('PRAGMA foreign_keys=OFF')
+            c.execute('BEGIN')
+            for table in tables:
+                if table in keep_tables:
+                    continue
+                # Audit/activity/undo are intentionally cleared as part of the reset.
+                c.execute('DELETE FROM '+table)
+                cleared.append(table)
+            # Remove all users except the administrator who performed the reset.
+            c.execute('DELETE FROM users WHERE id<>?',(keep_user_id,))
+            c.execute('DELETE FROM sqlite_sequence')
+            # Preserve the administrator's existing primary key so the active session remains valid.
+            c.execute("UPDATE users SET active=1, role='admin' WHERE id=?",(keep_user_id,))
+            c.commit()
+            c.close()
+            # Persist the clean database to Square Cloud Blob, if enabled.
+            schedule_blob_sync()
+            return self.json({'ok':True,'message':'Banco de dados resetado. Os dados operacionais foram apagados e o administrador atual foi preservado.','cleared_tables':cleared})
+        except Exception as e:
+            try: c.rollback(); c.close()
+            except Exception: pass
+            return self.json({'error':'Falha ao resetar banco: '+str(e)},500)
+
     def undo_action(self,d,u):
         uid=int(d.get('id') or 0); r=one('SELECT * FROM undo_stack WHERE id=? AND undone=0',(uid,))
         if not r:return self.json({'error':'Ação não encontrada ou já desfeita.'},404)
