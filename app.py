@@ -114,12 +114,16 @@ CREATE TABLE IF NOT EXISTS fiado_accounts(id INTEGER PRIMARY KEY AUTOINCREMENT,u
 CREATE TABLE IF NOT EXISTS fiado_payments(id INTEGER PRIMARY KEY AUTOINCREMENT,account_id INTEGER,amount REAL,payment TEXT,paid_at TEXT,notes TEXT,created_at TEXT);
 CREATE TABLE IF NOT EXISTS mdm_devices(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,customer_id INTEGER,purchase_id INTEGER,fiado_id INTEGER,brand TEXT,model TEXT,imei TEXT,serial TEXT,android_version TEXT,device_name TEXT,enrollment_token TEXT UNIQUE,qr_payload TEXT,status TEXT DEFAULT 'aguardando',policy_state TEXT DEFAULT 'normal',custom_message TEXT,installment_total REAL DEFAULT 0,installment_paid REAL DEFAULT 0,next_due TEXT,app_version TEXT,last_seen TEXT,battery INTEGER,installment_count INTEGER DEFAULT 1,installment_value REAL DEFAULT 0,paid_installments INTEGER DEFAULT 0,payment_url TEXT,pix_copy_paste TEXT,created_at TEXT,updated_at TEXT);
 CREATE TABLE IF NOT EXISTS mdm_events(id INTEGER PRIMARY KEY AUTOINCREMENT,device_id INTEGER,action TEXT,message TEXT,created_at TEXT);
+CREATE TABLE IF NOT EXISTS mdm_installments(id INTEGER PRIMARY KEY AUTOINCREMENT,device_id INTEGER,number INTEGER,amount REAL,due_date TEXT,status TEXT DEFAULT 'pendente',paid_at TEXT,payment_method TEXT,created_at TEXT);
+CREATE INDEX IF NOT EXISTS idx_mdm_events_device ON mdm_events(device_id,id);
+CREATE INDEX IF NOT EXISTS idx_mdm_installments_device ON mdm_installments(device_id,number);
 
 '''
 
 def now(): return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 def db():
-    c=sqlite3.connect(DB); c.row_factory=sqlite3.Row; c.executescript(SCHEMA); return c
+    c=sqlite3.connect(DB,timeout=15,check_same_thread=False); c.row_factory=sqlite3.Row
+    c.execute('PRAGMA busy_timeout=12000'); c.execute('PRAGMA journal_mode=WAL'); c.execute('PRAGMA synchronous=NORMAL'); c.executescript(SCHEMA); return c
 def migrate_v10():
     if BLOB_ENABLED and not os.path.exists(DB): _blob_download()
     c=db()
@@ -150,8 +154,10 @@ def migrate_v10():
         if name not in cols: c.execute('ALTER TABLE inventory ADD COLUMN '+name+' '+typ)
     cols={r[1] for r in c.execute('PRAGMA table_info(mdm_devices)').fetchall()}
     if 'fiado_id' not in cols: c.execute('ALTER TABLE mdm_devices ADD COLUMN fiado_id INTEGER DEFAULT NULL')
-    for name,typ in [('installment_count','INTEGER DEFAULT 1'),('installment_value','REAL DEFAULT 0'),('paid_installments','INTEGER DEFAULT 0'),('payment_url','TEXT'),('pix_copy_paste','TEXT')]:
+    for name,typ in [('installment_count','INTEGER DEFAULT 1'),('installment_value','REAL DEFAULT 0'),('paid_installments','INTEGER DEFAULT 0'),('payment_url','TEXT'),('pix_copy_paste','TEXT'),('auto_lock_enabled','INTEGER DEFAULT 1'),('grace_days','INTEGER DEFAULT 0'),('enrolled_at','TEXT'),('last_policy_sync','TEXT'),('last_error','TEXT')]:
         if name not in cols: c.execute('ALTER TABLE mdm_devices ADD COLUMN '+name+' '+typ)
+    c.execute('CREATE INDEX IF NOT EXISTS idx_mdm_token ON mdm_devices(enrollment_token)')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_mdm_customer ON mdm_devices(customer_id)')
     c.commit();c.close()
 migrate_v10()
 
@@ -390,7 +396,8 @@ class Handler(BaseHTTPRequestHandler):
         if path=='/api/mdm': return self.mdm_list(qs)
         if path=='/api/mdm/qr': return self.mdm_qr(qs)
         if path=='/api/mdm/device': return self.mdm_device(qs)
-        if path=='/api/mdm/events': return self.json(rows('SELECT * FROM mdm_events ORDER BY id DESC LIMIT 300'))
+        if path=='/api/mdm/events': return self.mdm_events(qs)
+        if path=='/api/mdm/installments': return self.mdm_installments(qs)
         if path.startswith('/api/'): return self.list_api(path[5:],qs)
         self.send(404,b'Not found','text/plain')
     def do_POST(self):
@@ -419,6 +426,7 @@ class Handler(BaseHTTPRequestHandler):
         if path=='/api/undo': return self.undo_action(data,u)
         if path=='/api/fiado/payment': return self.fiado_payment(data,u)
         if path=='/api/mdm/action': return self.mdm_action(data,u)
+        if path=='/api/mdm/receive': return self.mdm_receive(data,u)
         if path=='/api/mdm/create': return self.mdm_create(data,u)
         if path.startswith('/api/'):
             try:return self.create_api(path[5:],data,u)
@@ -664,16 +672,33 @@ class Handler(BaseHTTPRequestHandler):
     def mdm_list(self,qs):
         unit=qs.get('unit',['TODOS'])[0]; sql='SELECT m.*,c.name customer_name,c.phone customer_phone FROM mdm_devices m LEFT JOIN customers c ON c.id=m.customer_id'; args=[]
         if unit!='TODOS': sql+=' WHERE m.unit=?'; args.append(unit)
-        sql+=' ORDER BY m.id DESC LIMIT 500'; return self.json(rows(sql,args))
+        sql+=' ORDER BY m.id DESC LIMIT 500'; rows_=rows(sql,args)
+        today=date.today().isoformat()
+        for x in rows_:
+            total=float(x.get('installment_total') or 0); paid=float(x.get('installment_paid') or 0)
+            x['balance']=max(0,total-paid); x['installments_remaining']=max(0,int(x.get('installment_count') or 0)-int(x.get('paid_installments') or 0))
+            due=x.get('next_due') or ''
+            x['days_to_due']=None
+            if due:
+                try:x['days_to_due']=(date.fromisoformat(due)-date.today()).days
+                except:pass
+            x['overdue']=bool(due and due<today and x['balance']>0)
+        return self.json(rows_)
     def mdm_device(self,qs):
-        t=qs.get('token',[''])[0]; d=one('SELECT m.*,c.name customer_name,c.phone customer_phone FROM mdm_devices m LEFT JOIN customers c ON c.id=m.customer_id WHERE m.enrollment_token=?',(t,))
+        t=qs.get('token',[''])[0].strip(); d=one('SELECT m.*,c.name customer_name,c.phone customer_phone FROM mdm_devices m LEFT JOIN customers c ON c.id=m.customer_id WHERE m.enrollment_token=?',(t,))
         if not d:return self.json({'error':'Token MDM inválido.'},404)
         balance=max(0,float(d['installment_total'] or 0)-float(d['installment_paid'] or 0))
         days=None
         if d['next_due']:
             try: days=(date.fromisoformat(d['next_due'])-date.today()).days
             except: pass
-        return self.json({'ok':True,'device':dict(d),'balance':balance,'days_to_due':days,'installments_remaining':max(0,int(d['installment_count'] or 0)-int(d['paid_installments'] or 0))})
+        # Automatic overdue policy is evaluated server-side, but only when enabled and a real due date exists.
+        policy=d['policy_state']
+        if d['auto_lock_enabled'] and balance>0 and days is not None and days < -(int(d['grace_days'] or 0)) and policy not in ('quitado','bloqueado'):
+            policy='bloqueado'
+            write("UPDATE mdm_devices SET policy_state='bloqueado',status='bloqueio solicitado',last_policy_sync=?,updated_at=? WHERE id=?",(now(),now(),d['id']))
+            write('INSERT INTO mdm_events(device_id,action,message,created_at) VALUES(?,?,?,?)',(d['id'],'auto_lock','Vencimento ultrapassado; política de bloqueio emitida automaticamente.',now()))
+        return self.json({'ok':True,'device':dict(d),'balance':balance,'days_to_due':days,'installments_remaining':max(0,int(d['installment_count'] or 0)-int(d['paid_installments'] or 0)),'server_time':now(),'policy_state':policy})
 
     def mdm_qr(self,qs):
         mid=int(qs.get('id',['0'])[0] or 0); mode=qs.get('mode',['app'])[0]
@@ -687,61 +712,115 @@ class Handler(BaseHTTPRequestHandler):
         else:
             payload='kvcellmdm://enroll/'+tokenv
         img=qrcode.make(payload); buf=BytesIO(); img.save(buf,format='PNG'); data='data:image/png;base64,'+base64.b64encode(buf.getvalue()).decode()
-        return self.json({'ok':True,'mode':mode,'payload':payload,'data_url':data})
+        return self.json({'ok':True,'mode':mode,'payload':payload,'data_url':data,'enroll_url':'https://'+host+'/public/mdm/enroll/'+tokenv})
+
     def mdm_create(self,d,u):
-        tokenv=secrets.token_urlsafe(18).replace('-','').replace('_','')
-        unit=d.get('unit','TODOS')
-        host=self.headers.get('Host','kvcell.squareweb.app')
-        enroll_url='https://'+host+'/public/mdm/enroll/'+tokenv
-        apk_url=(os.environ.get('MDM_AGENT_APK_URL') or '').strip()
-        payload=enroll_url
-        if apk_url:
-            payload=json.dumps({
-                'android.app.extra.PROVISIONING_DEVICE_ADMIN_COMPONENT_NAME':'br.com.kvcell.finance.mdm/br.com.kvcell.mdmd.KVCellDeviceAdminReceiver',
-                'android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_DOWNLOAD_LOCATION':apk_url,
-                'android.app.extra.PROVISIONING_ADMIN_EXTRAS_BUNDLE':json.dumps({'enrollment_token':tokenv,'server':'https://'+host},ensure_ascii=False)
-            },ensure_ascii=False,separators=(',',':'))
-        total=float(d.get('installment_total') or 0); paid=float(d.get('installment_paid') or 0)
-        count=max(1,int(d.get('installment_count') or 1)); value=float(d.get('installment_value') or 0) or max(0,(total-paid)/count)
-        c=None
+        # Strict validation + one transaction. Never creates a half-registered device.
         try:
+            unit=str(d.get('unit') or u.get('unit') or 'TODOS').strip().upper()
+            if unit not in ('LAGOS','MAGÉ','TODOS'): return self.json({'error':'Unidade MDM inválida.'},400)
+            cid=int(d.get('customer_id') or 0)
+            if not cid or not one('SELECT id FROM customers WHERE id=?',(cid,)): return self.json({'error':'Cliente selecionado não existe.'},400)
+            brand=str(d.get('brand') or '').strip(); model=str(d.get('model') or '').strip()
+            if not brand or not model:return self.json({'error':'Informe marca e modelo do aparelho.'},400)
+            total=max(0,float(d.get('installment_total') or 0)); paid=max(0,float(d.get('installment_paid') or 0))
+            if paid>total:return self.json({'error':'O valor pago não pode ser maior que o valor financiado.'},400)
+            count=max(1,int(d.get('installment_count') or 1)); balance=max(0,total-paid); value=float(d.get('installment_value') or 0) or (balance/count if count else 0)
+            if value<0:return self.json({'error':'Valor de parcela inválido.'},400)
+            paid_installments=max(0,min(count,int(d.get('paid_installments') or 0)))
+            next_due=str(d.get('next_due') or '').strip() or None
+            if next_due:
+                try:date.fromisoformat(next_due)
+                except:return self.json({'error':'Data de vencimento inválida.'},400)
+            tokenv=secrets.token_urlsafe(18).replace('-','').replace('_','')
+            host=self.headers.get('Host','kvcell.squareweb.app')
+            enroll_url='https://'+host+'/public/mdm/enroll/'+tokenv
+            apk_url=(os.environ.get('MDM_AGENT_APK_URL') or '').strip(); payload=enroll_url
+            if apk_url:
+                payload=json.dumps({'android.app.extra.PROVISIONING_DEVICE_ADMIN_COMPONENT_NAME':'br.com.kvcell.finance.mdm/br.com.kvcell.mdmd.KVCellDeviceAdminReceiver','android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_DOWNLOAD_LOCATION':apk_url,'android.app.extra.PROVISIONING_ADMIN_EXTRAS_BUNDLE':json.dumps({'enrollment_token':tokenv,'server':'https://'+host},ensure_ascii=False)},ensure_ascii=False,separators=(',',':'))
+            stamp=now(); device_name=str(d.get('device_name') or f'{brand} {model}').strip(); custom=str(d.get('custom_message') or 'Parcela em atraso. Regularize seu crediário com a KV CELL.')
             c=db()
-            cur=c.execute("INSERT INTO mdm_devices(unit,customer_id,purchase_id,fiado_id,brand,model,imei,serial,android_version,device_name,enrollment_token,qr_payload,status,policy_state,custom_message,installment_total,installment_paid,next_due,app_version,last_seen,battery,installment_count,installment_value,paid_installments,payment_url,pix_copy_paste,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(unit,d.get('customer_id') or None,d.get('purchase_id') or None,d.get('fiado_id') or None,d.get('brand'),d.get('model'),d.get('imei'),d.get('serial'),d.get('android_version'),d.get('device_name') or f"{d.get('brand','')} {d.get('model','')}".strip(),tokenv,payload,'aguardando','normal',d.get('custom_message') or 'Aparelho em crediário KV CELL',total,paid,d.get('next_due'),d.get('app_version'),None,None,count,value,int(d.get('paid_installments') or 0),d.get('payment_url'),d.get('pix_copy_paste'),now(),now()))
-            rid=cur.lastrowid
-            c.execute("INSERT INTO mdm_events(device_id,action,message,created_at) VALUES(?,?,?,?)",(rid,'criado','Cadastro de política MDM criado.',now()))
-            c.commit(); c.close(); c=None; schedule_blob_sync()
-            return self.json({'ok':True,'id':rid,'token':tokenv,'payload':payload,'enroll_url':enroll_url})
-        except sqlite3.IntegrityError:
-            if c:
-                try:c.rollback();c.close()
-                except Exception:pass
-            return self.json({'error':'Não foi possível criar o crediário MDM: registro duplicado ou inválido.'},409)
-        except Exception:
-            if c:
-                try:c.rollback();c.close()
-                except Exception:pass
-            return self.json({'error':'Não foi possível criar o crediário MDM agora. Tente novamente.'},503)
+            try:
+                cur=c.execute("INSERT INTO mdm_devices(unit,customer_id,purchase_id,fiado_id,brand,model,imei,serial,android_version,device_name,enrollment_token,qr_payload,status,policy_state,custom_message,installment_total,installment_paid,next_due,app_version,last_seen,battery,installment_count,installment_value,paid_installments,payment_url,pix_copy_paste,created_at,updated_at,auto_lock_enabled,grace_days,last_policy_sync,last_error) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(unit,cid,int(d.get('purchase_id') or 0) or None,int(d.get('fiado_id') or 0) or None,brand,model,str(d.get('imei') or '').strip() or None,str(d.get('serial') or '').strip() or None,str(d.get('android_version') or '').strip() or None,device_name,tokenv,payload,'aguardando','normal',custom,total,paid,next_due,str(d.get('app_version') or '').strip() or None,None,None,count,value,paid_installments,str(d.get('payment_url') or '').strip() or None,str(d.get('pix_copy_paste') or '').strip() or None,stamp,stamp,1,max(0,int(d.get('grace_days') or 0)),None,None))
+                rid=cur.lastrowid
+                c.execute("INSERT INTO mdm_events(device_id,action,message,created_at) VALUES(?,?,?,?)",(rid,'criado','Crediário MDM criado com política de bloqueio remoto habilitada.',stamp))
+                # Generate the installment schedule now, so the panel has a real ledger instead of only totals.
+                if count>0 and value>0:
+                    base=date.fromisoformat(next_due) if next_due else date.today()
+                    for n in range(1,count+1):
+                        due=(base+timedelta(days=30*(n-1))).isoformat()
+                        st='pago' if n<=paid_installments else 'pendente'
+                        c.execute('INSERT INTO mdm_installments(device_id,number,amount,due_date,status,paid_at,created_at) VALUES(?,?,?,?,?,?,?)',(rid,n,value,due,st,stamp if st=='pago' else None,stamp))
+                c.commit()
+            finally:c.close()
+            schedule_blob_sync()
+            return self.json({'ok':True,'id':rid,'token':tokenv,'payload':payload,'enroll_url':enroll_url,'balance':balance,'installments_remaining':count-paid_installments})
+        except sqlite3.IntegrityError as e:
+            return self.json({'error':'Não foi possível criar o crediário MDM: registro duplicado ou inválido.','detail':str(e)},409)
+        except Exception as e:
+            print('KV CELL MDM CREATE ERROR:',repr(e),flush=True)
+            return self.json({'error':'Não foi possível criar o crediário MDM agora. Tente novamente.','detail':str(e)},503)
 
     def mdm_action(self,d,u):
-        mid=int(d.get('id') or 0); action=d.get('action'); dev=one('SELECT * FROM mdm_devices WHERE id=?',(mid,))
+        mid=int(d.get('id') or 0); action=str(d.get('action') or '').strip(); dev=one('SELECT * FROM mdm_devices WHERE id=?',(mid,))
         if not dev:return self.json({'error':'Dispositivo MDM não encontrado.'},404)
         allowed={'lock':'bloqueado','unlock':'normal','pause':'pausado'}
         if action not in allowed:return self.json({'error':'Ação MDM inválida.'},400)
-        state=allowed[action]; msg=d.get('message') or dev['custom_message'] or ''
-        write('UPDATE mdm_devices SET policy_state=?,status=?,custom_message=?,updated_at=? WHERE id=?',(state,'online' if action=='unlock' else 'bloqueio solicitado' if action=='lock' else 'pausado',msg,now(),mid))
-        write('INSERT INTO mdm_events(device_id,action,message,created_at) VALUES(?,?,?,?)',(mid,action,msg,now())); activity(u,'MDM',f'Ação MDM: {action}','mdm_devices',mid,msg); return self.json({'ok':True,'policy_state':state,'note':'A ação é uma política remota; o bloqueio físico só é aplicado por um agente MDM Android devidamente provisionado no aparelho.'})
+        state=allowed[action]; msg=str(d.get('message') or dev['custom_message'] or '')
+        status='online' if action=='unlock' else ('bloqueio solicitado' if action=='lock' else 'pausado')
+        write('UPDATE mdm_devices SET policy_state=?,status=?,custom_message=?,last_policy_sync=?,last_error=NULL,updated_at=? WHERE id=?',(state,status,msg,now(),now(),mid))
+        write('INSERT INTO mdm_events(device_id,action,message,created_at) VALUES(?,?,?,?)',(mid,action,msg,now())); activity(u,'MDM',f'Ação MDM: {action}','mdm_devices',mid,msg)
+        return self.json({'ok':True,'policy_state':state,'status':status,'note':'A política será aplicada pelo agente KV CELL legitimamente provisionado; o Android exige Device Owner para o nível máximo de controle.'})
+    def mdm_receive(self,d,u):
+        mid=int(d.get('id') or 0); amount=max(0,float(d.get('amount') or 0)); method=str(d.get('payment') or 'PIX')
+        if amount<=0:return self.json({'error':'Informe um valor de pagamento maior que zero.'},400)
+        dev=one('SELECT * FROM mdm_devices WHERE id=?',(mid,))
+        if not dev:return self.json({'error':'Dispositivo MDM não encontrado.'},404)
+        balance=max(0,float(dev['installment_total'] or 0)-float(dev['installment_paid'] or 0)); amount=min(amount,balance)
+        new_paid=float(dev['installment_paid'] or 0)+amount
+        paid_inst=min(int(dev['installment_count'] or 0),int(dev['paid_installments'] or 0)+max(1,round(amount/max(float(dev['installment_value'] or 1),0.01))))
+        new_balance=max(0,float(dev['installment_total'] or 0)-new_paid); new_state='quitado' if new_balance<=0.009 else ('normal' if dev['policy_state']=='bloqueado' and amount>0 else dev['policy_state'])
+        write('UPDATE mdm_devices SET installment_paid=?,paid_installments=?,policy_state=?,status=?,updated_at=?,last_policy_sync=? WHERE id=?',(new_paid,paid_inst,new_state,'quitado' if new_balance<=0.009 else 'online',now(),now(),mid))
+        # Mark earliest unpaid installments until the received amount is consumed.
+        remain=amount
+        for ins in rows('SELECT * FROM mdm_installments WHERE device_id=? AND status<>? ORDER BY number',(mid,'pago')):
+            if remain<=0:break
+            pay=min(remain,float(ins['amount'] or 0)); remain-=pay
+            if pay>=float(ins['amount'] or 0)-0.009: write("UPDATE mdm_installments SET status='pago',paid_at=?,payment_method=? WHERE id=?",(now(),method,ins['id']))
+        write('INSERT INTO mdm_events(device_id,action,message,created_at) VALUES(?,?,?,?)',(mid,'payment',f'Pagamento recebido: R$ {amount:.2f} via {method}. Saldo: R$ {new_balance:.2f}.',now()))
+        if dev['fiado_id']:
+            try:
+                fid=int(dev['fiado_id']); write('INSERT INTO fiado_payments(account_id,amount,payment,paid_at,notes,created_at) VALUES(?,?,?,?,?,?)',(fid,amount,method,date.today().isoformat(),'Pagamento registrado pelo Crediário MDM',now()))
+                acc=one('SELECT * FROM fiado_accounts WHERE id=?',(fid,));
+                if acc:
+                    bal=max(0,float(acc['balance'] or 0)-amount); st='pago' if bal<=0.009 else ('atrasado' if acc['due_date'] and acc['due_date']<date.today().isoformat() else 'aberto'); write('UPDATE fiado_accounts SET balance=?,status=? WHERE id=?',(bal,st,fid))
+            except Exception as e: print('KV CELL MDM FIADO SYNC:',e,flush=True)
+        activity(u,'MDM','Recebeu pagamento MDM','mdm_devices',mid,f'R$ {amount:.2f} • {method}')
+        return self.json({'ok':True,'received':amount,'balance':new_balance,'policy_state':new_state,'paid_installments':paid_inst})
+    def mdm_installments(self,qs):
+        mid=int(qs.get('id',['0'])[0] or 0); return self.json(rows('SELECT * FROM mdm_installments WHERE device_id=? ORDER BY number',(mid,)))
+    def mdm_events(self,qs):
+        mid=int(qs.get('id',['0'])[0] or 0); return self.json(rows('SELECT * FROM mdm_events WHERE device_id=? ORDER BY id DESC LIMIT 200',(mid,)))
     def mdm_heartbeat(self,t,d):
         dev=one('SELECT * FROM mdm_devices WHERE enrollment_token=?',(t,))
         if not dev:return self.json({'error':'Token MDM inválido.'},404)
-        write('UPDATE mdm_devices SET status=?,last_seen=?,battery=?,app_version=?,updated_at=? WHERE id=?',('online',now(),int(d.get('battery') or 0),d.get('app_version'),now(),dev['id']))
-        return self.json({'ok':True,'policy_state':dev['policy_state'],'message':dev['custom_message'],'next_due':dev['next_due']})
+        stamp=now(); battery=max(0,min(100,int(d.get('battery') or 0))); appv=str(d.get('app_version') or '')
+        write('UPDATE mdm_devices SET status=?,last_seen=?,battery=?,app_version=?,updated_at=?,last_error=NULL WHERE id=?',('online',stamp,battery,appv,stamp,dev['id']))
+        fresh=one('SELECT * FROM mdm_devices WHERE id=?',(dev['id'],));
+        balance=max(0,float(fresh['installment_total'] or 0)-float(fresh['installment_paid'] or 0)); days=None
+        if fresh['next_due']:
+            try:days=(date.fromisoformat(fresh['next_due'])-date.today()).days
+            except:pass
+        policy=fresh['policy_state']
+        if fresh['auto_lock_enabled'] and balance>0 and days is not None and days<-(int(fresh['grace_days'] or 0)) and policy not in ('quitado','bloqueado'):
+            policy='bloqueado'; write("UPDATE mdm_devices SET policy_state='bloqueado',status='bloqueio solicitado',last_policy_sync=?,updated_at=? WHERE id=?",(stamp,stamp,fresh['id']))
+            write('INSERT INTO mdm_events(device_id,action,message,created_at) VALUES(?,?,?,?)',(fresh['id'],'auto_lock','Bloqueio automático por atraso.',stamp))
+        return self.json({'ok':True,'policy_state':policy,'message':fresh['custom_message'],'next_due':fresh['next_due'],'balance':balance,'days_to_due':days,'installments_remaining':max(0,int(fresh['installment_count'] or 0)-int(fresh['paid_installments'] or 0)),'server_time':stamp})
     def mdm_payment_request(self,t,d):
         dev=one('SELECT * FROM mdm_devices WHERE enrollment_token=?',(t,))
         if not dev:return self.json({'error':'Token MDM inválido.'},404)
-        msg='Solicitação de pagamento do crediário MDM'
-        write('INSERT INTO mdm_events(device_id,action,message,created_at) VALUES(?,?,?,?)',(dev['id'],'payment_request',msg,now()))
-        return self.json({'ok':True,'payment_url':dev['payment_url'],'pix_copy_paste':dev['pix_copy_paste'],'message':'Solicitação registrada. A confirmação financeira depende do meio de pagamento configurado pela KV CELL.'})
-
+        msg='Solicitação de pagamento do crediário MDM'; write('INSERT INTO mdm_events(device_id,action,message,created_at) VALUES(?,?,?,?)',(dev['id'],'payment_request',msg,now()))
+        return self.json({'ok':True,'payment_url':dev['payment_url'],'pix_copy_paste':dev['pix_copy_paste'],'message':'Solicitação registrada. A confirmação financeira é feita pela KV CELL após identificar o pagamento.'})
     def mdm_enroll(self,t,d):
         dev=one('SELECT * FROM mdm_devices WHERE enrollment_token=?',(t,))
         if not dev:return self.json({'error':'Token MDM inválido ou expirado.'},404)

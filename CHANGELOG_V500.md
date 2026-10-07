@@ -34,3 +34,19 @@ V500.2 — correções cirúrgicas e avanço sem regressão
 - PDV V500.2 com vitrine em cards, busca, carrinho, cliente, desconto, pagamento e sincronização Compra/Vitrine/Financeiro.
 - Películas V500.2 com busca direta/reversa, grupos/master, confiança e base ampliada por pesquisa web (VivaCell, Tabela Películas, Ordita/FilmFinder), sempre exigindo confirmação física para relações não confirmadas.
 - Sentry ERR_BLOCKED_BY_CLIENT não é gerado pelo KV CELL: é bloqueio do navegador/extensão sobre o endpoint de telemetria.
+
+## V502 — ADB & Antivírus DARK + ADB Bridge real
+- Refeito somente o módulo **ADB & Antivírus**, sem remover os demais módulos do V500.2.
+- Interface agora 100% alinhada ao tema KV CELL OS PREMIUM: dark, preto/grafite, amarelo KV, cards consistentes e sem blocos brancos acidentais.
+- Organização em abas: Visão geral, Diagnóstico, Antivírus, Controles, Terminal, Tela, Recuperação, Evidências e Laudo/Backup.
+- Removida a antiga simulação que preenchia um aparelho fictício ao clicar em conectar.
+- Adicionada ponte local `tools/kvcell_bridge.py` para comunicação real com o Android SDK Platform Tools/ADB do computador da bancada.
+- Adicionados `INICIAR_KV_CELL_BRIDGE.bat` e `README_BRIDGE.md`.
+- Conexão real: `adb devices`, seleção de aparelho, leitura de propriedades, bateria, memória, armazenamento, rede, segurança, processos e logcat.
+- Controles reais permitidos: reiniciar normal, Recovery, Bootloader/Fastboot e ADB Sideload.
+- Terminal com conjunto fechado de leituras diagnósticas reais.
+- Captura de tela real via `adb exec-out screencap -p`.
+- Laudo técnico e backup JSON da sessão.
+- Antivírus agora é uma **triagem heurística de segurança** dos apps de terceiros, destacando combinações de permissões sensíveis; não afirma malware por uma única permissão.
+- A ponte escuta apenas em `127.0.0.1:17321` e não expõe ADB à internet.
+- Compatibilidade mantida com Square Cloud: o painel continua remoto; somente a ponte USB roda no PC da bancada.

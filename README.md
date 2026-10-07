@@ -77,3 +77,17 @@ Correções incrementais sobre a V500, sem remoção deliberada de módulos exis
 - `MDM_AGENT_APK_URL` habilita QR de provisionamento Android completo.
 - Sem essa variável, o QR do aplicativo usa `kvcellmdm://enroll/<token>` e o portal público permanece disponível.
 - O agente deve ser provisionado legitimamente como Device Admin/Device Owner conforme as capacidades do Android; o painel não faz bypass de proteções.
+
+## ADB & Antivírus — ponte local V502
+A aba ADB & Antivírus usa uma ponte local para transformar os controles de bancada em operações reais. O Square Cloud não consegue acessar o USB físico do PC da bancada diretamente.
+
+Arquivos:
+- `tools/kvcell_bridge.py`
+- `tools/INICIAR_KV_CELL_BRIDGE.bat`
+- `tools/README_BRIDGE.md`
+
+Porta local padrão: `127.0.0.1:17321`.
+
+
+## V520 — Crediário MDM / Bloqueio
+A versão V520 concentra a evolução do Crediário MDM: cronograma de parcelas, recebimento, bloqueio automático por atraso, heartbeat do agente e histórico por aparelho. A intervenção é exclusiva do módulo MDM.
