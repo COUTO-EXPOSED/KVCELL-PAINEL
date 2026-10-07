@@ -83,8 +83,8 @@ SCHEMA='''
 CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT,email TEXT UNIQUE,password_hash TEXT,role TEXT,unit TEXT,permissions TEXT,active INTEGER DEFAULT 1,created_at TEXT);
 CREATE TABLE IF NOT EXISTS customers(id INTEGER PRIMARY KEY AUTOINCREMENT,type TEXT,name TEXT,document_type TEXT,document TEXT,phone_type TEXT,phone TEXT,email TEXT,address TEXT,city TEXT,birth_date TEXT,balance REAL DEFAULT 0,observations TEXT,created_at TEXT);
 CREATE TABLE IF NOT EXISTS devices(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,customer_id INTEGER,brand TEXT,model TEXT,imei TEXT,serial TEXT,color TEXT,storage TEXT,status TEXT,photos TEXT DEFAULT '[]',notes TEXT,created_at TEXT);
-CREATE TABLE IF NOT EXISTS services(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,customer_id INTEGER,device_id INTEGER,kind TEXT,description TEXT,checklist TEXT,diagnosis TEXT,status TEXT,technician TEXT,price REAL,warranty TEXT,photos TEXT DEFAULT '[]',notes TEXT,public_token TEXT,created_at TEXT,updated_at TEXT,cost_material REAL DEFAULT 0,cost_labor REAL DEFAULT 0,cost_extra REAL DEFAULT 0,cost_total REAL DEFAULT 0,profit REAL DEFAULT 0,warranty_of_id INTEGER DEFAULT NULL,details_json TEXT DEFAULT '{}',technician_id INTEGER DEFAULT NULL);
-CREATE TABLE IF NOT EXISTS unlocks(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,customer_id INTEGER,device_id INTEGER,brand TEXT,model TEXT,imei TEXT,kind TEXT,checklist TEXT,status TEXT,operator TEXT,price REAL,photos TEXT DEFAULT '[]',notes TEXT,public_token TEXT,created_at TEXT,cost_material REAL DEFAULT 0,cost_labor REAL DEFAULT 0,cost_extra REAL DEFAULT 0,cost_total REAL DEFAULT 0,profit REAL DEFAULT 0,warranty_of_id INTEGER DEFAULT NULL,details_json TEXT DEFAULT '{}',technician_id INTEGER DEFAULT NULL);
+CREATE TABLE IF NOT EXISTS services(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,customer_id INTEGER,device_id INTEGER,kind TEXT,description TEXT,checklist TEXT,diagnosis TEXT,status TEXT,technician TEXT,price REAL,warranty TEXT,photos TEXT DEFAULT '[]',notes TEXT,public_token TEXT,created_at TEXT,updated_at TEXT,cost_material REAL DEFAULT 0,cost_labor REAL DEFAULT 0,cost_extra REAL DEFAULT 0,cost_total REAL DEFAULT 0,profit REAL DEFAULT 0,warranty_of_id INTEGER DEFAULT NULL,details_json TEXT DEFAULT '{}');
+CREATE TABLE IF NOT EXISTS unlocks(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,customer_id INTEGER,device_id INTEGER,brand TEXT,model TEXT,imei TEXT,kind TEXT,checklist TEXT,status TEXT,operator TEXT,price REAL,photos TEXT DEFAULT '[]',notes TEXT,public_token TEXT,created_at TEXT,cost_material REAL DEFAULT 0,cost_labor REAL DEFAULT 0,cost_extra REAL DEFAULT 0,cost_total REAL DEFAULT 0,profit REAL DEFAULT 0,warranty_of_id INTEGER DEFAULT NULL,details_json TEXT DEFAULT '{}');
 CREATE TABLE IF NOT EXISTS purchases(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,customer_id INTEGER,brand TEXT,model TEXT,imei TEXT,purchase_date TEXT,amount REAL,expenses REAL,freight REAL,total_cost REAL,suggested_price REAL,expected_profit REAL,photos TEXT DEFAULT '[]',checklist TEXT,observations TEXT,status TEXT,created_at TEXT);
 CREATE TABLE IF NOT EXISTS inventory(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,code TEXT,name TEXT,type TEXT,category TEXT,qty REAL,min_qty REAL,cost REAL,price REAL,supplier TEXT,compatibility TEXT,notes TEXT,created_at TEXT);
 CREATE TABLE IF NOT EXISTS models(id INTEGER PRIMARY KEY AUTOINCREMENT,brand TEXT,model TEXT,service_prices TEXT,margin REAL,warranty TEXT,notes TEXT,created_at TEXT);
@@ -108,8 +108,12 @@ CREATE TABLE IF NOT EXISTS guarantees(id INTEGER PRIMARY KEY AUTOINCREMENT,unit 
 CREATE TABLE IF NOT EXISTS community_posts(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,user_name TEXT,title TEXT,message TEXT,type TEXT,status TEXT,created_at TEXT);
 CREATE TABLE IF NOT EXISTS referrals(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,customer_id INTEGER,service_name TEXT,commission REAL DEFAULT 0,referrer TEXT,link TEXT,status TEXT,created_at TEXT);
 CREATE TABLE IF NOT EXISTS catalog_products(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,name TEXT,category TEXT,price REAL DEFAULT 0,stock REAL DEFAULT 0,image TEXT,active INTEGER DEFAULT 1,created_at TEXT);
-CREATE TABLE IF NOT EXISTS fiado_accounts(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,customer_id INTEGER,source_type TEXT,source_id INTEGER,description TEXT,total REAL DEFAULT 0,down_payment REAL DEFAULT 0,balance REAL DEFAULT 0,due_date TEXT,status TEXT DEFAULT 'aberto',notes TEXT,installments INTEGER DEFAULT 1,installment_value REAL DEFAULT 0,frequency TEXT DEFAULT 'Mensal (30 dias)',created_at TEXT);
+CREATE TABLE IF NOT EXISTS fiado_accounts(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,customer_id INTEGER,source_type TEXT,source_id INTEGER,description TEXT,total REAL DEFAULT 0,down_payment REAL DEFAULT 0,balance REAL DEFAULT 0,due_date TEXT,status TEXT DEFAULT 'aberto',notes TEXT,created_at TEXT);
 CREATE TABLE IF NOT EXISTS fiado_payments(id INTEGER PRIMARY KEY AUTOINCREMENT,account_id INTEGER,amount REAL,payment TEXT,paid_at TEXT,notes TEXT,created_at TEXT);
+CREATE TABLE IF NOT EXISTS mdm_contracts(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,customer_id INTEGER,device_id INTEGER,contract_number TEXT UNIQUE,enrollment_token TEXT UNIQUE,device_token TEXT UNIQUE,brand TEXT,model TEXT,imei TEXT,serial TEXT,device_name TEXT,status TEXT DEFAULT 'aguardando',policy_status TEXT DEFAULT 'normal',installment_total REAL DEFAULT 0,installment_count INTEGER DEFAULT 0,installment_amount REAL DEFAULT 0,down_payment REAL DEFAULT 0,paid_amount REAL DEFAULT 0,next_due_date TEXT,payment_url TEXT,pix_copy_paste TEXT,notes TEXT,metadata_json TEXT DEFAULT '{}',created_at TEXT,updated_at TEXT,last_seen TEXT,last_ip TEXT,app_version TEXT);
+CREATE TABLE IF NOT EXISTS mdm_installments(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER,number INTEGER,due_date TEXT,amount REAL,paid_amount REAL DEFAULT 0,status TEXT DEFAULT 'aberta',paid_at TEXT,payment_ref TEXT,created_at TEXT);
+CREATE TABLE IF NOT EXISTS mdm_events(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER,device_token TEXT,event_type TEXT,payload TEXT,created_at TEXT);
+
 
 '''
 
@@ -120,10 +124,8 @@ def migrate_v10():
     if BLOB_ENABLED and not os.path.exists(DB): _blob_download()
     c=db()
     cols={r[1] for r in c.execute("PRAGMA table_info(purchases)").fetchall()}
-    for name,typ in [("sold","INTEGER DEFAULT 0"),("sale_date","TEXT"),("sale_place","TEXT"),("sale_price","REAL DEFAULT 0"),("sale_payment","TEXT"),("sale_installments","INTEGER DEFAULT 1"),("sale_fee","REAL DEFAULT 0"),("sale_notes","TEXT"),("storage","TEXT"),("condition","TEXT"),("color","TEXT"),("battery_health","TEXT"),("description","TEXT"),("accessories","TEXT"),("inventory_id","INTEGER DEFAULT NULL")]:
+    for name,typ in [("sold","INTEGER DEFAULT 0"),("sale_date","TEXT"),("sale_place","TEXT"),("sale_price","REAL DEFAULT 0"),("sale_payment","TEXT"),("sale_installments","INTEGER DEFAULT 1"),("sale_fee","REAL DEFAULT 0"),("sale_notes","TEXT")]:
         if name not in cols: c.execute("ALTER TABLE purchases ADD COLUMN "+name+" "+typ)
-    cols={r[1] for r in c.execute("PRAGMA table_info(inventory)").fetchall()}
-    if 'purchase_id' not in cols: c.execute("ALTER TABLE inventory ADD COLUMN purchase_id INTEGER DEFAULT NULL")
     cols={r[1] for r in c.execute("PRAGMA table_info(sales)").fetchall()}
     for name,typ in [("payment_fee","REAL DEFAULT 0"),("net_total","REAL DEFAULT 0"),("payment_details","TEXT")]:
         if name not in cols: c.execute("ALTER TABLE sales ADD COLUMN "+name+" "+typ)
@@ -132,10 +134,6 @@ def migrate_v10():
         for name,typ in [('cost_material','REAL DEFAULT 0'),('cost_labor','REAL DEFAULT 0'),('cost_extra','REAL DEFAULT 0'),('cost_total','REAL DEFAULT 0'),('profit','REAL DEFAULT 0'),('warranty_of_id','INTEGER DEFAULT NULL')]:
             if name not in cols: c.execute(f'ALTER TABLE {table} ADD COLUMN {name} {typ}')
         if 'details_json' not in cols: c.execute("ALTER TABLE "+table+" ADD COLUMN details_json TEXT DEFAULT '{}'")
-        if 'technician_id' not in cols: c.execute("ALTER TABLE "+table+" ADD COLUMN technician_id INTEGER DEFAULT NULL")
-    cols={r[1] for r in c.execute('PRAGMA table_info(fiado_accounts)').fetchall()}
-    for name,typ in [('installments','INTEGER DEFAULT 1'),('installment_value','REAL DEFAULT 0'),('frequency',"TEXT DEFAULT 'Mensal (30 dias)'")]:
-        if name not in cols: c.execute('ALTER TABLE fiado_accounts ADD COLUMN '+name+' '+typ)
     c.commit();c.close()
 migrate_v10()
 
@@ -297,15 +295,23 @@ class Handler(BaseHTTPRequestHandler):
         if path=='/api/undo': return self.undo_list()
         if path=='/api/ai/chat': return self.ai_chat_list()
         if path=='/api/fiado': return self.fiado_api(qs)
-        if path=='/api/fiado-payments': return self.json(rows('SELECT * FROM fiado_payments WHERE account_id=? ORDER BY id DESC',(int(qs.get('id',['0'])[0] or 0),)))
         if path=='/api/appointments': return self.json(self.resource_with_customer('appointments',qs))
         if path=='/api/technicians': return self.json(rows('SELECT * FROM technicians ORDER BY id DESC LIMIT 500'))
-        if path=='/api/technician-stats': return self.technician_stats(qs.get('unit',['TODOS'])[0])
         if path=='/api/suppliers': return self.json(rows('SELECT * FROM suppliers ORDER BY id DESC LIMIT 500'))
         if path=='/api/guarantees': return self.json(self.resource_with_customer('guarantees',qs))
         if path=='/api/community': return self.json(rows('SELECT * FROM community_posts ORDER BY id DESC LIMIT 200'))
         if path=='/api/referrals': return self.json(self.resource_with_customer('referrals',qs))
         if path=='/api/catalog-products': return self.json(rows('SELECT * FROM catalog_products ORDER BY id DESC LIMIT 500'))
+        if path=='/api/mdm/contracts': return self.mdm_contracts(qs)
+        if path=='/api/mdm/summary': return self.mdm_summary(qs.get('unit',['TODOS'])[0])
+        if path.startswith('/api/mdm/contract/'):
+            return self.mdm_contract_detail(int(path.split('/')[-1]))
+        if path=='/api/mdm/qr': return self.mdm_qr(qs.get('token',[''])[0])
+        if path.startswith('/public/mdm/qr/'):
+            return self.mdm_qr(path.split('/')[-1], public=True)
+        if path.startswith('/public/mdm/device/'):
+            return self.mdm_public_device(path.split('/')[-1])
+
         if path.startswith('/api/'): return self.list_api(path[5:],qs)
         self.send(404,b'Not found','text/plain')
     def do_POST(self):
@@ -316,6 +322,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.public_quote_action(path.split('/')[-1], data)
         if path.startswith('/public/os/'):
             return self.public_os_action(path.split('/')[-1], data)
+        if path=='/public/mdm/enroll': return self.mdm_enroll(data)
+        if path=='/public/mdm/heartbeat': return self.mdm_heartbeat(data)
+        if path=='/public/mdm/payment-intent': return self.mdm_payment_intent(data)
         if path.startswith('/public/'): return self.send(405,b'','text/plain')
         u=self.require()
         if not u:return
@@ -326,9 +335,11 @@ class Handler(BaseHTTPRequestHandler):
         if path=='/api/ai/price': return self.ai_price(data,u)
         if path=='/api/ai/chat': return self.ai_chat(data,u)
         if path=='/api/undo': return self.undo_action(data,u)
-        if path=='/api/admin/reset-db': return self.admin_reset_db(data,u)
         if path=='/api/fiado/payment': return self.fiado_payment(data,u)
-        if path=='/api/pdv/sell-device': return self.pdv_sell_device(data,u)
+        if path=='/api/mdm/contract': return self.mdm_create(data,u)
+        if path=='/api/mdm/action': return self.mdm_action(data,u)
+        if path=='/api/mdm/payment': return self.mdm_record_payment(data,u)
+        if path=='/api/mdm/installment': return self.mdm_record_payment(data,u)
         if path.startswith('/api/'):
             try:return self.create_api(path[5:],data,u)
             except sqlite3.IntegrityError as e:return self.json({'error':'Registro inválido ou duplicado: '+str(e)},400)
@@ -375,7 +386,6 @@ class Handler(BaseHTTPRequestHandler):
         sql='SELECT * FROM '+table+(' WHERE '+' AND '.join(wh) if wh else '')+' ORDER BY id DESC LIMIT 500'
         data=rows(sql,args)
         for x in data:
-            x['__resource']=table
             cid=x.get('customer_id')
             if cid:
                 c=one('SELECT name,phone,document FROM customers WHERE id=?',(cid,))
@@ -390,7 +400,6 @@ class Handler(BaseHTTPRequestHandler):
         sql+=' ORDER BY f.id DESC LIMIT 500'
         data=rows(sql,args); today=date.today().isoformat()
         for x in data:
-            x['__resource']='fiado'
             x['balance']=max(0,float(x.get('total') or 0)-float(x.get('down_payment') or 0)-float(x.get('paid_total') or 0))
             if x['balance']<=0: x['status']='pago'
             elif x.get('due_date') and x['due_date']<today: x['status']='atrasado'
@@ -412,58 +421,26 @@ class Handler(BaseHTTPRequestHandler):
         activity(u,'LOG','Recebeu parcela do fiado','fiado',aid,js({'amount':amount,'payment':d.get('payment','PIX')}))
         return self.json({'ok':True,'id':rid,'balance':newbal,'status':status})
 
-    def pdv_sell_device(self,d,u):
-        purchase_id=int(d.get('purchase_id') or 0)
-        if not purchase_id: return self.json({'error':'Selecione um aparelho da vitrine.'},400)
-        purchase=one('SELECT * FROM purchases WHERE id=?',(purchase_id,))
-        if not purchase: return self.json({'error':'Aparelho não encontrado.'},404)
-        if int(purchase.get('sold') or 0)==1 or str(purchase.get('status') or '').lower()=='vendido':
-            return self.json({'error':'Este aparelho já foi vendido.'},400)
-        price=float(d.get('sale_price') or d.get('total') or purchase.get('suggested_price') or 0)
-        if price<=0: return self.json({'error':'Informe o valor da venda.'},400)
-        fee=float(d.get('payment_fee') or 0); net=max(0,price-fee)
-        items=d.get('items') or f"{purchase.get('brand') or ''} {purchase.get('model') or ''} • {purchase.get('storage') or ''}".strip()
-        payment=d.get('payment') or 'PIX'
-        customer_id=d.get('customer_id') or None
-        sale_id=write('INSERT INTO sales(unit,customer_id,items,total,payment,created_at,payment_fee,net_total,payment_details) VALUES(?,?,?,?,?,?,?,?,?)',(purchase['unit'],customer_id,items,price,payment,now(),fee,net,d.get('payment_details')))
-        write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(purchase['unit'],'entrada','Venda de aparelho',items,net,'sale',sale_id,now()))
-        if str(payment).lower()=='fiado':
-            due=d.get('due_date'); down=float(d.get('down_payment') or 0); balance=max(0,price-down); installments=max(1,int(d.get('sale_installments') or 1)); inst_value=float(d.get('installment_value') or (balance/installments if installments else balance)); frequency=d.get('frequency') or 'Mensal (30 dias)'
-            fid=write('INSERT INTO fiado_accounts(unit,customer_id,source_type,source_id,description,total,down_payment,balance,due_date,status,notes,installments,installment_value,frequency,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(purchase['unit'],customer_id,'sale',sale_id,items,price,down,balance,due,'aberto',d.get('payment_details'),installments,inst_value,frequency,now()))
-            if down>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(purchase['unit'],'entrada','Fiado / Entrada',items,down,'fiado',fid,now()))
-        write("UPDATE purchases SET sold=1,status='vendido',sale_date=?,sale_place=?,sale_price=?,sale_payment=?,sale_installments=?,sale_fee=?,sale_notes=? WHERE id=?",(d.get('sale_date') or date.today().isoformat(),d.get('sale_place'),price,payment,int(d.get('sale_installments') or 1),fee,d.get('sale_notes'),purchase_id))
-        inv_id=purchase.get('inventory_id')
-        if inv_id:
-            write('UPDATE inventory SET qty=0 WHERE id=?',(inv_id,))
-        else:
-            inv=one('SELECT id FROM inventory WHERE purchase_id=?',(purchase_id,))
-            if inv: write('UPDATE inventory SET qty=0 WHERE id=?',(inv['id'],))
-        audit(u['id'],'sell','purchases',purchase_id,js(d)); activity(u,'LOG',f"Vendeu aparelho {purchase.get('brand') or ''} {purchase.get('model') or ''}",'purchases',purchase_id,js(d)); schedule_blob_sync()
-        return self.json({'ok':True,'sale_id':sale_id,'purchase_id':purchase_id,'net_total':net})
-
     def create_api(self,r,d,u):
         if r=='customers':
             rid=write('INSERT INTO customers(type,name,document_type,document,phone_type,phone,email,address,city,birth_date,balance,observations,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('type','PF'),d.get('name'),d.get('document_type','CPF'),d.get('document'),d.get('phone_type','Celular'),d.get('phone'),d.get('email'),d.get('address'),d.get('city'),d.get('birth_date'),float(d.get('balance') or 0),d.get('observations'),now()))
         elif r=='devices': rid=write('INSERT INTO devices(unit,customer_id,brand,model,imei,serial,color,storage,status,photos,notes,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('brand'),d.get('model'),d.get('imei'),d.get('serial'),d.get('color'),d.get('storage'),d.get('status','Em bancada'),js(d.get('photos',[])),d.get('notes'),now()))
         elif r=='services':
             t=token(); price=float(d.get('price') or 0); cm=float(d.get('cost_material') or 0); cl=float(d.get('cost_labor') or 0); ce=float(d.get('cost_extra') or 0); ct=cm+cl+ce; profit=price-ct
-            rid=write('INSERT INTO services(unit,customer_id,device_id,kind,description,checklist,diagnosis,status,technician,technician_id,price,warranty,photos,notes,public_token,created_at,updated_at,cost_material,cost_labor,cost_extra,cost_total,profit,warranty_of_id,details_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('device_id') or None,d.get('kind','conserto'),d.get('description'),js(d.get('checklist',{})),d.get('diagnosis'),d.get('status','aberto'),d.get('technician'),d.get('technician_id') or None,price,d.get('warranty'),js(d.get('photos',[])),d.get('notes'),t,now(),now(),cm,cl,ce,ct,profit,d.get('warranty_of_id') or None,js(d.get('details',{}))))
+            rid=write('INSERT INTO services(unit,customer_id,device_id,kind,description,checklist,diagnosis,status,technician,price,warranty,photos,notes,public_token,created_at,updated_at,cost_material,cost_labor,cost_extra,cost_total,profit,warranty_of_id,details_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('device_id') or None,d.get('kind','conserto'),d.get('description'),js(d.get('checklist',{})),d.get('diagnosis'),d.get('status','aberto'),d.get('technician'),price,d.get('warranty'),js(d.get('photos',[])),d.get('notes'),t,now(),now(),cm,cl,ce,ct,profit,d.get('warranty_of_id') or None,js(d.get('details',{}))))
             if price>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),'entrada','Serviço',d.get('description') or 'Conserto',price,'service',rid,now()))
             if ct>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),'saida','Custo OS',d.get('description') or 'Custo de serviço',ct,'service_cost',rid,now()))
         elif r=='unlocks':
             t=token(); price=float(d.get('price') or 0); cm=float(d.get('cost_material') or 0); cl=float(d.get('cost_labor') or 0); ce=float(d.get('cost_extra') or 0); ct=cm+cl+ce; profit=price-ct
-            rid=write('INSERT INTO unlocks(unit,customer_id,device_id,brand,model,imei,kind,checklist,status,operator,technician_id,price,photos,notes,public_token,created_at,cost_material,cost_labor,cost_extra,cost_total,profit,warranty_of_id,details_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('device_id') or None,d.get('brand'),d.get('model'),d.get('imei'),d.get('kind'),js(d.get('checklist',{})),d.get('status','aberto'),d.get('operator'),d.get('technician_id') or None,price,js(d.get('photos',[])),d.get('notes'),t,now(),cm,cl,ce,ct,profit,d.get('warranty_of_id') or None,js(d.get('details',{}))))
+            rid=write('INSERT INTO unlocks(unit,customer_id,device_id,brand,model,imei,kind,checklist,status,operator,price,photos,notes,public_token,created_at,cost_material,cost_labor,cost_extra,cost_total,profit,warranty_of_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('device_id') or None,d.get('brand'),d.get('model'),d.get('imei'),d.get('kind'),js(d.get('checklist',{})),d.get('status','aberto'),d.get('operator'),price,js(d.get('photos',[])),d.get('notes'),t,now(),cm,cl,ce,ct,profit,d.get('warranty_of_id') or None))
             write('UPDATE unlocks SET details_json=? WHERE id=?',(js(d.get('details',{})),rid))
             if price>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),'entrada','Desbloqueio',d.get('kind') or 'Desbloqueio',price,'unlock',rid,now()))
             if ct>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),'saida','Custo Desbloqueio',d.get('kind') or 'Custo de desbloqueio',ct,'unlock_cost',rid,now()))
         elif r=='purchases':
             total=float(d.get('amount') or 0)+float(d.get('expenses') or 0)+float(d.get('freight') or 0); sp=float(d.get('suggested_price') or 0); sold=1 if str(d.get('sold','')).lower() in ('1','true','sim','on') else 0
             status='vendido' if sold else d.get('status','vitrine')
-            rid=write('INSERT INTO purchases(unit,customer_id,brand,model,imei,purchase_date,amount,expenses,freight,total_cost,suggested_price,expected_profit,photos,checklist,observations,status,created_at,sold,sale_date,sale_place,sale_price,sale_payment,sale_installments,sale_fee,sale_notes,storage,condition,color,battery_health,description,accessories,inventory_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('brand'),d.get('model'),d.get('imei'),d.get('purchase_date') or date.today().isoformat(),float(d.get('amount') or 0),float(d.get('expenses') or 0),float(d.get('freight') or 0),total,sp,sp-total,js(d.get('photos',[])),js(d.get('checklist',{})),d.get('observations'),status,now(),sold,d.get('sale_date'),d.get('sale_place'),float(d.get('sale_price') or 0),d.get('sale_payment'),int(d.get('sale_installments') or 1),float(d.get('sale_fee') or 0),d.get('sale_notes'),d.get('storage'),d.get('condition'),d.get('color'),d.get('battery_health'),d.get('description'),d.get('accessories'),None))
+            rid=write('INSERT INTO purchases(unit,customer_id,brand,model,imei,purchase_date,amount,expenses,freight,total_cost,suggested_price,expected_profit,photos,checklist,observations,status,created_at,sold,sale_date,sale_place,sale_price,sale_payment,sale_installments,sale_fee,sale_notes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('brand'),d.get('model'),d.get('imei'),d.get('purchase_date') or date.today().isoformat(),float(d.get('amount') or 0),float(d.get('expenses') or 0),float(d.get('freight') or 0),total,sp,sp-total,js(d.get('photos',[])),js(d.get('checklist',{})),d.get('observations'),status,now(),sold,d.get('sale_date'),d.get('sale_place'),float(d.get('sale_price') or 0),d.get('sale_payment'),int(d.get('sale_installments') or 1),float(d.get('sale_fee') or 0),d.get('sale_notes')))
             write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),'saida','Compra de aparelho',f"{d.get('brand','')} {d.get('model','')}",total,'purchase',rid,now()))
-            # Cada aparelho comprado também entra no estoque como unidade física.
-            inv_id=write('INSERT INTO inventory(unit,code,name,type,category,qty,min_qty,cost,price,supplier,compatibility,notes,created_at,purchase_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('imei') or f"AP-{rid}",f"{d.get('brand','')} {d.get('model','')}".strip(),'Aparelho','Vitrine',0 if sold else 1,0,total,sp,None,d.get('storage'),(d.get('description') or '')+' '+(d.get('accessories') or ''),now(),rid))
-            write('UPDATE purchases SET inventory_id=? WHERE id=?',(inv_id,rid))
             if sold and float(d.get('sale_price') or 0)>0:
                 net=float(d.get('sale_price') or 0)-float(d.get('sale_fee') or 0)
                 write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),'entrada','Venda de aparelho',f"{d.get('brand','')} {d.get('model','')}",net,'purchase_sale',rid,now()))
@@ -477,8 +454,7 @@ class Handler(BaseHTTPRequestHandler):
             rid=write('INSERT INTO sales(unit,customer_id,items,total,payment,created_at,payment_fee,net_total,payment_details) VALUES(?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('items'),total,d.get('payment'),now(),fee,net,d.get('payment_details')))
             write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),'entrada','Venda',d.get('items') or 'Venda',net,'sale',rid,now()))
             if str(d.get('payment') or '').lower()=='fiado':
-                due=d.get('due_date'); down=float(d.get('down_payment') or 0); balance=max(0,total-down); installments=max(1,int(d.get('installments') or 1)); inst_value=float(d.get('installment_value') or (balance/installments if installments else balance)); frequency=d.get('frequency') or 'Mensal (30 dias)'
-                fid=write('INSERT INTO fiado_accounts(unit,customer_id,source_type,source_id,description,total,down_payment,balance,due_date,status,notes,installments,installment_value,frequency,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,'sale',rid,d.get('items') or 'Venda fiada',total,down,balance,due,'aberto',d.get('payment_details'),installments,inst_value,frequency,now()))
+                due=d.get('due_date'); down=float(d.get('down_payment') or 0); balance=max(0,total-down); fid=write('INSERT INTO fiado_accounts(unit,customer_id,source_type,source_id,description,total,down_payment,balance,due_date,status,notes,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,'sale',rid,d.get('items') or 'Venda fiada',total,down,balance,due,'aberto',d.get('payment_details'),now()))
                 if down>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),'entrada','Fiado / Entrada',d.get('items') or 'Venda fiada',down,'fiado',fid,now()))
         elif r=='finance': rid=write('INSERT INTO finance(unit,type,category,description,amount,due_date,paid,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('type','entrada'),d.get('category'),d.get('description'),float(d.get('amount') or 0),d.get('due_date'),1 if d.get('paid',True) else 0,now()))
         elif r=='forgotten': rid=write('INSERT INTO forgotten(unit,brand,model,imei,possible_owner,phone,photos,checklist,notes,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('brand'),d.get('model'),d.get('imei'),d.get('possible_owner'),d.get('phone'),js(d.get('photos',[])),js(d.get('checklist',{})),d.get('notes'),d.get('status','aguardando identificação'),now()))
@@ -502,43 +478,19 @@ class Handler(BaseHTTPRequestHandler):
             rid=write('INSERT INTO catalog_products(unit,name,category,price,stock,image,active,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('name'),d.get('category'),float(d.get('price') or 0),float(d.get('stock') or 0),d.get('image'),1 if d.get('active',True) else 0,now()))
         elif r=='fiado':
             total=float(d.get('total') or 0); down=float(d.get('down_payment') or 0); balance=max(0,total-down); due=d.get('due_date'); status='pago' if balance<=0 else ('atrasado' if due and due<date.today().isoformat() else 'aberto')
-            installments=max(1,int(d.get('installments') or 1)); inst_value=float(d.get('installment_value') or (balance/installments if installments else balance)); frequency=d.get('frequency') or 'Mensal (30 dias)'
-            rid=write('INSERT INTO fiado_accounts(unit,customer_id,source_type,source_id,description,total,down_payment,balance,due_date,status,notes,installments,installment_value,frequency,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('source_type'),d.get('source_id') or None,d.get('description'),total,down,balance,due,status,d.get('notes'),installments,inst_value,frequency,now()))
+            rid=write('INSERT INTO fiado_accounts(unit,customer_id,source_type,source_id,description,total,down_payment,balance,due_date,status,notes,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('source_type'),d.get('source_id') or None,d.get('description'),total,down,balance,due,status,d.get('notes'),now()))
             if down>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),'entrada','Fiado / Entrada',d.get('description') or 'Entrada de fiado',down,'fiado',rid,now()))
         elif r=='film_compat': rid=write('INSERT INTO film_compat(brand,model,aliases,master_code,group_name,screen_size,fit_notes,source_note,confidence,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)',(d.get('brand'),d.get('model'),d.get('aliases'),d.get('master_code'),d.get('group_name'),d.get('screen_size'),d.get('fit_notes'),d.get('source_note','cadastro interno'),d.get('confidence','manual'),now()))
         elif r=='chat': rid=write('INSERT INTO chat(unit,user_name,message,created_at) VALUES(?,?,?,?)',(d.get('unit','TODOS'),u['name'],d.get('message'),now()))
         else:return self.json({'error':'Recurso não suportado'},404)
         audit(u['id'],'create',r,rid,js(d)); uu=dict(u); uu['unit']=d.get('unit',u.get('unit','TODOS')); activity(uu,'LOG',f'Criou {r}',r,rid,js(d)); push_undo(uu,f'Criou {r}',r,rid,{},d); return self.json({'ok':True,'id':rid})
     def update_api(self,r,d,u):
-        resource=r; table={'community':'community_posts','catalog-products':'catalog_products','fiado':'fiado_accounts'}.get(r,r); rid=d.get('id')
-        allowed={
-            'users':['name','email','role','unit','permissions','active'],
-            'customers':['type','name','document_type','document','phone_type','phone','email','address','city','birth_date','balance','observations'],
-            'services':['unit','customer_id','device_id','kind','description','diagnosis','status','technician','technician_id','price','warranty','notes','checklist','photos','cost_material','cost_labor','cost_extra','warranty_of_id','details_json'],
-            'unlocks':['unit','customer_id','device_id','brand','model','imei','kind','status','operator','technician_id','price','notes','checklist','photos','cost_material','cost_labor','cost_extra','warranty_of_id','details_json'],
-            'devices':['unit','customer_id','brand','model','imei','serial','color','storage','status','photos','notes'],
-            'forgotten':['unit','brand','model','imei','possible_owner','phone','status','notes','photos','checklist'],
-            'quotes':['unit','customer_id','device_id','items','subtotal','total','warranty_type','warranty_days','travel_enabled','travel_fee','quote_type','conditions','observations','valid_until','status'],
-            'inventory':['unit','code','name','type','category','qty','min_qty','price','cost','supplier','compatibility','notes'],
-            'purchases':['unit','customer_id','brand','model','imei','purchase_date','amount','expenses','freight','suggested_price','status','sold','sale_date','sale_place','sale_price','sale_payment','sale_installments','sale_fee','sale_notes','observations','storage','condition','color','battery_health','description','accessories','photos','checklist'],
-            'sales':['unit','customer_id','items','total','payment'],
-            'finance':['unit','type','category','description','amount','ref_type','ref_id','due_date','paid'],
-            'models':['brand','model','service_prices','margin','warranty','notes'],
-            'appointments':['unit','customer_id','title','service_type','start_at','end_at','status','technician','notes'],
-            'technicians':['unit','name','phone','email','specialties','active'],
-            'suppliers':['unit','name','document','phone','email','city','notes'],
-            'guarantees':['unit','customer_id','source_type','source_id','device','description','start_date','end_date','status','notes'],
-            'community':['unit','user_name','title','message','type','status'],
-            'referrals':['unit','customer_id','service_name','commission','referrer','link','status'],
-            'catalog-products':['unit','name','category','price','stock','image','active'],
-            'contracts':['unit','type','customer_id','device_id','payload','customer_signature','store_signature'],
-            'chat':['unit','message'],
-            'fiado':['unit','customer_id','source_type','source_id','description','total','down_payment','balance','due_date','status','notes','installments','installment_value','frequency']
-        }
-        if resource not in allowed:return self.json({'error':'Atualização não permitida'},400)
+        table=r; rid=d.get('id')
+        allowed={'services':['status','diagnosis','technician','price','warranty','notes','checklist','photos','cost_material','cost_labor','cost_extra','warranty_of_id','details_json'],'unlocks':['status','operator','price','notes','checklist','photos','cost_material','cost_labor','cost_extra','warranty_of_id','details_json'],'devices':['status','notes','photos'],'forgotten':['status','notes','possible_owner','photos'],'quotes':['status','valid_until','observations'],'inventory':['qty','min_qty','price','cost','compatibility','notes'],'purchases':['sold','sale_date','sale_place','sale_price','sale_payment','sale_installments','sale_fee','sale_notes','status','suggested_price','observations'],'appointments':['title','service_type','start_at','end_at','status','technician','notes'],'technicians':['name','phone','email','specialties','active'],'suppliers':['name','document','phone','email','city','notes'],'guarantees':['status','end_date','notes'],'community':['title','message','type','status'],'referrals':['service_name','commission','referrer','link','status'],'catalog-products':['name','category','price','stock','image','active']}
+        if table not in allowed:return self.json({'error':'Atualização não permitida'},400)
         before=one('SELECT * FROM '+table+' WHERE id=?',(rid,))
         if not before:return self.json({'error':'Registro não encontrado'},404)
-        fields=[f for f in allowed[resource] if f in d]; vals=[]
+        fields=[f for f in allowed[table] if f in d]; vals=[]
         if not fields:return self.json({'error':'Nenhum campo'},400)
         for f in fields:
             v=d[f]; v=js(v) if f in ('checklist','photos','details_json') and not isinstance(v,str) else v; vals.append(v)
@@ -549,19 +501,6 @@ class Handler(BaseHTTPRequestHandler):
         if table=='services' and 'updated_at' not in fields: fields.append('updated_at'); vals.append(now())
         vals.append(rid); write('UPDATE '+table+' SET '+','.join(f+'=?' for f in fields)+' WHERE id=?',vals)
         after=one('SELECT * FROM '+table+' WHERE id=?',(rid,))
-        if table=='purchases' and after:
-            total=float(after['amount'] or 0)+float(after['expenses'] or 0)+float(after['freight'] or 0)
-            suggested=float(after['suggested_price'] or 0)
-            sold=1 if str(after['sold'] or '').lower() in ('1','true','sim','on') or str(after['status'] or '').lower()=='vendido' else 0
-            write('UPDATE purchases SET total_cost=?,expected_profit=?,sold=?,status=? WHERE id=?',(total,suggested-total,sold,'vendido' if sold else after['status'],rid))
-            after=one('SELECT * FROM purchases WHERE id=?',(rid,))
-            inv=one('SELECT * FROM inventory WHERE purchase_id=?',(rid,))
-            if inv:
-                write('UPDATE inventory SET qty=? , name=?, price=?, cost=? WHERE id=?',(0 if sold else 1, f"{after['brand'] or ''} {after['model'] or ''}".strip(), suggested,total,inv['id']))
-        if table=='sales' and after:
-            write('DELETE FROM finance WHERE ref_type=? AND ref_id=?',('sale',rid))
-            if float(after['total'] or 0)>0:
-                write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(after['unit'],'entrada','Venda',after['items'] or 'Venda',float(after['total'] or 0),'sale',rid,now()))
         # V100: on finalization, process parts/products linked to the OS exactly once.
         if table=='services' and after and str(after['status'] or '') in ('entregue','pronto') and str(before['status'] or '') not in ('entregue','pronto'):
             try:
@@ -591,7 +530,7 @@ class Handler(BaseHTTPRequestHandler):
             write('DELETE FROM finance WHERE ref_type IN (?,?) AND ref_id=?',(rt,costrt,rid))
             if float(after['price'] or 0)>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(after['unit'],'entrada',label,after['description'] if table=='services' else after['kind'],float(after['price'] or 0),rt,rid,now()))
             if float(after['cost_total'] or 0)>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(after['unit'],'saida','Custo '+('OS' if table=='services' else 'Desbloqueio'),after['description'] if table=='services' else after['kind'],float(after['cost_total'] or 0),costrt,rid,now()))
-        audit(u['id'],'update',resource,rid,js(d)); uu=dict(u); uu['unit']=before['unit'] if 'unit' in before.keys() else u.get('unit','TODOS'); activity(uu,'LOG',f'Alterou {resource}',resource,rid,js(d)); push_undo(uu,f'Alterou {resource}',table,rid,dict(before),dict(after)); return self.json({'ok':True,'profit':float(after.get('profit',0) or 0)})
+        audit(u['id'],'update',table,rid,js(d)); uu=dict(u); uu['unit']=before['unit'] if 'unit' in before.keys() else u.get('unit','TODOS'); activity(uu,'LOG',f'Alterou {table}',table,rid,js(d)); push_undo(uu,f'Alterou {table}',table,rid,dict(before),dict(after)); return self.json({'ok':True,'profit':float(after.get('profit',0) or 0)})
     def do_DELETE(self):
         p=urlparse(self.path); u=self.require()
         if not u:return
@@ -663,21 +602,6 @@ class Handler(BaseHTTPRequestHandler):
                 total+=float(one(f'SELECT COALESCE(SUM(amount),0) n FROM finance WHERE ref_type=? AND ref_id IN ({marks})',(rt,*ids))['n'] or 0)
         last=one('SELECT MAX(created_at) v FROM services WHERE customer_id=?',(cid,))['v']
         return self.json({'id':cid,'service_count':count,'score':min(100,int(count)*10),'last_service':last,'total_spent':float(total or 0)})
-
-    def technician_stats(self,unit):
-        cond=''; args=[]
-        if unit!='TODOS': cond=' WHERE t.unit=?'; args=[unit]
-        techs=rows('SELECT t.* FROM technicians t'+cond+' ORDER BY t.name COLLATE NOCASE',(args if args else ()))
-        out=[]
-        for t in techs:
-            tid=t['id']; ucond=' AND s.unit=?' if unit!='TODOS' else ''; uargs=[tid]+([unit] if unit!='TODOS' else [])
-            svc=one('SELECT COUNT(*) n, COALESCE(SUM(price),0) revenue, COALESCE(SUM(cost_total),0) costs FROM services s WHERE (s.technician_id=? OR (s.technician_id IS NULL AND s.technician=?))'+ucond,[tid,t['name']]+([unit] if unit!='TODOS' else []))
-            unargs=[tid,t['name']]+([unit] if unit!='TODOS' else [])
-            unl=one('SELECT COUNT(*) n, COALESCE(SUM(price),0) revenue FROM unlocks x WHERE (x.technician_id=? OR (x.technician_id IS NULL AND x.operator=?))'+(' AND x.unit=?' if unit!='TODOS' else ''),unargs)
-            completed=one('SELECT COUNT(*) n FROM services s WHERE (s.technician_id=? OR (s.technician_id IS NULL AND s.technician=?)) AND s.status IN ("pronto","entregue","aprovado pelo cliente")'+ucond,[tid,t['name']]+([unit] if unit!='TODOS' else []))
-            total=int(svc['n'] or 0)+int(unl['n'] or 0); revenue=float(svc['revenue'] or 0)+float(unl['revenue'] or 0); costs=float(svc['costs'] or 0); score=min(100,total*8+int(completed['n'] or 0)*2)
-            out.append({**t,'service_count':total,'technical_count':int(svc['n'] or 0),'unlock_count':int(unl['n'] or 0),'completed_count':int(completed['n'] or 0),'earnings':revenue,'costs':costs,'profit':revenue-costs,'score':score})
-        return self.json(out)
 
     def film_search(self,q):
         q=(q or '').strip()
@@ -804,43 +728,6 @@ class Handler(BaseHTTPRequestHandler):
         if unit=='TODOS': return self.json(rows('SELECT * FROM activity_log ORDER BY id DESC LIMIT 200'))
         return self.json(rows('SELECT * FROM activity_log WHERE unit=? ORDER BY id DESC LIMIT 200',(unit,)))
     def undo_list(self): return self.json(rows('SELECT * FROM undo_stack WHERE undone=0 ORDER BY id DESC LIMIT 50'))
-    def admin_reset_db(self,d,u):
-        if u.get('role')!='admin':
-            return self.json({'error':'Somente administrador pode resetar o banco.'},403)
-        if str(d.get('confirmation','')).strip()!='ZERAR KV CELL':
-            return self.json({'error':'Confirmação inválida. Digite ZERAR KV CELL.'},400)
-        # Reset only operational/user-entered data. Keep the current administrator,
-        # settings and the built-in film compatibility catalog so the system remains
-        # immediately usable after the reset.
-        keep_user_id=int(u.get('id') or 0)
-        keep_tables={'users','settings','film_compat','sqlite_sequence'}
-        try:
-            c=db()
-            tables=[r['name'] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchall()]
-            cleared=[]
-            c.execute('PRAGMA foreign_keys=OFF')
-            c.execute('BEGIN')
-            for table in tables:
-                if table in keep_tables:
-                    continue
-                # Audit/activity/undo are intentionally cleared as part of the reset.
-                c.execute('DELETE FROM '+table)
-                cleared.append(table)
-            # Remove all users except the administrator who performed the reset.
-            c.execute('DELETE FROM users WHERE id<>?',(keep_user_id,))
-            c.execute('DELETE FROM sqlite_sequence')
-            # Preserve the administrator's existing primary key so the active session remains valid.
-            c.execute("UPDATE users SET active=1, role='admin' WHERE id=?",(keep_user_id,))
-            c.commit()
-            c.close()
-            # Persist the clean database to Square Cloud Blob, if enabled.
-            schedule_blob_sync()
-            return self.json({'ok':True,'message':'Banco de dados resetado. Os dados operacionais foram apagados e o administrador atual foi preservado.','cleared_tables':cleared})
-        except Exception as e:
-            try: c.rollback(); c.close()
-            except Exception: pass
-            return self.json({'error':'Falha ao resetar banco: '+str(e)},500)
-
     def undo_action(self,d,u):
         uid=int(d.get('id') or 0); r=one('SELECT * FROM undo_stack WHERE id=? AND undone=0',(uid,))
         if not r:return self.json({'error':'Ação não encontrada ou já desfeita.'},404)
@@ -885,6 +772,123 @@ class Handler(BaseHTTPRequestHandler):
 
     def inventory_csv(self):
         data=rows('SELECT * FROM inventory ORDER BY id DESC'); out=io.StringIO();w=csv.writer(out);w.writerow(data[0].keys() if data else ['id']);[w.writerow(x.values()) for x in data];return self.send(200,out.getvalue(),'text/csv')
+    def mdm_contracts(self,qs):
+        unit=qs.get('unit',['TODOS'])[0]
+        sql="""SELECT m.*,c.name customer_name,c.phone customer_phone,c.document customer_document,
+        COALESCE((SELECT SUM(i.paid_amount) FROM mdm_installments i WHERE i.contract_id=m.id),0) installment_paid,
+        (SELECT COUNT(*) FROM mdm_installments i WHERE i.contract_id=m.id AND i.status='paga') installments_paid_count,
+        (SELECT COUNT(*) FROM mdm_installments i WHERE i.contract_id=m.id AND i.status!='paga') installments_open_count
+        FROM mdm_contracts m LEFT JOIN customers c ON c.id=m.customer_id"""
+        args=[]
+        if unit!='TODOS': sql+=' WHERE m.unit=?'; args.append(unit)
+        sql+=' ORDER BY m.id DESC LIMIT 500'
+        data=rows(sql,args)
+        for x in data:
+            x['remaining']=max(0,float(x.get('installment_total') or 0)-float(x.get('installment_paid') or 0)-float(x.get('down_payment') or 0))
+        return self.json(data)
+
+    def mdm_summary(self,unit):
+        wh='' if unit=='TODOS' else ' WHERE unit=?'; args=[] if unit=='TODOS' else [unit]
+        total=one('SELECT COUNT(*) n FROM mdm_contracts'+wh,args)['n']
+        active=one("SELECT COUNT(*) n FROM mdm_contracts"+(wh+(' AND ' if wh else ' WHERE ')+'status IN (\'ativo\',\'restrito\',\'bloqueado\')'),args)['n']
+        blocked=one("SELECT COUNT(*) n FROM mdm_contracts"+(wh+(' AND ' if wh else ' WHERE ')+'policy_status=\'bloqueado\''),args)['n']
+        overdue=one("SELECT COUNT(*) n FROM mdm_installments i JOIN mdm_contracts m ON m.id=i.contract_id WHERE i.status!='paga' AND i.due_date<?"+(' AND m.unit=?' if unit!='TODOS' else ''),[date.today().isoformat()]+([] if unit=='TODOS' else [unit]))['n']
+        receivable=one("SELECT COALESCE(SUM(i.amount-i.paid_amount),0) n FROM mdm_installments i JOIN mdm_contracts m ON m.id=i.contract_id WHERE i.status!='paga'"+(' AND m.unit=?' if unit!='TODOS' else ''),([] if unit=='TODOS' else [unit]))['n']
+        return self.json({'contracts':total,'active':active,'blocked':blocked,'overdue_installments':overdue,'receivable':float(receivable or 0)})
+
+    def mdm_contract_detail(self,cid):
+        c=one('SELECT m.*,cu.name customer_name,cu.phone customer_phone,cu.document customer_document FROM mdm_contracts m LEFT JOIN customers cu ON cu.id=m.customer_id WHERE m.id=?',(cid,))
+        if not c:return self.json({'error':'Contrato MDM não encontrado.'},404)
+        c['installments']=rows('SELECT * FROM mdm_installments WHERE contract_id=? ORDER BY number',(cid,))
+        c['events']=rows('SELECT * FROM mdm_events WHERE contract_id=? ORDER BY id DESC LIMIT 100',(cid,))
+        return self.json(c)
+
+    def mdm_qr(self,token_value,public=False):
+        c=one('SELECT * FROM mdm_contracts WHERE enrollment_token=?',(token_value,))
+        if not c:return self.send(404,'QR não encontrado','text/plain')
+        server=os.environ.get('KVCELL_PUBLIC_URL','https://kvcell.squareweb.app').rstrip('/')
+        payload=json.dumps({'type':'KV_CELL_FINANCE_MDM','version':1,'server':server,'token':token_value,'contract':c['contract_number'],'expires':c['created_at']},ensure_ascii=False,separators=(',',':'))
+        deep='kvcellmdm://enroll?'+urllib.parse.urlencode({'server':server,'token':token_value,'contract':c['contract_number']})
+        try:
+            import qrcode
+            qr=qrcode.QRCode(version=None,error_correction=qrcode.constants.ERROR_CORRECT_M,box_size=8,border=4)
+            qr.add_data(deep); qr.make(fit=True); img=qr.make_image(); out=io.BytesIO(); img.save(out,format='PNG')
+            return self.send(200,out.getvalue(),'image/png',{'Content-Disposition':'inline; filename="kvcell-mdm-qr.png"'})
+        except Exception as e:
+            return self.json({'error':'Não foi possível gerar o QR','detail':str(e)},500)
+
+    def mdm_create(self,d,u):
+        unit=d.get('unit','TODOS'); customer_id=d.get('customer_id') or None; device_id=d.get('device_id') or None
+        total=float(d.get('installment_total') or d.get('total') or 0); count=int(d.get('installment_count') or 0); amount=float(d.get('installment_amount') or (total/count if count else 0)); down=float(d.get('down_payment') or 0)
+        contract='KVC-MDM-'+datetime.now().strftime('%Y%m%d')+'-'+secrets.token_hex(3).upper(); enrollment=secrets.token_urlsafe(24); device_token=secrets.token_urlsafe(32)
+        rid=write('INSERT INTO mdm_contracts(unit,customer_id,device_id,contract_number,enrollment_token,device_token,brand,model,imei,serial,device_name,status,policy_status,installment_total,installment_count,installment_amount,down_payment,paid_amount,next_due_date,payment_url,pix_copy_paste,notes,metadata_json,created_at,updated_at,app_version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(unit,customer_id,device_id,contract,enrollment,device_token,d.get('brand'),d.get('model'),d.get('imei'),d.get('serial'),d.get('device_name'), 'aguardando','normal',total,count,amount,down,down,d.get('next_due_date'),d.get('payment_url'),d.get('pix_copy_paste'),d.get('notes'),js(d.get('metadata',{})),now(),now(),''))
+        start=date.fromisoformat(str(d.get('first_due_date'))[:10]) if d.get('first_due_date') else date.today()+timedelta(days=30)
+        for i in range(1,count+1):
+            due=(start+timedelta(days=30*(i-1))).isoformat(); st='paga' if i==1 and down>=amount else 'aberta'; paid=amount if st=='paga' else 0
+            write('INSERT INTO mdm_installments(contract_id,number,due_date,amount,paid_amount,status,created_at) VALUES(?,?,?,?,?,?,?)',(rid,i,due,amount,paid,st,now()))
+        write('INSERT INTO mdm_events(contract_id,device_token,event_type,payload,created_at) VALUES(?,?,?,?,?)',(rid,device_token,'created',js({'unit':unit,'customer_id':customer_id}),now()))
+        return self.json({'ok':True,'id':rid,'contract_number':contract,'enrollment_token':enrollment,'device_token':device_token,'qr_url':f'/api/mdm/qr?token={urllib.parse.quote(enrollment)}','public_qr':f'/public/mdm/qr/{enrollment}'})
+
+    def mdm_action(self,d,u):
+        cid=int(d.get('contract_id') or 0); action=d.get('action','')
+        c=one('SELECT * FROM mdm_contracts WHERE id=?',(cid,))
+        if not c:return self.json({'error':'Contrato MDM não encontrado.'},404)
+        mapping={'activate':('ativo','normal'),'restrict':('restrito','restrito'),'lock':('bloqueado','bloqueado'),'unlock':('ativo','normal'),'pause':('pausado','normal'),'revoke':('revogado','normal')}
+        if action not in mapping:return self.json({'error':'Ação MDM inválida.'},400)
+        status,policy=mapping[action]; write('UPDATE mdm_contracts SET status=?,policy_status=?,updated_at=? WHERE id=?',(status,policy,now(),cid)); write('INSERT INTO mdm_events(contract_id,device_token,event_type,payload,created_at) VALUES(?,?,?,?,?)',(cid,c['device_token'],action,js({'by':u.get('name')}),now())); audit(u['id'],'mdm_'+action,'mdm_contracts',cid,js({'policy':policy}))
+        return self.json({'ok':True,'status':status,'policy_status':policy})
+
+    def mdm_record_payment(self,d,u):
+        cid=int(d.get('contract_id') or 0); iid=int(d.get('installment_id') or 0); amount=float(d.get('amount') or 0)
+        inst=one('SELECT * FROM mdm_installments WHERE id=?',(iid,)) if iid else None
+        c=one('SELECT * FROM mdm_contracts WHERE id=?',(cid,))
+        if inst: cid=inst['contract_id']; c=one('SELECT * FROM mdm_contracts WHERE id=?',(cid,))
+        if not c or amount<=0:return self.json({'error':'Contrato/parcela inválidos.'},400)
+        if not inst:
+            inst=one('SELECT * FROM mdm_installments WHERE contract_id=? AND status!=\'paga\' ORDER BY number LIMIT 1',(cid,))
+        if not inst:return self.json({'error':'Não há parcelas em aberto.'},400)
+        newpaid=min(float(inst['amount']),float(inst['paid_amount'] or 0)+amount); status='paga' if newpaid>=float(inst['amount']) else 'parcial'; paid_at=now() if status=='paga' else None
+        write('UPDATE mdm_installments SET paid_amount=?,status=?,paid_at=?,payment_ref=? WHERE id=?',(newpaid,status,paid_at,d.get('payment_ref'),inst['id']))
+        totalpaid=float(one('SELECT COALESCE(SUM(paid_amount),0) n FROM mdm_installments WHERE contract_id=?',(cid,))['n'] or 0)+float(c.get('down_payment') or 0)
+        nexti=one('SELECT due_date FROM mdm_installments WHERE contract_id=? AND status!=\'paga\' ORDER BY number LIMIT 1',(cid,)); policy='normal' if nexti and nexti['due_date']>=date.today().isoformat() else ('restrito' if nexti else 'normal')
+        write('UPDATE mdm_contracts SET paid_amount=?,next_due_date=?,policy_status=?,status=?,updated_at=? WHERE id=?',(totalpaid,nexti['due_date'] if nexti else None,policy,'ativo' if nexti else 'quitado',now(),cid))
+        write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(c['unit'],'entrada','Crediário MDM','Parcela '+str(inst['number'])+' • '+c['contract_number'],amount,'mdm_payment',inst['id'],now()))
+        write('INSERT INTO mdm_events(contract_id,device_token,event_type,payload,created_at) VALUES(?,?,?,?,?)',(cid,c['device_token'],'payment',js({'amount':amount,'installment':inst['number']}),now()))
+        return self.json({'ok':True,'installment_id':inst['id'],'status':status,'paid_amount':newpaid,'next_due_date':nexti['due_date'] if nexti else None,'policy_status':policy})
+
+    def mdm_enroll(self,d):
+        token_value=d.get('enrollment_token') or d.get('token'); c=one('SELECT * FROM mdm_contracts WHERE enrollment_token=?',(token_value,))
+        if not c:return self.json({'error':'Token de matrícula inválido ou expirado.'},401)
+        device_token=c['device_token'];
+        updates=(d.get('brand') or c['brand'],d.get('model') or c['model'],d.get('imei') or c['imei'],d.get('serial') or c['serial'],d.get('device_name') or c['device_name'],d.get('app_version') or c['app_version'],now(),self.client_address[0],device_token)
+        write('UPDATE mdm_contracts SET brand=?,model=?,imei=?,serial=?,device_name=?,app_version=?,status=\'ativo\',last_seen=?,last_ip=?,updated_at=? WHERE device_token=?',(updates[0],updates[1],updates[2],updates[3],updates[4],updates[5],updates[6],updates[7],now(),device_token))
+        write('INSERT INTO mdm_events(contract_id,device_token,event_type,payload,created_at) VALUES(?,?,?,?,?)',(c['id'],device_token,'enrolled',js(d),now()))
+        return self.json({'ok':True,'device_token':device_token,'server_time':now(),'policy_status':c['policy_status'],'status':'ativo'})
+
+    def mdm_heartbeat(self,d):
+        token_value=d.get('device_token'); c=one('SELECT * FROM mdm_contracts WHERE device_token=?',(token_value,))
+        if not c:return self.json({'error':'Dispositivo não matriculado.'},401)
+        write('UPDATE mdm_contracts SET last_seen=?,last_ip=?,updated_at=?,app_version=? WHERE id=?',(now(),self.client_address[0],now(),d.get('app_version') or c['app_version'],c['id']))
+        inst=one('SELECT * FROM mdm_installments WHERE contract_id=? AND status!=\'paga\' ORDER BY number LIMIT 1',(c['id'],))
+        today=date.today().isoformat(); policy=c['policy_status'];
+        if inst and str(inst['due_date'])[:10]<today and policy=='normal': policy='restrito'; write('UPDATE mdm_contracts SET policy_status=?,status=?,updated_at=? WHERE id=?',(policy,'restrito',now(),c['id']))
+        days=(date.fromisoformat(str(inst['due_date'])[:10])-date.today()).days if inst and inst.get('due_date') else 0
+        count=int(one('SELECT COUNT(*) n FROM mdm_installments WHERE contract_id=?',(c['id'],))['n'] or 0)
+        paid_count=int(one("SELECT COUNT(*) n FROM mdm_installments WHERE contract_id=? AND status='paga'",(c['id'],))['n'] or 0)
+        remaining=max(0,float(c.get('installment_total') or 0)-float(c.get('down_payment') or 0)-float(one('SELECT COALESCE(SUM(paid_amount),0) n FROM mdm_installments WHERE contract_id=?',(c['id'],))['n'] or 0))
+        return self.json({'ok':True,'status':c['status'],'policy_status':policy,'contract_number':c['contract_number'],'installment':inst,'installment_count':count,'installments_paid':paid_count,'installments_left':max(0,count-paid_count),'days_remaining':days,'remaining_total':remaining,'payment_url':c['payment_url'],'pix_copy_paste':c['pix_copy_paste'],'server_time':now()})
+
+    def mdm_public_device(self,device_token):
+        c=one('SELECT m.contract_number,m.brand,m.model,m.device_name,m.installment_total,m.installment_count,m.installment_amount,m.down_payment,m.paid_amount,m.next_due_date,m.policy_status,m.status,cu.name customer_name FROM mdm_contracts m LEFT JOIN customers cu ON cu.id=m.customer_id WHERE m.device_token=?',(device_token,))
+        if not c:return self.json({'error':'Dispositivo não encontrado.'},404)
+        c['installments']=rows('SELECT number,due_date,amount,paid_amount,status,paid_at FROM mdm_installments WHERE contract_id=(SELECT id FROM mdm_contracts WHERE device_token=?) ORDER BY number',(device_token,))
+        return self.json(c)
+
+    def mdm_payment_intent(self,d):
+        token_value=d.get('device_token'); c=one('SELECT * FROM mdm_contracts WHERE device_token=?',(token_value,))
+        if not c:return self.json({'error':'Dispositivo não encontrado.'},404)
+        return self.json({'ok':True,'contract_number':c['contract_number'],'payment_url':c['payment_url'],'pix_copy_paste':c['pix_copy_paste'],'message':'Configure payment_url/pix_copy_paste no contrato ou conecte um gateway no servidor.'})
+
     def backup(self):
         buf=io.BytesIO();
         with zipfile.ZipFile(buf,'w',zipfile.ZIP_DEFLATED) as z:

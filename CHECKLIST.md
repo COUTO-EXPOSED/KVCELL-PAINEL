@@ -27,3 +27,17 @@
 - [x] Retry Gemini para 429/5xx
 - [x] Fallback de interface quando IA estiver indisponível
 - [x] Sem aba Termos na navegação V10
+
+## V101 ADDITIVE CHECK
+- [x] V100 ZIP preserved as base
+- [x] ADB/Antivírus cockpit expanded
+- [x] Complete technical device sheet added
+- [x] Authorized diagnostic terminal UI added
+- [x] Crediário MDM tables/API added
+- [x] QR enrollment endpoint added
+- [x] MDM payment/installment ledger added
+- [x] MDM policy actions added
+- [x] Android companion source added
+- [x] Device Owner/Lock Task flow documented
+- [x] App shows next due date, days remaining, installments remaining and balance
+- [x] No provider API keys or signing keys included

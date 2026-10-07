@@ -1,71 +1,111 @@
-# KV CELL ULTIMATE SUPREME V300
+# KV CELL OS PREMIUM — ULTIMATE SUPREME V100
 
-Atualização do KV CELL OS PREMIUM com foco em fidelidade operacional às telas de referência enviadas pelo cliente, analytics e vínculo real entre Técnicos e Ordens de Serviço.
+Versão V100 consolidada do KV CELL OS PREMIUM para Square Cloud.
 
-## V300 — principais mudanças
+## Principais módulos
 
-- Remove da navegação lateral: Meu Plano, Catálogo Digital e Serviços e Indicações.
-- Controle de Fiado remodelado no padrão da referência:
-  - Promissórias / CRM + Cobrança;
-  - Total Geral, A Receber, Recebido e Vencido;
-  - gráfico de distribuição por status;
-  - evolução mensal;
-  - busca de promissórias;
-  - Nova Promissória com cliente, total, entrada, parcelas, frequência, primeiro vencimento, descrição e produtos;
-  - detalhes e histórico de pagamentos;
-  - relatório CSV e impressão.
-- Clientes agora possui contadores, ticket médio, distribuição por recorrência e ranking visual.
-- Financeiro agora possui KPIs de entradas, saídas, lucro e saldo, evolução de 14 dias e distribuição por categoria.
-- Radar de Recompra agora possui segmentação, contadores, distribuição visual e ranking de potencial de recompra.
-- Técnicos agora possuem score, serviços efetuados, ganhos totais, lucro, concluídos e ranking.
-- Ao cadastrar um técnico, a Nova OS permite selecionar o técnico cadastrado. A OS grava `technician_id` e o nome; os indicadores são calculados pelo vínculo real. Registros antigos também podem ser reconhecidos pelo nome.
-- ADB & Antivírus deixou de ser uma tela vazia e ganhou três áreas de bancada:
-  - Ant Virus;
-  - ADB & Diagnóstico Android;
-  - iPhone / iPad;
-  com conexão USB, instruções de preparo e status.
-- Desbloqueio continua sem checklist de entrada e sem garantia, conforme solicitado.
-- Cliente na OS continua sendo selecionado pelo início do nome ou telefone, sem exibir ID interno.
+- Dashboard com filtro global TODOS / LAGOS / MAGÉ
+- Ordens de Serviço unificadas: assistência técnica + desbloqueios
+- OS técnica completa com cliente, aparelho, IMEI/SN, PIN/padrão, checklist, mapa de avarias, fotos, peças, produtos, custos, técnico, bancada, previsão e aprovação pública
+- OS de desbloqueio profissional sem checklist e sem garantia após finalização
+- Busca de cliente por início do nome ou telefone; ao selecionar, o ID interno nunca é exibido ao usuário
+- Agenda
+- Orçamentos com link público e aprovação/recusa
+- Precificação
+- Garantias
+- Controle de Fiado integrado a OS, desbloqueios e vendas, com parcelas e recebimento
+- Clientes / CRM / Radar de Recompra
+- Técnicos e fornecedores
+- Compra e Venda / Vitrine
+- Estoque
+- Financeiro e lucro
+- PDV / vendas
+- Catálogo Digital
+- Películas / compatibilidade
+- Comunidade e área preparada para Messenger
+- Serviços e Indicações
+- Funcionários / permissões
+- Administração / backup
+- Chat entre unidades separado da I.A. e dos Logs
+- I.A. separada: OpenRouter Free como principal e Gemini como fallback
+- Persistência opcional do SQLite via Square Cloud Blob
 
-## Persistência / Square Cloud
+## IA
 
-O projeto mantém o SQLite em `KVCELL_DATA_DIR` (padrão `/application/data`) e a estrutura de sincronização opcional com Square Cloud Blob.
-
-## Variáveis de ambiente
+Configure no Square Cloud:
 
 ```text
-PORT=80
-ADMIN_EMAIL=admin@kvcell.local
-ADMIN_PASSWORD=troque-esta-senha
-OPENROUTER_API_KEY=
+OPENROUTER_API_KEY=...
 OPENROUTER_MODEL=openrouter/free
 OPENROUTER_HTTP_REFERER=https://kvcell.squareweb.app/
-GEMINI_API_KEY=
+```
+
+Gemini fica somente como fallback:
+
+```text
+GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-2.5-flash
-SQUARE_BLOB_API_KEY=
-SQUARE_BLOB_ACCOUNT_ID=
+```
+
+A IA continua exigindo `/bot` no endpoint técnico. O frontend da aba I.A. adiciona esse prefixo automaticamente.
+
+## Banco persistente
+
+Para não perder o banco ao publicar outro ZIP, configure:
+
+```text
+SQUARE_BLOB_API_KEY=...
+SQUARE_BLOB_ACCOUNT_ID=...
 SQUARE_BLOB_DB_NAME=kvcell_database
 SQUARE_BLOB_PREFIX=kvcell
 SQUARE_BLOB_PUBLIC_URL=
-KVCELL_DB_ENCRYPTION_KEY=
+KVCELL_DB_ENCRYPTION_KEY=<Fernet key>
 KVCELL_DATA_DIR=/application/data
 ```
 
-## Validação
+Nunca coloque chaves reais no GitHub ou no ZIP.
 
-- Python `py_compile`: OK
-- JavaScript `node --check`: OK
-- API smoke V300: OK
-- ZIP integrity: verificar antes do deploy
+## Square Cloud
 
-Não coloque chaves de API reais no GitHub nem no frontend.
+- Porta: 80
+- Bind: 0.0.0.0
+- Publicação Web habilitada para o domínio squareweb.app
 
+## Testes realizados
 
-## V300 — restauração operacional
-- OS técnica voltou a ter botões de status na própria listagem; cada alteração atualiza o mesmo link público do cliente.
-- Botão direto de Garantia em cada OS técnica.
-- OS de desbloqueio separada, sem IMEI, número de série, operadora original, credenciais de conta, PIN/padrão ou fotos no formulário.
-- OS técnica mantém fotos e ganhou seleção de senha por Desenho ou PIN de 4–6 dígitos com grade de 9 bolinhas.
-- Técnico continua vindo do cadastro de Técnicos e fica vinculado por `technician_id`.
-- Aparelhos e Abandonados foram unificados em uma única central, com estados rápidos na própria tabela.
-- As demais funções V101 foram preservadas; V300 adiciona os fluxos acima em vez de remover recursos úteis.
+- `python -m py_compile app.py`
+- `node --check static/app.js`
+- health/login
+- criação de cliente
+- criação de OS técnica
+- criação de OS de desbloqueio sem checklist
+- busca/seleção de cliente
+- fiado e recebimento
+- agenda
+- técnicos
+- fornecedores
+- garantias
+- comunidade
+- indicações
+- catálogo
+- aprovação pública de OS
+- integridade do ZIP
+
+## V101 — ADB/Antivírus + Crediário MDM
+
+Esta atualização é aditiva sobre a V100. O módulo ADB/Antivírus agora possui cockpit técnico com Hub, Diagnóstico, Laudo, Controles, Tela, Terminal autorizado, Galeria, Recuperação, Backup e Ferramentas. A ficha técnica contempla Identificação, Software, Hardware, Armazenamento/Bateria e Rede/Segurança.
+
+Foi adicionado o Crediário MDM com:
+- contratos por cliente/unidade;
+- parcelas, entrada, vencimento e saldo;
+- QR de matrícula por token;
+- aplicativo Android companion em `android-kvcell-finance-mdm/`;
+- heartbeat e sincronização de política;
+- estados normal, restrito, bloqueado, pausado, revogado e quitado;
+- registro de eventos e pagamentos no financeiro;
+- link de pagamento/PIX configurável;
+- contagem de parcelas restantes e dias até vencimento no app;
+- modo de cobrança visível usando Device Owner/Lock Task somente quando o aparelho foi provisionado legitimamente.
+
+### Produção do aplicativo
+O projeto Android não inclui uma chave privada de assinatura. Gere o APK assinado pela KV CELL e publique-o em HTTPS antes de usar o QR em aparelhos reais. Para Device Owner, siga o provisionamento oficial do Android; o QR deste painel é um QR de vínculo do contrato, não um bypass do provisionamento Android.
