@@ -1,0 +1,17 @@
+KV CELL OS PREMIUM ULTIMATE SUPREME V700
+
+Base: V600.2
+Focus: ADB & Antivírus + Crediário/MDM + visible MDM navigation.
+
+IMPORTANT ADB:
+1. Chrome/Edge: use SELECIONAR DISPOSITIVO USB / FORÇAR ADB. The browser USB chooser no longer calls localhost first.
+2. Real ADB commands, terminal, diagnostics, screenshot and APK injection still require the local KV CELL ADB Bridge on the bench PC.
+3. Start tools/INICIAR_KV_CELL_BRIDGE.bat when real ADB commands are needed.
+4. The browser selector alone is WebUSB selection; it is not a full ADB implementation.
+
+IMPORTANT MDM:
+1. MDM is visible as its own sidebar module: Crediário / MDM.
+2. QR ADB FORCE APP is a matrícula/deep-link QR. It is not an Android security bypass.
+3. INJETAR O APP MDM KV CELL PELO ADB DO CELULAR installs an authorized APK through the local ADB bridge.
+4. Android Device Owner follows Android Enterprise restrictions and must be legitimately provisioned.
+5. Automatic lock is a policy emitted by the server and physically applied by the legitimately provisioned KV CELL agent.

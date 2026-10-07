@@ -830,7 +830,7 @@ function deviceDetailsV300(id){api('/api/devices?unit=TODOS').then(ds=>{const d=
 
 // Sidebar V300: removes only the redundant separate abandoned tab; all other useful modules remain.
 boot=async function(){
- document.body.innerHTML=`<div class="shell v100-shell"><aside class="sidebar"><div class="brand"><div class="logo-wrap"><div class="logo">KV</div></div><div><b>KV CELL</b><small>ULTIMATE SUPREME • V500</small></div></div><div class="nav"><div class="navtitle">PAINEL</div>${['dashboard'].map(nav).join('')}<div class="navtitle">ATENDIMENTO</div>${['services','agenda','quotes','pricing','adb','guarantees','fiado'].map(nav).join('')}<div class="navtitle">CADASTROS</div>${['customers','radar','technicians','purchases','suppliers'].map(nav).join('')}<div class="navtitle">OPERAÇÃO</div>${['inventory','finance','pdv','devices'].map(nav).join('')}<div class="navtitle">DIGITAL</div>${['films','community'].map(nav).join('')}<div class="navtitle">SISTEMA</div>${['employees','chat_units','ai','logs','admin','settings'].map(nav).join('')}</div></aside><main class="main"><div class="topbar"><div><b id="crumb">Painel</b><div class="crumb">KV CELL ULTIMATE SUPREME • LAGOS + MAGÉ • V300</div></div><div class="top-actions"><select id="unit" class="select unit"><option>TODOS</option><option>LAGOS</option><option>MAGÉ</option></select><button class="btn ghost" onclick="openSearch()">⌕ Buscar</button><button class="btn ghost" onclick="logout()">Sair</button></div></div><div id="content"></div></main></div><div id="modal" class="modal"></div><div id="toast" class="toast"></div>`;
+ document.body.innerHTML=`<div class="shell v100-shell"><aside class="sidebar"><div class="brand"><div class="logo-wrap"><div class="logo">KV</div></div><div><b>KV CELL</b><small>ULTIMATE SUPREME • V700</small></div></div><div class="nav"><div class="navtitle">PAINEL</div>${['dashboard'].map(nav).join('')}<div class="navtitle">ATENDIMENTO</div>${['services','agenda','quotes','pricing','adb','guarantees','fiado'].map(nav).join('')}<div class="navtitle">CADASTROS</div>${['customers','radar','technicians','purchases','suppliers'].map(nav).join('')}<div class="navtitle">OPERAÇÃO</div>${['inventory','finance','pdv','devices'].map(nav).join('')}<div class="navtitle">DIGITAL</div>${['films','community'].map(nav).join('')}<div class="navtitle">SISTEMA</div>${['employees','chat_units','ai','logs','admin','settings'].map(nav).join('')}</div></aside><main class="main"><div class="topbar"><div><b id="crumb">Painel</b><div class="crumb">KV CELL ULTIMATE SUPREME • LAGOS + MAGÉ • V300</div></div><div class="top-actions"><select id="unit" class="select unit"><option>TODOS</option><option>LAGOS</option><option>MAGÉ</option></select><button class="btn ghost" onclick="openSearch()">⌕ Buscar</button><button class="btn ghost" onclick="logout()">Sair</button></div></div><div id="content"></div></main></div><div id="modal" class="modal"></div><div id="toast" class="toast"></div>`;
  $('#unit').value=UNIT;$('#unit').onchange=e=>{UNIT=e.target.value;localStorage.setItem('kv_unit',UNIT);render()};render();
 };
 /* =========================================================
@@ -972,7 +972,7 @@ window.addPdvItemV502=function(item){const key='p'+item.purchase_id;const found=
 window.renderPdvV502=async function(){const d=await api('/api/purchases?unit='+encodeURIComponent(UNIT));const q=String(window.__pdvFilterV502||'').toLowerCase();const items=d.filter(x=>x.status==='vitrine'&&!x.sold&&(!q||`${x.brand||''} ${x.model||''} ${x.imei||''}`.toLowerCase().includes(q)));const subtotal=window.__pdvCartV502.reduce((s,x)=>s+Number(x.price||0),0);const discount=Math.max(0,Number(window.__pdvDiscountV502||0));const total=Math.max(0,subtotal-discount);$('#content').innerHTML=analyticsHeader('PDV / Vendas','Vitrine integrada • busca • carrinho • cliente • pagamento • baixa automática',`<button class="btn ghost" onclick="window.__pdvCartV502=[];window.__pdvDiscountV502=0;renderPdvV502()">Limpar</button>`)+`<div class="pdv-v502"><section class="panel"><div class="pdv-search"><input class="input" id="pdvSearchV502" value="${esc(window.__pdvFilterV502)}" placeholder="Buscar marca, modelo ou IMEI"><button class="btn" onclick="window.__pdvFilterV502=$('#pdvSearchV502').value;renderPdvV502()">Buscar</button></div><div class="mini-dashboard"><div><span>Vitrine disponível</span><b>${items.length}</b></div><div><span>Itens no carrinho</span><b>${window.__pdvCartV502.length}</b></div><div><span>Total</span><b>${money(total)}</b></div></div><div class="pdv-products">${items.map(x=>`<article class="pdv-card"><div class="vitrine-photo">📱</div><span class="tag">${esc(x.brand||'')} • VITRINE</span><b>${esc(x.model||'Aparelho')}</b><p>${esc((()=>{try{const z=JSON.parse(x.details_json||'{}');return z.description||z.condition||z.color||''}catch{return ''}})())}</p><strong>${money(x.suggested_price||0)}</strong><button class="btn" onclick="addPdvItemV502({purchase_id:${Number(x.id)},brand:'${esc(x.brand||'').replace(/'/g,"\\'")}',model:'${esc(x.model||'').replace(/'/g,"\\'")}',imei:'${esc(x.imei||'').replace(/'/g,"\\'")}',price:${Number(x.suggested_price||0)}})">Adicionar</button></article>`).join('')||'<div class="pdv-empty">Nenhum aparelho na Vitrine. Coloque o aparelho em Vitrine para liberá-lo no PDV.</div>'}</div></section><aside class="panel pdv-cart"><h2>Carrinho</h2>${window.__pdvCartV502.map(x=>`<div class="cart-line"><div><b>${esc(x.brand||'')} ${esc(x.model||'')}</b><small class="muted">${esc(x.imei||'')}</small></div><span>${money(x.price)}</span><button class="iconbtn danger" onclick="removePdvItemV502('${x.key}')">×</button></div>`).join('')||'<p class="muted">Selecione um aparelho da Vitrine.</p>'}${customerPickerV500('pdv_customer_id','Cliente')}<div class="field" style="margin-top:10px"><label>Desconto</label><input class="input" id="pdvDiscountV502" type="number" value="${discount}" oninput="window.__pdvDiscountV502=Number(this.value||0);renderPdvV502()"></div><div class="field" style="margin-top:10px"><label>Pagamento</label><select class="select" id="pdvPaymentV502"><option>PIX</option><option>Dinheiro</option><option>Débito</option><option>Crédito</option><option>Transferência</option><option>Fiado/Crediário</option></select></div><div class="kpi"><span>Subtotal</span><b>${money(subtotal)}</b></div><div class="kpi"><span>Desconto</span><b>${money(discount)}</b></div><div class="kpi"><span>Total</span><b class="yellow">${money(total)}</b></div><button class="btn" style="width:100%;margin-top:12px" onclick="closePdvV502(${total})">Finalizar venda</button></aside></div>`};
 window.closePdvV502=async function(total){if(!window.__pdvCartV502.length)return toast('Adicione um aparelho ao carrinho.','error');const customer=Number($('#pdv_customer_id')?.value||0)||null;const payment=$('#pdvPaymentV502')?.value||'PIX';const subtotal=window.__pdvCartV502.reduce((s,x)=>s+Number(x.price||0),0);const factor=subtotal>0?Math.max(0,Number(total||0))/subtotal:1;for(const x of window.__pdvCartV502){await api('/api/sales',{method:'POST',body:JSON.stringify({unit:UNIT,customer_id:customer,purchase_id:x.purchase_id,items:`${x.brand||''} ${x.model||''}`,total:Number((Number(x.price||0)*factor).toFixed(2)),payment})})}window.__pdvCartV502=[];window.__pdvDiscountV502=0;toast('Venda finalizada • Vitrine/Compra e Venda sincronizadas');await renderPdvV502()};pages.pdv=async()=>{window.__pdvCartV502=window.__pdvCartV502||[];await renderPdvV502();setTimeout(wirePickersV500,40)};
 pages.films=async()=>{const q=localStorage.getItem('film_q')||'';const d=await api('/api/films/search?q='+encodeURIComponent(q));const groups={};d.forEach(x=>{const g=x.group_name||x.master_code||'Sem grupo';(groups[g]??=[]).push(x)});$('#content').innerHTML=analyticsHeader('Películas','Busca direta e reversa por aparelho, aliases, código master e grupo. Relações de compatibilidade são referência de bancada e devem ser confirmadas fisicamente.',`<button class="btn" onclick="filmForm()">＋ Cadastrar Compatibilidade</button><button class="btn dark" onclick="filmResearchInfo()">ℹ Critérios</button>`)+`<section class="panel"><div class="pdv-search"><input class="input" id="filmSearchV502" value="${esc(q)}" placeholder="Modelo, apelido, código master ou grupo"><button class="btn" onclick="localStorage.setItem('film_q',$('#filmSearchV502').value);render()">Pesquisar</button><button class="btn ghost" onclick="localStorage.removeItem('film_q');render()">Limpar</button></div><div class="cards"><div class="metric"><div class="label">REGISTROS</div><div class="value">${d.length}</div></div><div class="metric"><div class="label">GRUPOS</div><div class="value">${Object.keys(groups).length}</div></div><div class="metric"><div class="label">MARCAS</div><div class="value">${new Set(d.map(x=>x.brand)).size}</div></div><div class="metric"><div class="label">BUSCA REVERSA</div><div class="value green">ATIVA</div></div></div></section><section class="panel"><div class="table-wrap"><table class="table"><thead><tr><th>Marca</th><th>Aparelho</th><th>Grupo / Master</th><th>Tela</th><th>Confiança</th><th>Ação</th></tr></thead><tbody>${d.map(x=>`<tr><td>${esc(x.brand)}</td><td><b>${esc(x.model)}</b><br><small>${esc(x.aliases||'')}</small></td><td>${esc(x.group_name||'—')}<br><small>${esc(x.master_code||'—')}</small></td><td>${esc(x.screen_size||'—')}</td><td>${badge(x.confidence||'manual')}</td><td><button class="iconbtn" onclick="filmGroupV502('${String(x.group_name||x.master_code||'').replace(/'/g,"\\'")}')">↔ Compatíveis</button></td></tr>`).join('')||'<tr><td colspan="6">Nenhuma compatibilidade encontrada.</td></tr>'}</tbody></table></div></section>`};window.filmGroupV502=async function(group){const d=await api('/api/films/search?q='+encodeURIComponent(group));formModal('Compatibilidade reversa • '+group,`<p class="muted">Modelos cadastrados no mesmo grupo/código. Confirme recorte, borda e sensores antes da aplicação.</p>${table(d,[['brand','Marca'],['model','Modelo'],['master_code','Master'],['screen_size','Tela'],['fit_notes','Observação'],['confidence','Confiança']])}`,async()=>closeModal())};window.filmResearchInfo=function(){formModal('Critérios da base de películas',`<div class="panel"><h3>Critérios</h3><p>O catálogo combina modelo, aliases, grupo/código master, tela, observação de encaixe e confiança. Catálogos públicos apontam que muitos modelos compartilham moldes, mas também mostram exceções; por isso o KV CELL não transforma tamanho de tela sozinho em “compatibilidade 100%”.</p><p><b>Fluxo recomendado:</b> buscar aparelho → ver grupo → comparar recorte/câmera/sensores → marcar confirmação de bancada.</p></div>`,async()=>closeModal())};
-boot=async function(){document.body.innerHTML=`<div class="shell v100-shell"><aside class="sidebar"><div class="brand"><div class="logo-wrap"><div class="logo">KV</div></div><div><b>KV CELL</b><small>ULTIMATE SUPREME • V500</small></div></div><div class="nav"><div class="navtitle">PAINEL</div>${['dashboard'].map(nav).join('')}<div class="navtitle">ATENDIMENTO</div>${['services','agenda','quotes','pricing','adb','guarantees','fiado'].map(nav).join('')}<div class="navtitle">CADASTROS</div>${['customers','radar','technicians','purchases','suppliers'].map(nav).join('')}<div class="navtitle">OPERAÇÃO</div>${['inventory','finance','pdv','devices'].map(nav).join('')}<div class="navtitle">DIGITAL</div>${['films','community'].map(nav).join('')}<div class="navtitle">SISTEMA</div>${['employees','chat_units','ai','logs','admin','settings'].map(nav).join('')}</div></aside><main class="main"><div class="topbar"><div><b id="crumb">Painel</b><div class="crumb">KV CELL ULTIMATE SUPREME • V500 • LAGOS + MAGÉ</div></div><div class="top-actions"><select id="unit" class="select unit"><option>TODOS</option><option>LAGOS</option><option>MAGÉ</option></select><button class="btn ghost" onclick="openSearch()">⌕ Buscar</button><button class="btn ghost" onclick="logout()">Sair</button></div></div><div id="content"></div></main></div><div id="modal" class="modal"></div><div id="toast" class="toast"></div>`;$('#unit').value=UNIT;$('#unit').onchange=e=>{UNIT=e.target.value;localStorage.setItem('kv_unit',UNIT);render()};render()};
+boot=async function(){document.body.innerHTML=`<div class="shell v100-shell"><aside class="sidebar"><div class="brand"><div class="logo-wrap"><div class="logo">KV</div></div><div><b>KV CELL</b><small>ULTIMATE SUPREME • V700</small></div></div><div class="nav"><div class="navtitle">PAINEL</div>${['dashboard'].map(nav).join('')}<div class="navtitle">ATENDIMENTO</div>${['services','agenda','quotes','pricing','adb','guarantees','fiado'].map(nav).join('')}<div class="navtitle">CADASTROS</div>${['customers','radar','technicians','purchases','suppliers'].map(nav).join('')}<div class="navtitle">OPERAÇÃO</div>${['inventory','finance','pdv','devices'].map(nav).join('')}<div class="navtitle">DIGITAL</div>${['films','community'].map(nav).join('')}<div class="navtitle">SISTEMA</div>${['employees','chat_units','ai','logs','admin','settings'].map(nav).join('')}</div></aside><main class="main"><div class="topbar"><div><b id="crumb">Painel</b><div class="crumb">KV CELL ULTIMATE SUPREME • V700 • LAGOS + MAGÉ</div></div><div class="top-actions"><select id="unit" class="select unit"><option>TODOS</option><option>LAGOS</option><option>MAGÉ</option></select><button class="btn ghost" onclick="openSearch()">⌕ Buscar</button><button class="btn ghost" onclick="logout()">Sair</button></div></div><div id="content"></div></main></div><div id="modal" class="modal"></div><div id="toast" class="toast"></div>`;$('#unit').value=UNIT;$('#unit').onchange=e=>{UNIT=e.target.value;localStorage.setItem('kv_unit',UNIT);render()};render()};
 
 // Ensure V500 versions of the core action pages win over older V300 definitions.
 const _svcLegacy=pages.services; // retained only for compatibility / rollback within runtime
@@ -1274,6 +1274,116 @@ window.kvMdmInjectAPK=async function(id){
     const b64=btoa(binary);
     toast('Enviando APK para a ponte ADB...','info');
     const r=await fetch(window.__kvAdbBridge+'/mdm/install-upload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({serial,filename:file.name,data:b64})});
+    const j=await r.json(); if(!r.ok||!j.ok)throw new Error(j.error||'Falha ao instalar o MDM pelo ADB.');
+    toast('KV CELL MDM instalado pelo ADB • '+(j.output||'OK'),'success');
+  }catch(e){toast(e.message||'Falha na injeção ADB.','error')}
+};
+
+/* ================= KV CELL V700 — ADB/MDM FINAL HARDENING =================
+   - MDM vira módulo de navegação próprio.
+   - "FORÇAR ADB" nunca chama localhost sem uma tentativa explícita de ponte.
+   - Primeiro caminho: seletor USB nativo do Chrome/Edge.
+   - Ponte local continua disponível para comandos ADB reais e instalação do APK.
+   - QR MDM é matrícula/provisionamento; não promete bypass de segurança Android.
+*/
+icons.mdm='📱';
+names.mdm='Crediário / MDM';
+
+pages.mdm=async()=>{
+  if(typeof mdmInlineV520==='function') return mdmInlineV520();
+  if(typeof mdmInlineV500==='function') return mdmInlineV500();
+  const d=await api('/api/mdm?unit='+encodeURIComponent(UNIT));
+  $('#content').innerHTML=head('Crediário / MDM','Central de aparelhos financiados, parcelas, matrícula e política remota autorizada',`<button class="btn" onclick="mdmFormV520?mdmFormV520():mdmForm()">＋ Novo crediário MDM</button>`)+table(d,[['device_name','Aparelho'],['customer_name','Cliente'],['imei','IMEI'],['installment_total','Financiado',r=>money(r.installment_total)],['installment_paid','Pago',r=>money(r.installment_paid)],['next_due','Vencimento'],['policy_state','Política',r=>badge(r.policy_state)]],r=>`<button class="btn ghost" onclick="mdmQR(${r.id})">▦ QR</button>`);
+};
+
+/* Rebuild the final shell so MDM is visible in the sidebar instead of hidden only inside Fiado. */
+boot=async function(){
+  document.body.innerHTML=`<div class="shell v100-shell"><aside class="sidebar"><div class="brand"><div class="logo-wrap"><div class="logo">KV</div></div><div><b>KV CELL</b><small>ULTIMATE SUPREME • V700</small></div></div><div class="nav">
+    <div class="navtitle">PAINEL</div>${['dashboard'].map(nav).join('')}
+    <div class="navtitle">ATENDIMENTO</div>${['services','agenda','quotes','pricing','adb','guarantees','fiado','mdm'].map(nav).join('')}
+    <div class="navtitle">CADASTROS</div>${['customers','radar','technicians','purchases','suppliers'].map(nav).join('')}
+    <div class="navtitle">OPERAÇÃO</div>${['inventory','finance','pdv','devices','forgotten'].map(nav).join('')}
+    <div class="navtitle">DIGITAL</div>${['catalog','films','community','referrals'].map(nav).join('')}
+    <div class="navtitle">SISTEMA</div>${['employees','chat_units','ai','logs','admin','settings'].map(nav).join('')}
+  </div></aside><main class="main"><div class="topbar"><div><b id="crumb">Painel</b><div class="crumb">KV CELL OS PREMIUM • V700 • LAGOS + MAGÉ</div></div><div class="top-actions"><select id="unit" class="select unit"><option>TODOS</option><option>LAGOS</option><option>MAGÉ</option></select><button class="btn ghost" onclick="openSearch()">⌕ Buscar</button><button class="btn ghost" onclick="logout()">Sair</button></div></div><div id="content"></div></main></div><div id="modal" class="modal"></div><div id="toast" class="toast"></div>`;
+  $('#unit').value=UNIT;
+  $('#unit').onchange=e=>{UNIT=e.target.value;localStorage.setItem('kv_unit',UNIT);render()};
+  render();
+};
+
+/* Do not produce ERR_CONNECTION_REFUSED just because the optional local bridge is not running. */
+window.kvAdbConnect=async function(){
+  try{
+    /* If WebUSB is available, let the browser's native chooser be the first action. */
+    if(navigator.usb){
+      const dev=await navigator.usb.requestDevice({filters:[]});
+      window.__kvUsbDevice=dev;
+      window.__kvUsbDevices=[...(navigator.usb?await navigator.usb.getDevices():[])];
+      const label=[dev.manufacturerName,dev.productName].filter(Boolean).join(' ')||'Dispositivo USB';
+      toast('USB selecionado • '+label+' • ADB local opcional');
+      await pages.adb();
+      return;
+    }
+    /* No WebUSB: only then try the real ADB bridge. */
+    const h=await kvBridge('/health');
+    if(!h?.ok) throw new Error('Ponte ADB offline. Inicie tools\\INICIAR_KV_CELL_BRIDGE.bat no computador da bancada.');
+    const ds=await kvAdbDevices();
+    window.__kvAdbDevices=ds;
+    const online=ds.filter(x=>x.state==='device');
+    if(!online.length) throw new Error(ds.some(x=>x.state==='unauthorized')?'Aparelho encontrado, mas falta aceitar a chave RSA no celular.':'Nenhum aparelho ADB autorizado.');
+    let chosen=online.find(x=>x.serial===window.__kvAdbSerial)||(online.length===1?online[0]:null);
+    if(!chosen){
+      const answer=prompt('APARELHOS ADB CONECTADOS\n\n'+online.map((x,i)=>`${i+1}. ${x.serial} — ${x.model||x.product||'Android'}`).join('\n')+'\n\nDigite o número:','1');
+      const idx=Number(answer)-1; if(!Number.isInteger(idx)||!online[idx]) return; chosen=online[idx];
+    }
+    window.__kvAdbSerial=chosen.serial; localStorage.setItem('kv_adb_serial',chosen.serial);
+    await kvAdbLoadInfo(); toast('ADB conectado • '+(chosen.model||chosen.serial)); await pages.adb();
+  }catch(e){
+    if(e?.name==='NotFoundError') return toast('Nenhum dispositivo USB selecionado.','info');
+    toast(e?.message||'Falha ao conectar ADB.','error');
+    await pages.adb();
+  }
+};
+
+window.kvAdbBridgeCheck=async function(){
+  try{
+    const h=await kvBridge('/health');
+    toast(`Ponte online • ${h.adb_found?'ADB encontrado':'ADB não encontrado no PC'}`,'success');
+    return h;
+  }catch(e){
+    toast('Ponte local offline • isso NÃO impede o seletor USB do navegador.','info');
+    return null;
+  }
+};
+
+/* V700 QR modal: the first card is the requested "QR ADB FORCE APP" label;
+   the second card is the actual ADB injection path. */
+window.mdmQR=async function(id){
+  try{
+    const app=await api('/api/mdm/qr?id='+id+'&mode=app');
+    let prov=null; try{prov=await api('/api/mdm/qr?id='+id+'&mode=provisioning')}catch{}
+    formModal('KV CELL MDM • QR + INJEÇÃO ADB',`<div class="mdm600-qr mdm600-force">
+      <section class="panel mdm-force-main"><span class="badge y">KVCELL MDM</span><h3>QR ADB FORCE APP</h3><p>QR de matrícula do KV CELL MDM. Ele vincula o aparelho ao crediário; não é um bypass de segurança Android.</p><img src="${app.data_url}" alt="QR KV CELL MDM"><code>${esc(app.payload)}</code><div style="margin-top:12px"><button class="btn ghost" onclick="navigator.clipboard?.writeText(${JSON.stringify(app.payload)});toast('Código QR copiado')">Copiar código</button></div></section>
+      <section class="panel"><span class="badge g">ADB REAL</span><h3>💻 INJETAR O APP MDM KV CELL PELO ADB DO CELULAR</h3><p>Selecione o APK oficial/autorizado e envie para o aparelho ADB conectado. O Android precisa estar com Depuração USB autorizada.</p><div class="mdm-inject-box"><input id="kvMdmApkFile" type="file" accept=".apk" class="input"><button class="btn adb600-primary" onclick="kvMdmInjectAPK(${id})">⚡ INJETAR MDM PELO ADB</button><button class="btn ghost" onclick="closeModal();kvAdbConnect()">▣ SELECIONAR CELULAR USB</button><small class="muted">A instalação e o Device Owner respeitam as regras normais do Android. Nenhuma proteção é removida.</small></div></section>
+      ${prov?`<section class="panel"><span class="badge y">ANDROID ENTERPRISE</span><h3>QR DE PROVISIONAMENTO</h3><img src="${prov.data_url}" alt="QR provisionamento Android"><p class="muted">Usado apenas quando <b>MDM_AGENT_APK_URL</b> estiver configurado no servidor. É o mecanismo oficial de provisionamento Android, não ADB.</p></section>`:`<section class="panel"><h3>QR de Provisionamento</h3><p class="muted">Configure <b>MDM_AGENT_APK_URL</b> nas variáveis de ambiente do Square Cloud para disponibilizar o QR de provisionamento Android.</p></section>`}
+    </div>`,async()=>closeModal());
+  }catch(e){toast(e.message,'error')}
+};
+
+window.kvMdmInjectAPK=async function(id){
+  const file=$('#kvMdmApkFile')?.files?.[0];
+  if(!file)return toast('Selecione primeiro o APK do KV CELL MDM.','error');
+  if(!/\.apk$/i.test(file.name))return toast('Selecione um arquivo .apk.','error');
+  if(file.size>40*1024*1024)return toast('APK acima de 40 MB não é aceito por esta rotina.','error');
+  try{
+    const serial=kvAdbSerial();
+    if(!serial)throw new Error('Nenhum ADB selecionado. Clique em SELECIONAR CELULAR USB e depois use a ponte ADB para comandos reais.');
+    const h=await kvBridge('/health');
+    if(!h?.ok)throw new Error('ADB Bridge offline. Inicie tools\\INICIAR_KV_CELL_BRIDGE.bat no computador da bancada. O seletor USB continua funcionando sem a ponte.');
+    const buf=await file.arrayBuffer(), bytes=new Uint8Array(buf); let binary='';
+    for(let i=0;i<bytes.length;i+=0x8000) binary+=String.fromCharCode(...bytes.subarray(i,Math.min(i+0x8000,bytes.length)));
+    toast('Enviando APK para a ponte ADB...','info');
+    const r=await fetch(window.__kvAdbBridge+'/mdm/install-upload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({serial,filename:file.name,data:btoa(binary)})});
     const j=await r.json(); if(!r.ok||!j.ok)throw new Error(j.error||'Falha ao instalar o MDM pelo ADB.');
     toast('KV CELL MDM instalado pelo ADB • '+(j.output||'OK'),'success');
   }catch(e){toast(e.message||'Falha na injeção ADB.','error')}
