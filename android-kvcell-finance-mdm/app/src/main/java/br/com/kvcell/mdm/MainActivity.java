@@ -48,7 +48,8 @@ public class MainActivity extends Activity {
     }
     private void scheduleSync(){ WorkManager.getInstance(this).enqueue(new PeriodicWorkRequest.Builder(MDMSyncWorker.class,15,TimeUnit.MINUTES).build()); }
     private int battery(){ try{android.os.BatteryManager bm=(android.os.BatteryManager)getSystemService(BATTERY_SERVICE); return bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY);}catch(Exception e){return 0;} }
-    private String safeSerial(){ try{ if(android.os.Build.VERSION.SDK_INT>=26) return android.os.Build.getSerial(); }catch(Exception ignored){} return "—"; }\n    private JSONObject heartbeat() throws Exception{
+    private String safeSerial(){ try{ if(android.os.Build.VERSION.SDK_INT>=26) return android.os.Build.getSerial(); }catch(Exception ignored){} return "—"; }
+    private JSONObject heartbeat() throws Exception{
         URL u=new URL(BASE+"/public/mdm/heartbeat/"+token); HttpURLConnection c=(HttpURLConnection)u.openConnection(); c.setRequestMethod("POST"); c.setConnectTimeout(10000); c.setReadTimeout(15000); c.setDoOutput(true); c.setRequestProperty("Content-Type","application/json");
         JSONObject body=new JSONObject().put("battery",battery()).put("app_version","810.0").put("brand",android.os.Build.MANUFACTURER).put("model",android.os.Build.MODEL).put("device_name",android.os.Build.DEVICE).put("android_version",android.os.Build.VERSION.RELEASE).put("serial",safeSerial()); try(OutputStream os=c.getOutputStream()){os.write(body.toString().getBytes(StandardCharsets.UTF_8));}
         if(c.getResponseCode()<200||c.getResponseCode()>=300) throw new IllegalStateException("HTTP "+c.getResponseCode());

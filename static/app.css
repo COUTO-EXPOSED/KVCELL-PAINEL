@@ -64,3 +64,72 @@
 .adb600-panel,.mdm520-dashboard article{transition:transform .16s ease,border-color .16s ease,box-shadow .16s ease}
 .adb600-panel:hover,.mdm520-dashboard article:hover{transform:translateY(-1px);border-color:rgba(255,212,0,.24);box-shadow:0 12px 34px rgba(0,0,0,.24)}
 .adb600-primary{box-shadow:0 0 0 1px rgba(255,212,0,.18),0 8px 24px rgba(255,212,0,.08)}
+
+/* ================================================================
+   KV CELL V810.0 — TECH OS PRO INSPIRED PREMIUM UX
+   Additive visual layer. Existing selectors remain intact.
+================================================================ */
+@font-face{font-family:Poppins;src:url('/static/fonts/pxiEyp8kv8JHgFVrJJfecg.woff2') format('woff2');font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:Poppins;src:url('/static/fonts/pxiByp8kv8JHgFVrLEj6Z1xlFQ.woff2') format('woff2');font-weight:600;font-style:normal;font-display:swap}
+@font-face{font-family:Poppins;src:url('/static/fonts/pxiByp8kv8JHgFVrLGT9Z1xlFQ.woff2') format('woff2');font-weight:700;font-style:normal;font-display:swap}
+@font-face{font-family:Poppins;src:url('/static/fonts/pxiByp8kv8JHgFVrLCz7Z1xlFQ.woff2') format('woff2');font-weight:800;font-style:normal;font-display:swap}
+:root{
+  --kv-yellow:#ffd400;--kv-yellow-soft:#fff0a6;--kv-black:#060606;
+  --kv-panel:#101010;--kv-panel2:#151515;--kv-border:#292929;
+  --kv-glow:0 0 0 1px #ffd40018,0 18px 45px #0008;
+}
+html,body,#app{font-family:Poppins,Inter,ui-sans-serif,system-ui,sans-serif}
+.sidebar{box-shadow:14px 0 45px #0005}
+.brand{padding-top:12px}
+.logo{position:relative}
+.logo:after{content:"";position:absolute;inset:-5px;border:1px solid #ffd40024;border-radius:16px;pointer-events:none}
+.nav button{transition:transform .16s ease,background .16s ease,border-color .16s ease,box-shadow .16s ease}
+.nav button:hover{transform:translateX(2px)}
+.nav button.active{box-shadow:inset 3px 0 var(--y),0 8px 24px #0005}
+.main{max-width:1800px}
+.topbar{box-shadow:0 10px 30px #0004}
+.page-title h1{font-weight:800;letter-spacing:-.7px}
+.cards{gap:16px}
+.metric{border-radius:18px;border-color:#2d2d2d;box-shadow:var(--kv-glow);transition:transform .18s ease,border-color .18s ease}
+.metric:hover{transform:translateY(-2px);border-color:#514900}
+.metric .label{letter-spacing:.7px}
+.panel,.box,.modal,.tablewrap{border-radius:18px;box-shadow:0 16px 45px #0005}
+.panel{border-color:#292929}
+.btn{border-radius:12px;transition:all .16s ease}
+.btn.ghost:hover{border-color:#665900;color:var(--y);background:#191700}
+.row-actions{gap:6px}
+.iconbtn{min-width:36px;min-height:36px;border-radius:10px!important;border:1px solid #303030!important;background:#151515!important;transition:.16s ease}
+.iconbtn:hover{transform:translateY(-1px);border-color:#655a00!important;color:var(--y)}
+.table{border-radius:16px;overflow:hidden}
+table thead th{font-weight:700;letter-spacing:.35px}
+.badge{font-weight:700;border-radius:999px}
+.formgrid{gap:15px}
+.field label{font-weight:600;color:#cfcfcf}
+.input,.select,.textarea{border-radius:12px;min-height:42px}
+.modal{background:linear-gradient(180deg,#151515,#0d0d0d);border:1px solid #343434}
+.kpi{border-radius:13px;background:#0e0e0e;border:1px solid #272727;padding:12px 14px}
+.os-tabs,.subtabs{background:#0d0d0d;border:1px solid #292929;border-radius:14px;padding:5px}
+.os-tabs button,.subtabs button{border-radius:10px!important}
+.os-tabs button.active,.subtabs button.active{background:#ffd400!important;color:#050505!important}
+.device-state-bar{display:flex;gap:5px;flex-wrap:wrap}
+.status-chip{border-radius:999px!important;border:1px solid #303030!important;background:#121212!important}
+.status-chip.active{background:#ffd400!important;color:#050505!important;border-color:#ffd400!important}
+.dashboard-hero,.analytics-hero{border:1px solid #332f00!important;box-shadow:var(--kv-glow)}
+/* Tech OS PRO-style action cards, rethemed for KV CELL */
+.adb502-shortcuts{gap:12px!important}
+.adb502-shortcuts>button{border:1px solid #2e2e2e!important;background:linear-gradient(145deg,#151515,#0d0d0d)!important;border-radius:16px!important;box-shadow:0 12px 28px #0006;transition:.18s!important}
+.adb502-shortcuts>button:hover{transform:translateY(-2px);border-color:#625600!important;box-shadow:0 16px 32px #0008!important}
+.adb502-panel,.adb502-hero,.adb502-empty{border-radius:20px!important;box-shadow:0 16px 45px #0007!important}
+.adb502-tabs{border-radius:16px!important;padding:5px!important;background:#0d0d0d!important;border:1px solid #292929!important}
+.adb502-tabs button.active{background:#ffd400!important;color:#070707!important}
+.adb502-mainbtn{background:linear-gradient(135deg,#ffe34d,#ffd400)!important;color:#070707!important;box-shadow:0 10px 25px #ffd40020!important}
+.mdm600-force .panel,.mdm-qr .panel{border-radius:18px!important}
+.mdm-inject-box{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.mdm-inject-box .input{flex:1;min-width:220px}
+/* Public/customer-inspired components if reused inside panel */
+.kv-actionbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.kv-actionbar .btn{min-height:42px}
+.kv-link-card{display:flex;align-items:center;justify-content:space-between;gap:14px;background:linear-gradient(145deg,#171717,#0e0e0e);border:1px solid #303030;border-radius:16px;padding:14px 16px}
+.kv-link-card strong{color:#ffd400}
+@media(max-width:900px){.cards{grid-template-columns:repeat(2,1fr)}.main{margin-left:0;width:100%;padding:15px}.sidebar{position:relative;width:100%;height:auto}.shell{display:block}}
+@media(max-width:620px){.cards{grid-template-columns:1fr}.page-title{align-items:flex-start;flex-direction:column}}

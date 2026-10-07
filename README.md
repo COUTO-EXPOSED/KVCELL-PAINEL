@@ -113,3 +113,16 @@ Porta local padrão: `127.0.0.1:17321`.
 
 ## V520 — Crediário MDM / Bloqueio
 A versão V520 concentra a evolução do Crediário MDM: cronograma de parcelas, recebimento, bloqueio automático por atraso, heartbeat do agente e histórico por aparelho. A intervenção é exclusiva do módulo MDM.
+
+
+## V810.0 — UX premium + ADB/MDM
+A V810.0 incorpora a linguagem visual do material Tech OS PRO fornecido, adaptada à identidade KV CELL preto/amarelo, sem substituir os módulos existentes.
+
+Inclui:
+- dashboard e componentes com Poppins local;
+- ações de orçamento: abrir, copiar link e WhatsApp;
+- links de acompanhamento público de OS;
+- bridge ADB com suporte a Private Network Access;
+- entrypoint do servidor compatível com `MAIN=app.py`;
+- projeto-fonte do agente Android com correção de compilação;
+- script de build do APK em `tools/mdm/BUILD_KV_CELL_MDM.bat`.

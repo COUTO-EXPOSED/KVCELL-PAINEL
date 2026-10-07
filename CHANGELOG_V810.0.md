@@ -22,3 +22,32 @@ Evolução incremental da base V700 sem remoção de módulos.
 
 ## Observação
 O agente Android precisa ser compilado/publicado separadamente para uso real; este pacote mantém o projeto-fonte existente e suas rotinas de integração.
+
+## V810.0 — atualização de UX/ADB/MDM — 2026-10-07
+
+### Interface / estilo
+- Reforçada a identidade KV CELL preto + amarelo com linguagem visual inspirada nos fluxos do Tech OS PRO.
+- Tipografia Poppins incorporada localmente a partir dos assets fornecidos.
+- Cards, métricas, tabelas, tabs, modais e botões receberam hierarquia visual, estados hover e acabamento de dashboard.
+- Portais públicos de orçamento, OS e crediário receberam layout premium responsivo, linha do tempo, cards de resumo e ações destacadas.
+
+### Orçamentos / OS / WhatsApp
+- Orçamentos ganharam ações de abrir, copiar link e enviar pelo WhatsApp.
+- O WhatsApp de orçamento gera a mensagem já com o link público.
+- Ações de OS/desbloqueio preservadas e o WhatsApp passa a incluir o link de acompanhamento quando disponível.
+- Fluxo público de acompanhamento continua usando tokens individuais.
+
+### ADB
+- Bridge local passou a responder também ao Private Network Access do Chrome/Edge (`Access-Control-Allow-Private-Network`), importante quando o painel está hospedado em HTTPS e o bridge está em `127.0.0.1`.
+- OPTIONS/CORS do bridge reforçado.
+- Fluxo continua exigindo ADB autorizado; WebUSB não é confundido com sessão ADB real.
+
+### MDM Android
+- Corrigido trecho Java inválido no agente.
+- Adicionado `BUILD_KV_CELL_MDM.bat` para gerar o APK em máquina com Android SDK/Gradle.
+- Instalação via bridge continua disponível por upload de APK.
+- Device Owner continua respeitando as regras oficiais do Android; nenhuma proteção é contornada.
+
+### Runtime
+- Restaurado o entrypoint `if __name__ == '__main__'` com `ThreadingHTTPServer`, necessário para `MAIN=app.py` no Square Cloud.
+- Smoke test V810 passou novamente após as correções.
