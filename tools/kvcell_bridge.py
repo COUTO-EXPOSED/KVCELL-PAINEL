@@ -12,7 +12,11 @@ from urllib.parse import urlparse, parse_qs
 HOST='127.0.0.1'
 PORT=int(os.environ.get('KVCELL_BRIDGE_PORT','17321'))
 ADB=os.environ.get('KVCELL_ADB_PATH','adb')
-TIMEOUT=int(os.environ.get('KVCELL_ADB_TIMEOUT','15'))
+TIMEOUT=int(os.environ.get('KVCELL_ADB_TIMEOUT','20'))
+BRIDGE_DIR=os.path.dirname(os.path.abspath(__file__))
+MDM_APK=os.environ.get('KVCELL_MDM_APK_PATH', os.path.join(BRIDGE_DIR,'mdm','KV_CELL_MDM.apk'))
+MDM_PACKAGE='br.com.kvcell.finance.mdm'
+MDM_COMPONENT='br.com.kvcell.finance.mdm/br.com.kvcell.mdmd.KVCellDeviceAdminReceiver'
 
 SAFE_COMMANDS={
  'getprop':'shell getprop',
@@ -158,6 +162,29 @@ def security_scan(serial):
 def screenshot(serial):
     return adb(serial,['exec-out','screencap','-p'],timeout=20,binary=True)
 
+
+def install_mdm(serial=None):
+    d=target(serial)
+    if not os.path.isfile(MDM_APK):
+        raise BridgeError(f'APK do KV CELL MDM não encontrado em: {MDM_APK}. Gere/coloque o APK nesse caminho ou defina KVCELL_MDM_APK_PATH.')
+    out=run((['-s',d['serial']] if d else [])+['install','-r',MDM_APK],timeout=60)
+    return {'serial':d['serial'],'apk':MDM_APK,'package':MDM_PACKAGE,'output':out.strip()}
+
+def mdm_provision(serial=None, token=None):
+    if not token or not re.fullmatch(r'[A-Za-z0-9]+',str(token)):
+        raise BridgeError('Token MDM inválido para provisionamento.')
+    d=target(serial)
+    inst=install_mdm(d['serial'])
+    # Do not bypass Android provisioning safeguards. Device Owner must be allowed by Android.
+    owner=run((['-s',d['serial']] if d else [])+['shell','dpm','list','owners'],timeout=15)
+    if MDM_PACKAGE not in owner:
+        try:
+            run((['-s',d['serial']] if d else [])+['shell','dpm','set-device-owner',MDM_COMPONENT],timeout=45)
+        except BridgeError as e:
+            raise BridgeError('APK instalado, mas o Android recusou o Device Owner. Em Android real, o aparelho normalmente precisa estar sem provisionamento/contas de usuário; não é possível contornar essa proteção. Detalhe: '+str(e))
+    launch=run((['-s',d['serial']] if d else [])+['shell','am','start','-a','android.intent.action.VIEW','-d','kvcellmdm://enroll/'+str(token)],timeout=20)
+    return {'ok':True,'serial':d['serial'],'installed':True,'device_owner':True,'package':MDM_PACKAGE,'component':MDM_COMPONENT,'launch':launch.strip(),'install':inst}
+
 class H(BaseHTTPRequestHandler):
     server_version='KV-CELL-ADB-BRIDGE/1.0'
     def log_message(self,*a): pass
@@ -175,6 +202,8 @@ class H(BaseHTTPRequestHandler):
             if p.path=='/devices': return self.sendj({'ok':True,'devices':devices()})
             if p.path=='/device': return self.sendj({'ok':True,'device':device_info(serial)})
             if p.path=='/security-scan': return self.sendj({'ok':True,**security_scan(serial)})
+            if p.path=='/mdm/status':
+                d=target(serial); owner=adb(d['serial'],['shell','dpm','list','owners']); return self.sendj({'ok':True,'serial':d['serial'],'package':MDM_PACKAGE,'apk_exists':os.path.isfile(MDM_APK),'apk_path':MDM_APK,'device_owner':MDM_PACKAGE in owner,'owners':owner.strip()})
             if p.path=='/screenshot':
                 b=screenshot(serial); self.send_response(200); self.send_header('Content-Type','image/png'); self.send_header('Content-Length',str(len(b))); self.cors(); self.end_headers(); self.wfile.write(b); return
             return self.sendj({'error':'Rota não encontrada'},404)
@@ -187,6 +216,10 @@ class H(BaseHTTPRequestHandler):
                 key=d.get('key','')
                 if key not in SAFE_COMMANDS: return self.sendj({'error':'Comando não permitido pela ponte.'},400)
                 return self.sendj({'ok':True,'key':key,'output':adb(serial,SAFE_COMMANDS[key].split())[:30000]})
+            if p.path=='/mdm/install':
+                return self.sendj({'ok':True,**install_mdm(serial)})
+            if p.path=='/mdm/provision':
+                return self.sendj(mdm_provision(serial,d.get('token')))
             if p.path=='/action':
                 key=d.get('action','')
                 if key not in ACTIONS: return self.sendj({'error':'Ação não permitida.'},400)

@@ -713,7 +713,7 @@ class Handler(BaseHTTPRequestHandler):
             policy='bloqueado'
             write("UPDATE mdm_devices SET policy_state='bloqueado',status='bloqueio solicitado',last_policy_sync=?,updated_at=? WHERE id=?",(now(),now(),d['id']))
             write('INSERT INTO mdm_events(device_id,action,message,created_at) VALUES(?,?,?,?)',(d['id'],'auto_lock','Vencimento ultrapassado; política de bloqueio emitida automaticamente.',now()))
-        return self.json({'ok':True,'device':dict(d),'balance':balance,'days_to_due':days,'installments_remaining':max(0,int(d['installment_count'] or 0)-int(d['paid_installments'] or 0)),'server_time':now(),'policy_state':policy})
+        return self.json({'ok':True,'device':dict(d),'balance':balance,'days_to_due':days,'installments_remaining':max(0,int(d['installment_count'] or 0)-int(d['paid_installments'] or 0)),'payment_url':d['payment_url'],'pix_copy_paste':d['pix_copy_paste'],'server_time':now(),'policy_state':policy})
 
     def mdm_qr(self,qs):
         mid=int(qs.get('id',['0'])[0] or 0); mode=qs.get('mode',['app'])[0]
@@ -796,6 +796,9 @@ class Handler(BaseHTTPRequestHandler):
         paid_inst=min(int(dev['installment_count'] or 0),int(dev['paid_installments'] or 0)+max(1,round(amount/max(float(dev['installment_value'] or 1),0.01))))
         new_balance=max(0,float(dev['installment_total'] or 0)-new_paid); new_state='quitado' if new_balance<=0.009 else ('normal' if dev['policy_state']=='bloqueado' and amount>0 else dev['policy_state'])
         write('UPDATE mdm_devices SET installment_paid=?,paid_installments=?,policy_state=?,status=?,updated_at=?,last_policy_sync=? WHERE id=?',(new_paid,paid_inst,new_state,'quitado' if new_balance<=0.009 else 'online',now(),now(),mid))
+        nxt=one("SELECT due_date FROM mdm_installments WHERE device_id=? AND status<>? ORDER BY number LIMIT 1",(mid,'pago'))
+        if nxt: write('UPDATE mdm_devices SET next_due=?,updated_at=? WHERE id=?',(nxt['due_date'],now(),mid))
+        elif new_balance<=0.009: write('UPDATE mdm_devices SET next_due=NULL,updated_at=? WHERE id=?',(now(),mid))
         # Mark earliest unpaid installments until the received amount is consumed.
         remain=amount
         for ins in rows('SELECT * FROM mdm_installments WHERE device_id=? AND status<>? ORDER BY number',(mid,'pago')):
@@ -830,7 +833,7 @@ class Handler(BaseHTTPRequestHandler):
         if fresh['auto_lock_enabled'] and balance>0 and days is not None and days<-(int(fresh['grace_days'] or 0)) and policy not in ('quitado','bloqueado'):
             policy='bloqueado'; write("UPDATE mdm_devices SET policy_state='bloqueado',status='bloqueio solicitado',last_policy_sync=?,updated_at=? WHERE id=?",(stamp,stamp,fresh['id']))
             write('INSERT INTO mdm_events(device_id,action,message,created_at) VALUES(?,?,?,?)',(fresh['id'],'auto_lock','Bloqueio automático por atraso.',stamp))
-        return self.json({'ok':True,'policy_state':policy,'message':fresh['custom_message'],'next_due':fresh['next_due'],'balance':balance,'days_to_due':days,'installments_remaining':max(0,int(fresh['installment_count'] or 0)-int(fresh['paid_installments'] or 0)),'server_time':stamp})
+        return self.json({'ok':True,'policy_state':policy,'message':fresh['custom_message'],'next_due':fresh['next_due'],'balance':balance,'days_to_due':days,'installments_remaining':max(0,int(fresh['installment_count'] or 0)-int(fresh['paid_installments'] or 0)),'payment_url':fresh['payment_url'],'pix_copy_paste':fresh['pix_copy_paste'],'server_time':stamp})
     def mdm_payment_request(self,t,d):
         dev=one('SELECT * FROM mdm_devices WHERE enrollment_token=?',(t,))
         if not dev:return self.json({'error':'Token MDM inválido.'},404)
