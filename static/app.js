@@ -1123,3 +1123,137 @@ window.mdmDetailsV520=async function(id){const d=(await api('/api/mdm?unit=TODOS
 window.mdmInlineV520=async function(){const d=await api('/api/mdm?unit='+encodeURIComponent(UNIT));const today=new Date().toISOString().slice(0,10);const total=d.reduce((a,x)=>a+Number(x.installment_total||0),0),paid=d.reduce((a,x)=>a+Number(x.installment_paid||0),0),online=d.filter(x=>x.status==='online').length,blocked=d.filter(x=>x.policy_state==='bloqueado').length,overdue=d.filter(x=>x.overdue).length;$('#content').innerHTML=analyticsHeader('Crediário / MDM','Central de financiamento, parcelas, provisionamento e bloqueio remoto autorizado',`<button class="btn" onclick="mdmFormV520()">＋ Novo crediário MDM</button>`)+`<div class="mdm520-dashboard"><div class="mdm520-metrics"><div><small>APARELHOS</small><b>${d.length}</b><span>cadastrados</span></div><div><small>FINANCIADO</small><b>${money(total)}</b><span>valor contratado</span></div><div><small>RECEBIDO</small><b>${money(paid)}</b><span>já pago</span></div><div class="danger"><small>BLOQUEADOS</small><b>${blocked}</b><span>política ativa</span></div><div class="warning"><small>VENCIDOS</small><b>${overdue}</b><span>saldo em aberto</span></div><div class="ok"><small>ONLINE</small><b>${online}</b><span>último heartbeat</span></div></div><div class="mdm520-toolbar"><input class="input" id="mdm520Search" placeholder="Buscar cliente, aparelho, IMEI ou modelo" oninput="window.__mdm520Q=this.value.toLowerCase();mdmInlineV520()"><button class="btn ghost" onclick="mdmInlineV520()">↻ Atualizar</button></div><div class="mdm520-table">${d.filter(x=>{const q=window.__mdm520Q||'';return !q||`${x.customer_name||''} ${x.device_name||''} ${x.model||''} ${x.imei||''}`.toLowerCase().includes(q)}).map(x=>`<article><div class="mdm520-main"><div class="mdm520-phone">📱</div><div><b>${esc(x.device_name||`${x.brand||''} ${x.model||''}`)}</b><span>${esc(x.customer_name||'Sem cliente')} • ${esc(x.model||'')} • IMEI ${esc(x.imei||'—')}</span><small>${x.status==='online'?'🟢 Online':'⚪ Offline'} • ${x.last_seen?esc(x.last_seen):'sem heartbeat'} • venc. ${esc(x.next_due||'—')}</small></div></div><div class="mdm520-money"><b>${money(Math.max(0,Number(x.installment_total||0)-Number(x.installment_paid||0)))}</b><small>saldo • ${Math.max(0,Number(x.installment_count||0)-Number(x.paid_installments||0))} parcelas</small></div><div class="mdm520-state"><span class="mdm520-status ${x.policy_state==='bloqueado'?'danger':x.policy_state==='quitado'?'ok':''}">${esc(x.policy_state||'normal')}</span></div><div class="mdm520-actions"><button onclick="mdmDetailsV520(${x.id})">Detalhes</button><button onclick="mdmQR(${x.id})">QR</button><button onclick="mdmReceiveV520(${x.id},${Math.max(0,Number(x.installment_total||0)-Number(x.installment_paid||0))})">Receber</button><button class="danger" onclick="mdmActionV520(${x.id},'lock')">🔒</button><button onclick="mdmActionV520(${x.id},'unlock')">🔓</button></div></article>`).join('')||'<div class="mdm520-empty">Nenhum crediário MDM encontrado.</div>'}</div><div class="mdm520-footer-note">O bloqueio remoto só é aplicado fisicamente pelo agente KV CELL provisionado legitimamente como Device Owner. O servidor não executa comandos ADB remotos nem remove proteções de segurança do Android.</div></div>`};
 const _fiadoV520Base=pages.fiado;pages.fiado=async()=>{await _fiadoV520Base();const c=$('#content'),tabs=c?.querySelector('.subtabs');if(!tabs)return;tabs.querySelectorAll('button').forEach(b=>{if(b.dataset.ft==='mdm')b.onclick=()=>mdmInlineV520()});};
 window.mdmFromFiado=async function(id){try{const d=(await api('/api/fiado?unit=TODOS')).find(x=>x.id===id);if(!d)return;mdmFormV520({unit:d.unit,customer_id:d.customer_id,fiado_id:d.id,installment_total:Number(d.total||0),installment_paid:Number(d.total||0)-Number(d.balance||0),installment_count:d.installments||1,installment_value:d.installment_value||0,paid_installments:Math.max(0,(d.installments||1)-Math.ceil(Number(d.balance||0)/Math.max(0.01,Number(d.installment_value||1)))),next_due:d.due_date||'',device_name:d.description||'Aparelho do crediário'});}catch(e){toast(e.message,'error')}};
+
+/* ================================================================
+   V600 — ADB USB SELECTOR + FORCE ADB + KV CELL MDM WORKSTATION
+   Preserva o bridge real da V502/V520, mas restaura o seletor USB
+   que existia na V400. Nenhum outro módulo é substituído.
+   ================================================================ */
+window.__kvAdbUsbDevice = window.__kvAdbUsbDevice || null;
+window.__kvAdbUsbList = window.__kvAdbUsbList || [];
+
+function kvAdbUsbLabel(d){
+  if(!d) return 'Nenhum USB selecionado';
+  return [d.manufacturerName,d.productName].filter(Boolean).join(' ') || 'Dispositivo USB';
+}
+function kvAdbUsbCard(d,selected=false){
+  return `<button type="button" class="adb600-usb-item ${selected?'selected':''}" onclick="kvAdbUseUsb(${d.__idx})">
+    <span class="adb600-usb-icon">USB</span><span><b>${esc(kvAdbUsbLabel(d))}</b><small>${esc(d.serialNumber||'Serial USB não exposto pelo navegador')} • VID ${String(d.vendorId||0).toString(16).padStart(4,'0')} • PID ${String(d.productId||0).toString(16).padStart(4,'0')}</small></span><strong>${selected?'✓':'›'}</strong>
+  </button>`;
+}
+window.kvAdbUsbChooser=async function(){
+  if(!navigator.usb){
+    return formModal('USB / ADB',`<div class="adb600-alert"><b>WebUSB não disponível neste navegador.</b><p>Use o botão <b>FORÇAR ADB</b> para trabalhar pela ponte local.</p></div>`,async()=>closeModal());
+  }
+  try{
+    let list=await navigator.usb.getDevices();
+    list=list.map((d,i)=>{d.__idx=i;return d;});
+    window.__kvAdbUsbList=list;
+    const render=()=>formModal('Dispositivos USB conectados',`<div class="adb600-picker">
+      <div class="adb600-picker-head"><div><b>Selecione o aparelho da bancada</b><small>Este é o seletor USB do navegador, preservado do fluxo anterior.</small></div><span class="adb600-live">● USB</span></div>
+      <div class="adb600-usb-list">${list.length?list.map((d,i)=>kvAdbUsbCard(d,window.__kvAdbUsbDevice===d)).join(''):'<div class="adb600-empty">Nenhum dispositivo previamente autorizado pelo navegador.</div>'}</div>
+      <div class="adb600-picker-actions"><button type="button" class="btn" onclick="kvAdbRequestUsb()">＋ Selecionar novo USB</button><button type="button" class="btn ghost" onclick="kvAdbForcePanel()">⚡ FORÇAR ADB</button></div>
+    </div>`,async()=>closeModal());
+    render();
+  }catch(e){toast('Falha ao listar USB: '+e.message,'error')}
+};
+window.kvAdbRequestUsb=async function(){
+  if(!navigator.usb)return toast('WebUSB indisponível. Use FORÇAR ADB.','error');
+  try{
+    const d=await navigator.usb.requestDevice({filters:[]});
+    window.__kvAdbUsbDevice=d;
+    localStorage.setItem('kv_adb_usb_label',kvAdbUsbLabel(d));
+    closeModal();
+    toast('USB selecionado • '+kvAdbUsbLabel(d));
+    // Keep the bridge as the real ADB transport. The browser picker is the selection UI.
+    setTimeout(()=>kvAdbForcePanel(),120);
+  }catch(e){ if(e.name!=='NotFoundError') toast(e.message,'error'); }
+};
+window.kvAdbUseUsb=function(idx){
+  const d=(window.__kvAdbUsbList||[])[Number(idx)];
+  if(!d)return;
+  window.__kvAdbUsbDevice=d;
+  localStorage.setItem('kv_adb_usb_label',kvAdbUsbLabel(d));
+  closeModal();
+  toast('USB selecionado • '+kvAdbUsbLabel(d));
+  setTimeout(()=>kvAdbForcePanel(),120);
+};
+window.kvAdbForcePanel=function(){
+  formModal('FORÇAR ADB • KV CELL',`<div class="adb600-force">
+    <div class="adb600-force-title"><span>⚡</span><div><b>ADB real pela ponte da bancada</b><small>Use quando o seletor USB não conseguir operar o aparelho diretamente.</small></div></div>
+    <div class="adb600-steps"><div><b>1</b><span>Conecte o Android por USB</span></div><div><b>2</b><span>Ative Depuração USB</span></div><div><b>3</b><span>Aceite a chave RSA no aparelho</span></div><div><b>4</b><span>Deixe o Bridge KV CELL aberto</span></div></div>
+    <div id="adb600ForceStatus" class="adb600-status">Verificando ponte local…</div>
+    <div class="adb600-force-actions"><button type="button" class="btn" onclick="kvAdbConnect()">↔ Conectar ADB</button><button type="button" class="btn ghost" onclick="kvAdbBridgeCheck()">↻ Verificar ponte</button><button type="button" class="btn ghost" onclick="kvAdbUsbChooser()">▣ Voltar para USB</button></div>
+  </div>`,async()=>closeModal());
+  setTimeout(async()=>{try{const h=await kvBridge('/health');const el=$('#adb600ForceStatus');if(el)el.innerHTML=`<b>● Ponte online</b> • ${h.adb_found?'ADB encontrado no computador':'ADB não encontrado no PATH'}`;}catch(e){const el=$('#adb600ForceStatus');if(el)el.innerHTML='<b>● Ponte offline</b> • execute tools\\INICIAR_KV_CELL_BRIDGE.bat';}},80);
+};
+window.kvAdbConnectV600=async function(){
+  try{
+    const h=await kvBridge('/health');
+    if(!h?.ok)throw new Error('Ponte offline.');
+    const ds=await kvAdbDevices();
+    const online=ds.filter(x=>x.state==='device');
+    if(!online.length){
+      await kvAdbForcePanel();
+      return;
+    }
+    if(online.length===1){
+      window.__kvAdbSerial=online[0].serial;localStorage.setItem('kv_adb_serial',online[0].serial);
+    }else{
+      const opts=online.map((x,i)=>`${i+1}. ${x.serial} — ${x.model||x.product||'Android'}`).join('\n');
+      const raw=prompt('Selecione o aparelho ADB:\n\n'+opts+'\n\nDigite o SERIAL:',window.__kvAdbSerial||online[0].serial);
+      if(!raw||!online.some(x=>x.serial===raw))return;
+      window.__kvAdbSerial=raw;localStorage.setItem('kv_adb_serial',raw);
+    }
+    await kvAdbLoadInfo();window.__kvAdbUsbDevice=window.__kvAdbUsbDevice||null;window.__kvAdbTab='hub';await pages.adb();toast('ADB conectado • '+window.__kvAdbSerial);
+  }catch(e){toast(e.message,'error');await pages.adb();}
+};
+
+// Replace only the final ADB renderer with the V600 workstation UI.
+pages.adb=async function(){
+  const d=kvAdbDevice();
+  $('#content').innerHTML=analyticsHeader('ADB & Antivírus','Central de bancada • USB selecionável + ADB real + diagnóstico + MDM',`${d.serial?'<span class="badge g">ADB CONECTADO</span>':'<span class="badge y">AGUARDANDO USB</span>'}`)+`
+  <div class="adb600-shell">
+    <div class="adb600-top">
+      <div class="adb600-brand"><div class="adb600-logo">KV</div><div><b>KV CELL • ADB & ANTIVÍRUS</b><small>Central de bancada profissional</small></div></div>
+      <div class="adb600-actions"><button class="btn" onclick="kvAdbUsbChooser()">▣ Selecionar USB</button><button class="btn" onclick="kvAdbConnectV600()">⚡ FORÇAR ADB</button><button class="btn ghost" onclick="kvAdbRefresh()">↻ Atualizar</button></div>
+    </div>
+    <div class="adb600-devicebar"><div><span class="adb600-dot ${d.serial?'on':''}"></span><b>${d.serial?esc(d.model||'Android'): 'Nenhum aparelho ADB conectado'}</b><small>${d.serial?esc(d.serial)+' • '+esc(d.android||'Android'):esc(localStorage.getItem('kv_adb_usb_label')||'Selecione um dispositivo USB para começar')}</small></div><div class="adb600-bridge"><span>BRIDGE</span><b>127.0.0.1:17321</b></div></div>
+    <div class="adb600-tabs">${[['hub','Visão geral','⌂'],['diagnostico','Diagnóstico','⚡'],['antivirus','Antivírus','🛡'],['controles','Controles','☷'],['terminal','Terminal','›_'],['tela','Tela','▣'],['recuperacao','Recuperação','↻'],['galeria','Evidências','▧'],['laudo','Laudo / Backup','▤']].map(t=>`<button class="${window.__kvAdbTab===t[0]?'active':''}" onclick="kvAdbTab('${t[0]}')"><span>${t[2]}</span>${t[1]}</button>`).join('')}</div>
+    <div id="adb600Body">${window.__kvAdbTab==='hub'?kvAdbHub():window.__kvAdbTab==='diagnostico'?kvAdbDiag():window.__kvAdbTab==='antivirus'?kvAdbAntivirus():window.__kvAdbTab==='controles'?kvAdbControls():window.__kvAdbTab==='terminal'?kvAdbTerminal():window.__kvAdbTab==='tela'?kvAdbTela():window.__kvAdbTab==='recuperacao'?kvAdbRecovery():window.__kvAdbTab==='galeria'?kvAdbGaleria():kvAdbLaudo()}</div>
+  </div>`;
+};
+
+// MDM workstation: installation/provisioning is deliberately through authorized ADB/Device Owner only.
+window.kvMdmInstallADB=async function(id){
+  try{
+    const h=await kvBridge('/health');if(!h.ok)throw new Error('Bridge offline');
+    const r=await kvBridge('/mdm/install',{method:'POST',body:JSON.stringify({serial:kvAdbSerial()})});
+    toast(r.device_owner?'KV CELL MDM instalado e Device Owner configurado.':'MDM instalado; Device Owner precisa ser provisionado pelo Android.');
+    if(id){try{await api('/api/mdm/action',{method:'POST',body:JSON.stringify({id,action:'pause'})})}catch{}}
+    await mdmInlineV500();
+  }catch(e){toast(e.message,'error')}
+};
+window.kvMdmProvisionADB=async function(id){
+  try{
+    const d=await api('/api/mdm?unit=TODOS'); const dev=d.find(x=>x.id===id);if(!dev)throw new Error('Crediário MDM não encontrado.');
+    if(!kvAdbSerial())throw new Error('Selecione/conecte o aparelho em ADB primeiro.');
+    const r=await kvBridge('/mdm/provision',{method:'POST',body:JSON.stringify({serial:kvAdbSerial(),token:dev.enrollment_token})});
+    toast('KV CELL MDM provisionado • Device Owner ativo');await mdmInlineV500();
+  }catch(e){toast(e.message,'error')}
+};
+
+// Add workstation controls to each MDM row without removing the existing actions.
+const __mdmInlineV600Base=window.mdmInlineV500;
+window.mdmInlineV500=async function(){
+  await __mdmInlineV600Base();
+  const host=$('#content'); if(!host)return;
+  host.querySelectorAll('.row-actions').forEach(row=>{
+    const first=row.querySelector('button');
+    if(!first)return;
+    const m=first.getAttribute('onclick')?.match(/mdmQR\((\d+)\)/); if(!m)return;
+    const id=m[1];
+    const box=document.createElement('span');box.className='mdm600-actions-inline';box.innerHTML=`<button class="iconbtn" title="Instalar por ADB" onclick="kvMdmInstallADB(${id})">ADB</button><button class="iconbtn" title="Provisionar Device Owner" onclick="kvMdmProvisionADB(${id})">DO</button>`;
+    row.appendChild(box);
+  });
+};

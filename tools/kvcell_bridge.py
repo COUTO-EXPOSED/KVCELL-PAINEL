@@ -198,7 +198,12 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
             p=urlparse(self.path); q=parse_qs(p.query); serial=q.get('serial',[''])[0] or None
-            if p.path=='/health': return self.sendj({'ok':True,'bridge':'KV CELL ADB Bridge','adb':ADB,'adb_found':bool(shutil.which(ADB) or os.path.exists(ADB)),'time':time.time()})
+            if p.path=='/health':
+                found=bool(shutil.which(ADB) or os.path.exists(ADB)); ds=[]
+                if found:
+                    try: ds=devices()
+                    except Exception as ex: return self.sendj({'ok':True,'bridge':'KV CELL ADB Bridge','adb':ADB,'adb_found':True,'devices_error':str(ex),'devices':[],'time':time.time()})
+                return self.sendj({'ok':True,'bridge':'KV CELL ADB Bridge V600','adb':ADB,'adb_found':found,'devices':ds,'port':PORT,'time':time.time()})
             if p.path=='/devices': return self.sendj({'ok':True,'devices':devices()})
             if p.path=='/device': return self.sendj({'ok':True,'device':device_info(serial)})
             if p.path=='/security-scan': return self.sendj({'ok':True,**security_scan(serial)})
