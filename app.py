@@ -115,8 +115,6 @@ CREATE TABLE IF NOT EXISTS fiado_payments(id INTEGER PRIMARY KEY AUTOINCREMENT,a
 CREATE TABLE IF NOT EXISTS mdm_devices(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,customer_id INTEGER,purchase_id INTEGER,fiado_id INTEGER,brand TEXT,model TEXT,imei TEXT,serial TEXT,android_version TEXT,device_name TEXT,enrollment_token TEXT UNIQUE,qr_payload TEXT,status TEXT DEFAULT 'aguardando',policy_state TEXT DEFAULT 'normal',custom_message TEXT,installment_total REAL DEFAULT 0,installment_paid REAL DEFAULT 0,next_due TEXT,app_version TEXT,last_seen TEXT,battery INTEGER,installment_count INTEGER DEFAULT 1,installment_value REAL DEFAULT 0,paid_installments INTEGER DEFAULT 0,payment_url TEXT,pix_copy_paste TEXT,created_at TEXT,updated_at TEXT);
 CREATE TABLE IF NOT EXISTS mdm_events(id INTEGER PRIMARY KEY AUTOINCREMENT,device_id INTEGER,action TEXT,message TEXT,created_at TEXT);
 CREATE TABLE IF NOT EXISTS mdm_installments(id INTEGER PRIMARY KEY AUTOINCREMENT,device_id INTEGER,number INTEGER,amount REAL,due_date TEXT,status TEXT DEFAULT 'pendente',paid_at TEXT,payment_method TEXT,created_at TEXT);
-CREATE INDEX IF NOT EXISTS idx_mdm_events_device ON mdm_events(device_id,id);
-CREATE INDEX IF NOT EXISTS idx_mdm_installments_device ON mdm_installments(device_id,number);
 
 '''
 
@@ -152,10 +150,27 @@ def migrate_v10():
     cols={r[1] for r in c.execute('PRAGMA table_info(inventory)').fetchall()}
     for name,typ in [('source_type','TEXT'),('source_id','INTEGER DEFAULT NULL')]:
         if name not in cols: c.execute('ALTER TABLE inventory ADD COLUMN '+name+' '+typ)
+    # MDM schema repair: older V500/V520 databases may have mdm_events without device_id.
+    # Never create an index before the legacy table has been upgraded.
+    cols={r[1] for r in c.execute('PRAGMA table_info(mdm_events)').fetchall()}
+    for name,typ in [('device_id','INTEGER'),('action','TEXT'),('message','TEXT'),('created_at','TEXT')]:
+        if name not in cols: c.execute('ALTER TABLE mdm_events ADD COLUMN '+name+' '+typ)
+    cols={r[1] for r in c.execute('PRAGMA table_info(mdm_installments)').fetchall()}
+    if not cols:
+        c.execute("CREATE TABLE IF NOT EXISTS mdm_installments(id INTEGER PRIMARY KEY AUTOINCREMENT,device_id INTEGER,number INTEGER,amount REAL,due_date TEXT,status TEXT DEFAULT 'pendente',paid_at TEXT,payment_method TEXT,created_at TEXT)")
+    else:
+        for name,typ in [('device_id','INTEGER'),('number','INTEGER'),('amount','REAL'),('due_date','TEXT'),('status',"TEXT DEFAULT 'pendente'"),('paid_at','TEXT'),('payment_method','TEXT'),('created_at','TEXT')]:
+            if name not in cols: c.execute('ALTER TABLE mdm_installments ADD COLUMN '+name+' '+typ)
+
+    cols={r[1] for r in c.execute('PRAGMA table_info(mdm_devices)').fetchall()}
+    for name,typ in [('unit','TEXT'),('customer_id','INTEGER'),('purchase_id','INTEGER'),('fiado_id','INTEGER'),('brand','TEXT'),('model','TEXT'),('imei','TEXT'),('serial','TEXT'),('android_version','TEXT'),('device_name','TEXT'),('enrollment_token','TEXT'),('qr_payload','TEXT'),('status',"TEXT DEFAULT 'aguardando'"),('policy_state',"TEXT DEFAULT 'normal'"),('custom_message','TEXT'),('installment_total','REAL DEFAULT 0'),('installment_paid','REAL DEFAULT 0'),('next_due','TEXT'),('app_version','TEXT'),('last_seen','TEXT'),('battery','INTEGER'),('created_at','TEXT'),('updated_at','TEXT')]:
+        if name not in cols: c.execute('ALTER TABLE mdm_devices ADD COLUMN '+name+' '+typ)
     cols={r[1] for r in c.execute('PRAGMA table_info(mdm_devices)').fetchall()}
     if 'fiado_id' not in cols: c.execute('ALTER TABLE mdm_devices ADD COLUMN fiado_id INTEGER DEFAULT NULL')
     for name,typ in [('installment_count','INTEGER DEFAULT 1'),('installment_value','REAL DEFAULT 0'),('paid_installments','INTEGER DEFAULT 0'),('payment_url','TEXT'),('pix_copy_paste','TEXT'),('auto_lock_enabled','INTEGER DEFAULT 1'),('grace_days','INTEGER DEFAULT 0'),('enrolled_at','TEXT'),('last_policy_sync','TEXT'),('last_error','TEXT')]:
         if name not in cols: c.execute('ALTER TABLE mdm_devices ADD COLUMN '+name+' '+typ)
+    c.execute('CREATE INDEX IF NOT EXISTS idx_mdm_events_device ON mdm_events(device_id,id)')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_mdm_installments_device ON mdm_installments(device_id,number)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_mdm_token ON mdm_devices(enrollment_token)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_mdm_customer ON mdm_devices(customer_id)')
     c.commit();c.close()

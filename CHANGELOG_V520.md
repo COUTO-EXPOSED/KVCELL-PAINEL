@@ -30,3 +30,9 @@ Intervenção exclusiva no módulo Crediário / MDM. Os demais módulos do V502 
 
 ## Limite técnico importante
 O painel não contorna FRP, senha, bootloader, Secure Lock ou outras proteções do Android. O bloqueio físico depende de provisionamento legítimo como Device Owner e das APIs oficiais do Android.
+
+## V520.5 — MDM SQLite migration hotfix
+- Corrigida falha de boot `sqlite3.OperationalError: no such column: device_id` causada por bancos V500/V520 antigos com `mdm_events` sem `device_id`.
+- Índices MDM não são mais criados durante o `SCHEMA` antes da migração.
+- `migrate_v10()` agora repara incrementalmente `mdm_events`, `mdm_installments` e colunas essenciais de `mdm_devices` antes de criar índices.
+- Mantido o restante do sistema intacto.
