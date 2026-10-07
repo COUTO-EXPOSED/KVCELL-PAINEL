@@ -823,7 +823,12 @@ class Handler(BaseHTTPRequestHandler):
         dev=one('SELECT * FROM mdm_devices WHERE enrollment_token=?',(t,))
         if not dev:return self.json({'error':'Token MDM inválido.'},404)
         stamp=now(); battery=max(0,min(100,int(d.get('battery') or 0))); appv=str(d.get('app_version') or '')
-        write('UPDATE mdm_devices SET status=?,last_seen=?,battery=?,app_version=?,updated_at=?,last_error=NULL WHERE id=?',('online',stamp,battery,appv,stamp,dev['id']))
+        brand=str(d.get('brand') or dev['brand'] or '').strip() or None
+        model=str(d.get('model') or dev['model'] or '').strip() or None
+        device_name=str(d.get('device_name') or dev['device_name'] or '').strip() or None
+        android_version=str(d.get('android_version') or dev['android_version'] or '').strip() or None
+        serial=str(d.get('serial') or dev['serial'] or '').strip() or None
+        write('UPDATE mdm_devices SET status=?,last_seen=?,battery=?,app_version=?,brand=?,model=?,device_name=?,android_version=?,serial=?,updated_at=?,last_error=NULL WHERE id=?',('online',stamp,battery,appv,brand,model,device_name,android_version,serial,stamp,dev['id']))
         fresh=one('SELECT * FROM mdm_devices WHERE id=?',(dev['id'],));
         balance=max(0,float(fresh['installment_total'] or 0)-float(fresh['installment_paid'] or 0)); days=None
         if fresh['next_due']:
@@ -833,7 +838,9 @@ class Handler(BaseHTTPRequestHandler):
         if fresh['auto_lock_enabled'] and balance>0 and days is not None and days<-(int(fresh['grace_days'] or 0)) and policy not in ('quitado','bloqueado'):
             policy='bloqueado'; write("UPDATE mdm_devices SET policy_state='bloqueado',status='bloqueio solicitado',last_policy_sync=?,updated_at=? WHERE id=?",(stamp,stamp,fresh['id']))
             write('INSERT INTO mdm_events(device_id,action,message,created_at) VALUES(?,?,?,?)',(fresh['id'],'auto_lock','Bloqueio automático por atraso.',stamp))
-        return self.json({'ok':True,'policy_state':policy,'message':fresh['custom_message'],'next_due':fresh['next_due'],'balance':balance,'days_to_due':days,'installments_remaining':max(0,int(fresh['installment_count'] or 0)-int(fresh['paid_installments'] or 0)),'payment_url':fresh['payment_url'],'pix_copy_paste':fresh['pix_copy_paste'],'server_time':stamp})
+        host=self.headers.get('Host','kvcell.squareweb.app')
+        portal_url='https://'+host+'/public/mdm/portal/'+str(t)
+        return self.json({'ok':True,'policy_state':policy,'message':fresh['custom_message'],'next_due':fresh['next_due'],'balance':balance,'days_to_due':days,'installments_remaining':max(0,int(fresh['installment_count'] or 0)-int(fresh['paid_installments'] or 0)),'payment_url':fresh['payment_url'],'portal_url':portal_url,'pix_copy_paste':fresh['pix_copy_paste'],'server_time':stamp})
     def mdm_payment_request(self,t,d):
         dev=one('SELECT * FROM mdm_devices WHERE enrollment_token=?',(t,))
         if not dev:return self.json({'error':'Token MDM inválido.'},404)
@@ -1100,6 +1107,12 @@ class Handler(BaseHTTPRequestHandler):
             c.close()
         return self.send(200,buf.getvalue(),'application/zip',{'Content-Disposition':'attachment; filename=kvcell-backup.zip'})
     def public(self,path):
+        if path.startswith('/public/mdm/portal/'):
+            t=path.split('/')[-1]
+            d=one('SELECT m.*,c.name customer_name,c.phone customer_phone FROM mdm_devices m LEFT JOIN customers c ON c.id=m.customer_id WHERE m.enrollment_token=?',(t,))
+            if not d:return self.send(404,'Portal MDM não encontrado','text/html')
+            ins=rows('SELECT number,amount,due_date,status,paid_at,payment_method FROM mdm_installments WHERE device_id=? ORDER BY number',(d['id'],))
+            return self.send(200,public_mdm_portal(d,ins),'text/html')
         if path.startswith('/public/mdm/enroll/'):
             t=path.split('/')[-1]; d=one('SELECT * FROM mdm_devices WHERE enrollment_token=?',(t,))
             if not d:return self.send(404,'Convite MDM não encontrado','text/html')
@@ -1122,7 +1135,56 @@ class Handler(BaseHTTPRequestHandler):
         self.send(404,b'Not found','text/plain')
 
 def public_mdm_enroll(d):
-    return """<!doctype html><html lang="pt-BR"><meta name="viewport" content="width=device-width,initial-scale=1"><title>KV CELL • MDM</title><style>{css}.hero h1{{font-size:32px}}.warn{{border-color:#6b5b00;background:#171500}}</style><main><header><b>KV CELL</b><span>MDM • CREDIÁRIO ANDROID</span></header><section class="hero"><small>PROVISIONAMENTO</small><h1>{name}</h1><p>{brand} {model}</p><div class="status">Token de enrollment pronto</div></section><div class="box"><h2>Como conectar</h2><ol><li>Instale o agente MDM autorizado da KV CELL no Android.</li><li>Abra o leitor de QR do fluxo de provisionamento.</li><li>Leia este convite e confirme a política no aparelho.</li></ol><p>Este portal não instala software oculto nem remove proteções do Android; a aplicação da política depende de um agente MDM provisionado legitimamente.</p></div><div class="box warn"><b>Política atual</b><p>{policy}</p><p>{msg}</p></div><footer>KV CELL • Crediário Android</footer></main></html>""".format(css=PUBLIC_CSS,name=safe(d['device_name']),brand=safe(d['brand']),model=safe(d['model']),policy=safe(d['policy_state']),msg=safe(d['custom_message']))
+    return """<!doctype html><html lang="pt-BR"><meta name="viewport" content="width=device-width,initial-scale=1"><title>KV CELL • MDM</title><style>{css}.hero h1{{font-size:32px}}.warn{{border-color:#6b5b00;background:#171500}}.portal{{display:inline-block;background:#ffd400;color:#080808;text-decoration:none;font-weight:900;padding:13px 18px;border-radius:12px;margin-top:8px}}</style><main><header><b>KV CELL</b><span>MDM • CREDIÁRIO ANDROID</span></header><section class="hero"><small>PROVISIONAMENTO</small><h1>{name}</h1><p>{brand} {model}</p><div class="status">Token de enrollment pronto</div><a class="portal" href="/public/mdm/portal/{token}">Abrir portal do aparelho</a></section><div class="box"><h2>Como conectar</h2><ol><li>Instale o agente MDM autorizado da KV CELL no Android.</li><li>Abra o leitor de QR do fluxo de provisionamento.</li><li>Leia este convite e confirme a política no aparelho.</li></ol><p>Este portal não instala software oculto nem remove proteções do Android; a aplicação da política depende de um agente MDM provisionado legitimamente.</p></div><div class="box warn"><b>Política atual</b><p>{policy}</p><p>{msg}</p></div><footer>KV CELL • Crediário Android</footer></main></html>""".format(css=PUBLIC_CSS,name=safe(d['device_name']),brand=safe(d['brand']),model=safe(d['model']),policy=safe(d['policy_state']),msg=safe(d['custom_message']),token=safe(d['enrollment_token']))
+
+def public_mdm_portal(d,ins):
+    balance=max(0,float(d['installment_total'] or 0)-float(d['installment_paid'] or 0))
+    rows_html=''.join(
+        '<tr><td>#%s</td><td>R$ %.2f</td><td>%s</td><td><span class="pill %s">%s</span></td></tr>' %
+        (safe(x['number']),float(x['amount'] or 0),safe(x['due_date'] or '—'),
+         'ok' if x['status']=='pago' else ('late' if x['due_date'] and x['due_date'] < date.today().isoformat() else ''),
+         safe(x['status'] or 'pendente'))
+        for x in ins
+    ) or '<tr><td colspan="4">Nenhuma parcela detalhada.</td></tr>'
+    payment=d['payment_url'] or ''
+    pix=d['pix_copy_paste'] or ''
+    payment_box=(
+        '<div class="actions"><a class="pay" href="'+safe(payment)+'" target="_blank" rel="noopener">Pagar / atualizar crediário</a></div>'
+        if payment else
+        '<div class="notice">O pagamento online ainda não foi configurado pela KV CELL. Se disponível, use o PIX abaixo.</div>'
+    )
+    pix_box=(
+        '<div class="pix"><b>PIX copia e cola</b><textarea readonly onclick="this.select()">'+safe(pix)+'</textarea><button onclick="navigator.clipboard&&navigator.clipboard.writeText(this.previousElementSibling.value)">Copiar PIX</button></div>'
+        if pix else ''
+    )
+    return """<!doctype html><html lang="pt-BR"><meta name="viewport" content="width=device-width,initial-scale=1"><title>KV CELL • Portal do aparelho</title>
+<style>{css}
+:root{{--accent:#ffd400;--bg:#080808;--panel:#111;--muted:#9b9b9b}}
+body{{background:radial-gradient(circle at 50% -20%,#292400 0,#080808 48%);}}
+.hero h1{{font-size:30px;margin-bottom:4px}} .hero p{{color:#bdbdbd}}
+.grid4{{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}} .metric{{background:#101010;border:1px solid #292929;border-radius:16px;padding:16px}} .metric small{{color:#929292;display:block}} .metric b{{display:block;font-size:22px;margin-top:5px}}
+.tablewrap{{overflow:auto}} table{{width:100%;border-collapse:collapse}} th,td{{padding:11px;border-bottom:1px solid #292929;text-align:left}} th{{color:#9b9b9b;font-size:12px}} .pill{{padding:5px 9px;border-radius:999px;background:#252525}} .pill.ok{{background:#123d24;color:#76f0a1}} .pill.late{{background:#4a1717;color:#ff9b9b}}
+.pay{{display:inline-block;background:#ffd400;color:#070707;padding:13px 18px;border-radius:12px;font-weight:900;text-decoration:none}} .pix textarea{{width:100%;min-height:82px;margin-top:8px;background:#090909;color:#ddd;border:1px solid #333;border-radius:10px;padding:10px;box-sizing:border-box}} .pix button{{background:#242424;color:#fff;border:0;border-radius:10px;padding:10px 14px;margin-top:8px;cursor:pointer}} .notice{{padding:12px;border:1px solid #3a3a3a;border-radius:12px;color:#cfcfcf}} .devicegrid{{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}} .devicegrid div{{background:#0d0d0d;border:1px solid #252525;border-radius:12px;padding:12px}} .devicegrid small{{display:block;color:#888}} .devicegrid b{{display:block;margin-top:4px;word-break:break-word}} @media(max-width:760px){{.grid4,.devicegrid{{grid-template-columns:1fr 1fr}}}} @media(max-width:480px){{.grid4,.devicegrid{{grid-template-columns:1fr}}}}
+</style><main><header><b>KV CELL</b><span>PORTAL DO APARELHO • CREDIÁRIO</span></header>
+<section class="hero"><small>CLIENTE</small><h1>{customer}</h1><p>{device} • {unit}</p><div class="status">{policy} • {status}</div></section>
+<div class="grid4"><div class="metric"><small>SALDO</small><b>R$ {balance:,.2f}</b></div><div class="metric"><small>FINANCIADO</small><b>R$ {total:,.2f}</b></div><div class="metric"><small>PAGO</small><b>R$ {paid:,.2f}</b></div><div class="metric"><small>PRÓXIMO VENC.</small><b>{due}</b></div></div>
+<div class="box"><h2>Seu aparelho</h2><div class="devicegrid">
+<div><small>Marca / modelo</small><b>{brand} {model}</b></div><div><small>Nome do aparelho</small><b>{device}</b></div>
+<div><small>IMEI</small><b>{imei}</b></div><div><small>Número de série</small><b>{serial}</b></div>
+<div><small>Android</small><b>{android}</b></div><div><small>Bateria / última conexão</small><b>{battery} • {last_seen}</b></div>
+<div><small>Política KV CELL</small><b>{policy}</b></div><div><small>Mensagem</small><b>{message}</b></div>
+</div></div>
+<div class="box"><h2>Parcelas</h2><div class="tablewrap"><table><tr><th>Parcela</th><th>Valor</th><th>Vencimento</th><th>Status</th></tr>{rows}</table></div></div>
+<div class="box"><h2>Pagamento</h2>{payment_box}{pix_box}</div>
+<footer>KV CELL • Lagos + Magé • Portal protegido por token de matrícula</footer></main></html>""".format(
+        css=PUBLIC_CSS,customer=safe(d['customer_name'] or 'Cliente'),
+        device=safe(d['device_name'] or (d['brand']+' '+d['model'])),unit=safe(d['unit'] or 'KV CELL'),
+        policy=safe(d['policy_state'] or 'normal'),status=safe(d['status'] or 'aguardando'),
+        balance=balance,total=float(d['installment_total'] or 0),paid=float(d['installment_paid'] or 0),
+        due=safe(d['next_due'] or '—'),brand=safe(d['brand']),model=safe(d['model']),
+        imei=safe(d['imei'] or '—'),serial=safe(d['serial'] or '—'),android=safe(d['android_version'] or '—'),
+        battery=safe(str(d['battery'])+'%' if d['battery'] is not None else '—'),last_seen=safe(d['last_seen'] or '—'),
+        message=safe(d['custom_message'] or '—'),rows=rows_html,payment_box=payment_box,pix_box=pix_box)
 
 def public_quote(q,c):
     items=json.loads(q['items'] or '[]'); rows=''.join(f"<tr><td>{safe(x.get('description',x.get('name','Serviço')))}</td><td>{safe(x.get('qty',1))}</td><td>R$ {float(x.get('total',x.get('price',0))):,.2f}</td></tr>" for x in items)

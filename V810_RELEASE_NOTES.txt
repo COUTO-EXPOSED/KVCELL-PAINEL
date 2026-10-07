@@ -1,0 +1,24 @@
+KV CELL OS PREMIUM ULTIMATE SUPREME
+RELEASE V810.0
+
+Base: V700
+Tipo: evolução aditiva / sem remoção de módulos
+
+PRINCIPAIS:
+- Crediário MDM com portal público individual por aparelho.
+- Saldo, parcelas, vencimentos, dados técnicos, política e pagamento/PIX.
+- Heartbeat MDM enriquecido.
+- Correção de conexão ADB: bridge real priorizado; WebUSB como fallback/seletor.
+- ADB & Antivírus preservado e endurecido para operar somente com aparelho ADB autorizado.
+- Visual adicional inspirado no Tech OS Pro fornecido: Poppins, cartões e estados.
+- Estrutura Square Cloud preservada.
+
+PUBLICAÇÃO:
+- MAIN=app.py
+- Procfile e start.sh preservados.
+- Configure ADMIN_EMAIL / ADMIN_PASSWORD.
+- Configure MDM_AGENT_APK_URL se desejar QR de provisionamento Android.
+
+SEGURANÇA:
+- Não há bypass de FRP, senha, bootloader ou Device Owner existente.
+- O bloqueio físico depende de Device Owner provisionado legitimamente.

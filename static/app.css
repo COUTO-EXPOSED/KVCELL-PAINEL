@@ -49,3 +49,18 @@
 @media(max-width:900px){.adb600-grid,.adb600-grid3,.mdm600-qr{grid-template-columns:1fr}.adb600-header,.adb600-mdm{flex-direction:column;align-items:stretch}.adb600-metrics{grid-template-columns:1fr 1fr}}
 /* V600.2 — native browser USB selector + MDM ADB injection */
 .adb600-browserusb{margin:16px 0}.adb600-browserusb .adb600-device{width:100%;display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid rgba(255,193,7,.16);background:#0c0c0c;color:#fff;border-radius:12px;margin:8px 0;cursor:pointer;text-align:left}.adb600-browserusb .adb600-device.active{border-color:#f5c400;box-shadow:0 0 0 1px rgba(245,196,0,.18) inset}.adb600-browserusb .adb600-device small{display:block;color:#999;margin-top:3px}.mdm600-force{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.mdm600-force .panel{min-width:0}.mdm-force-main img{display:block;max-width:260px;width:100%;margin:12px auto;background:#fff;border-radius:14px;padding:10px}.mdm-inject-box{display:grid;gap:10px;padding:14px;border:1px dashed rgba(245,196,0,.35);border-radius:14px;background:rgba(245,196,0,.035)}.mdm-inject-box .input{width:100%}@media(max-width:900px){.mdm600-force{grid-template-columns:1fr}}
+
+
+/* KV CELL V810.0 — visual layer inspired by the supplied reference panel.
+   Additive only; existing selectors remain untouched. */
+@font-face{font-family:KVCellPoppins;src:url('/static/fonts/poppins-regular.woff2') format('woff2');font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:KVCellPoppins;src:url('/static/fonts/poppins-semibold.woff2') format('woff2');font-weight:600;font-style:normal;font-display:swap}
+.v810-shell,.v810-shell *,.mdm520-detail,.mdm520-dashboard,.adb600-wrap{font-family:KVCellPoppins,Inter,system-ui,sans-serif}
+.v810-glass,.mdm520-dashboard,.adb600-wrap{border:1px solid rgba(255,212,0,.10);box-shadow:0 16px 55px rgba(0,0,0,.28)}
+.mdm520-status{border-radius:999px;padding:6px 10px;font-weight:700}
+.mdm520-status.ok{background:#123b24;color:#75f2a0}
+.mdm520-status.danger{background:#4a1717;color:#ff9b9b}
+.mdm520-status.warning{background:#493900;color:#ffd95a}
+.adb600-panel,.mdm520-dashboard article{transition:transform .16s ease,border-color .16s ease,box-shadow .16s ease}
+.adb600-panel:hover,.mdm520-dashboard article:hover{transform:translateY(-1px);border-color:rgba(255,212,0,.24);box-shadow:0 12px 34px rgba(0,0,0,.24)}
+.adb600-primary{box-shadow:0 0 0 1px rgba(255,212,0,.18),0 8px 24px rgba(255,212,0,.08)}

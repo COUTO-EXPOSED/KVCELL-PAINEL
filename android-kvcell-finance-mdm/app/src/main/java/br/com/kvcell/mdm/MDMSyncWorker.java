@@ -20,7 +20,7 @@ public class MDMSyncWorker extends Worker {
     private JSONObject request(String token, int battery) throws Exception {
         URL u=new URL(BASE+"/public/mdm/heartbeat/"+token);
         HttpURLConnection c=(HttpURLConnection)u.openConnection(); c.setRequestMethod("POST"); c.setConnectTimeout(10000); c.setReadTimeout(15000); c.setDoOutput(true); c.setRequestProperty("Content-Type","application/json");
-        JSONObject body=new JSONObject().put("battery",battery).put("app_version","1.1.0");
+        JSONObject body=new JSONObject().put("battery",battery).put("app_version","810.0").put("brand",android.os.Build.MANUFACTURER).put("model",android.os.Build.MODEL).put("device_name",android.os.Build.DEVICE).put("android_version",android.os.Build.VERSION.RELEASE);
         try(OutputStream os=c.getOutputStream()){os.write(body.toString().getBytes(StandardCharsets.UTF_8));}
         if(c.getResponseCode()<200 || c.getResponseCode()>=300) throw new IllegalStateException("HTTP "+c.getResponseCode());
         BufferedReader r=new BufferedReader(new InputStreamReader(c.getInputStream(),StandardCharsets.UTF_8)); StringBuilder s=new StringBuilder(); String l; while((l=r.readLine())!=null)s.append(l); return new JSONObject(s.toString());

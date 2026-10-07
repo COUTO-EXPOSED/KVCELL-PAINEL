@@ -1,3 +1,25 @@
+# KV CELL OS PREMIUM — ULTIMATE SUPREME V810.0
+
+> V810.0 é uma evolução aditiva sobre a base V700. Nenhum módulo funcional existente foi removido.
+
+## V810.0 — evolução aplicada
+- **Crediário / MDM:** portal público individual por aparelho com saldo, parcelas, vencimentos, status, dados técnicos básicos e botão de pagamento/PIX.
+- **Agente MDM:** heartbeat passa a atualizar marca, modelo, nome do aparelho, Android e serial quando o agente fornece esses dados.
+- **ADB:** conexão prioriza a ponte ADB real; WebUSB continua como seletor/fallback. Isso evita o falso estado em que o USB é selecionado mas nenhuma sessão ADB existe.
+- **ADB & Antivírus:** preservada a triagem heurística existente; a camada V810 deixa a análise dependente de um ADB autorizado e sem rotinas de bypass.
+- **Visual:** camada adicional inspirada no estilo do Tech OS Pro fornecido, com Poppins e cartões/painéis de referência, sem substituir a identidade KV CELL preto/amarelo.
+- **Compatibilidade:** camada JS V810 sobrescreve apenas pontos instáveis, mantendo as implementações V500/V520/V600/V700 no arquivo para evitar regressão.
+- **Square Cloud:** `squarecloud.app`, `Procfile` e `start.sh` permanecem compatíveis.
+
+## MDM / Portal do cliente
+Cada crediário possui uma URL no formato `/public/mdm/portal/<token>`. O portal não exige conta e não executa pagamento diretamente: ele abre o link de pagamento configurado ou apresenta o PIX copia-e-cola. O token funciona como credencial de acesso e deve ser tratado como privado.
+
+## Limites de segurança
+O sistema não contorna FRP, senha, bootloader, Device Owner existente ou outras proteções do Android. O bloqueio remoto só é aplicado pelo agente legitimamente provisionado como Device Owner.
+
+## Publicação
+Suba o conteúdo deste ZIP no Square Cloud como o projeto V810.0. Configure `ADMIN_EMAIL`, `ADMIN_PASSWORD` e, se for usar QR de provisionamento, `MDM_AGENT_APK_URL`.
+
 # KV CELL OS PREMIUM — ULTIMATE SUPREME V500
 
 ## Base de evolução
