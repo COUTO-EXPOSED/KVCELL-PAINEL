@@ -12,6 +12,9 @@ from urllib.parse import urlparse, parse_qs
 HOST='127.0.0.1'
 PORT=int(os.environ.get('KVCELL_BRIDGE_PORT','17321'))
 ADB=os.environ.get('KVCELL_ADB_PATH','adb')
+if ADB=='adb' and not shutil.which('adb'):
+    for _p in [os.path.expandvars(r'%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe'),os.path.expandvars(r'%USERPROFILE%\AppData\Local\Android\Sdk\platform-tools\adb.exe'),r'C:\platform-tools\adb.exe']:
+        if os.path.isfile(_p): ADB=_p; break
 TIMEOUT=int(os.environ.get('KVCELL_ADB_TIMEOUT','20'))
 BRIDGE_DIR=os.path.dirname(os.path.abspath(__file__))
 MDM_APK=os.environ.get('KVCELL_MDM_APK_PATH', os.path.join(BRIDGE_DIR,'mdm','KV_CELL_MDM.apk'))
@@ -199,11 +202,12 @@ class H(BaseHTTPRequestHandler):
         try:
             p=urlparse(self.path); q=parse_qs(p.query); serial=q.get('serial',[''])[0] or None
             if p.path=='/health':
-                found=bool(shutil.which(ADB) or os.path.exists(ADB)); ds=[]
+                found=bool(shutil.which(ADB) or os.path.exists(ADB))
+                devs=[]
                 if found:
-                    try: ds=devices()
-                    except Exception as ex: return self.sendj({'ok':True,'bridge':'KV CELL ADB Bridge','adb':ADB,'adb_found':True,'devices_error':str(ex),'devices':[],'time':time.time()})
-                return self.sendj({'ok':True,'bridge':'KV CELL ADB Bridge V600','adb':ADB,'adb_found':found,'devices':ds,'port':PORT,'time':time.time()})
+                    try: devs=devices()
+                    except Exception: devs=[]
+                return self.sendj({'ok':True,'bridge':'KV CELL ADB Bridge','adb':ADB,'adb_found':found,'devices':devs,'time':time.time()})
             if p.path=='/devices': return self.sendj({'ok':True,'devices':devices()})
             if p.path=='/device': return self.sendj({'ok':True,'device':device_info(serial)})
             if p.path=='/security-scan': return self.sendj({'ok':True,**security_scan(serial)})

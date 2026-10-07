@@ -26,7 +26,7 @@ public class MainActivity extends Activity {
     private static final String BASE="https://kvcell.squareweb.app";
     private String token;
     private TextView status,finance,pix;
-    private Button pay,copy;
+    private String paymentUrl;
     private DevicePolicyManager dpm;
     private ComponentName admin;
 
@@ -40,8 +40,8 @@ public class MainActivity extends Activity {
         }
         if(DevicePolicyManager.ACTION_ADMIN_POLICY_COMPLIANCE.equals(in.getAction())){ setResult(RESULT_OK); finish(); return; }
         Uri data=in.getData(); token=data!=null?data.getLastPathSegment():getPreferences(0).getString("token",null);
-        pay=findViewById(br.com.kvcell.mdmd.R.id.pay); copy=findViewById(br.com.kvcell.mdmd.R.id.copy);
-        pay.setOnClickListener(v->{ if(token!=null) syncNow(); });
+        Button pay=findViewById(br.com.kvcell.mdmd.R.id.pay); Button copy=findViewById(br.com.kvcell.mdmd.R.id.copy);
+        pay.setOnClickListener(v->{ if(paymentUrl!=null && !paymentUrl.isEmpty()){ try{ startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(paymentUrl))); }catch(Exception ignored){ syncNow(); } } else if(token!=null) syncNow(); });
         copy.setOnClickListener(v->{ String value=pix.getText().toString().replace("PIX: ","").trim(); if(!value.isEmpty()&&!value.equals("—")){ ClipboardManager cm=(ClipboardManager)getSystemService(CLIPBOARD_SERVICE); cm.setPrimaryClip(ClipData.newPlainText("PIX KV CELL",value)); pix.setText("PIX: chave copiada • "+value); } });
         if(token!=null){ getPreferences(0).edit().putString("token",token).apply(); getSharedPreferences("mdm",0).edit().putString("token",token).apply(); syncNow(); scheduleSync(); }
         else status.setText("KV CELL MDM\nAguardando matrícula autorizada.");
@@ -55,9 +55,9 @@ public class MainActivity extends Activity {
         BufferedReader r=new BufferedReader(new InputStreamReader(c.getInputStream(),StandardCharsets.UTF_8)); StringBuilder s=new StringBuilder(); String l; while((l=r.readLine())!=null)s.append(l); return new JSONObject(s.toString());
     }
     private void syncNow(){ Executors.newSingleThreadExecutor().execute(()->{ try{ JSONObject o=heartbeat(); applyPolicy(o); runOnUiThread(()->{
-        String policy=o.optString("policy_state","normal"); boolean owner=dpm.isDeviceOwnerApp(getPackageName()); status.setText("KV CELL MDM\nPolítica: "+policy+(owner?" • DEVICE OWNER":" • administração não provisionada")); pay.setText("bloqueado".equals(policy)?"Pagar / atualizar agora":"Atualizar crediário / pagamento");
+        String policy=o.optString("policy_state","normal"); status.setText("KV CELL MDM\nPolítica: "+policy+(dpm.isDeviceOwnerApp(getPackageName())?" • DEVICE OWNER":" • administração não provisionada"));
         finance.setText("Saldo: R$ "+String.format(java.util.Locale.US,"%.2f",o.optDouble("balance",0))+"\nPróximo vencimento: "+o.optString("next_due","—")+"\nDias até vencimento: "+o.optInt("days_to_due",0)+"\nParcelas restantes: "+o.optInt("installments_remaining",0));
-        pix.setText("PIX: "+o.optString("pix_copy_paste","—"));
+        paymentUrl=o.optString("payment_url",""); pix.setText("PIX: "+o.optString("pix_copy_paste","—")); pay.setText(paymentUrl.isEmpty()?"Atualizar crediário":"Pagar / atualizar crediário");
     }); }catch(Exception e){ runOnUiThread(()->status.setText("KV CELL MDM\nAguardando sincronização com a KV CELL.")); }}); }
     private void applyPolicy(JSONObject o){ try{ String policy=o.optString("policy_state","normal"); if(!dpm.isDeviceOwnerApp(getPackageName()))return; if("bloqueado".equals(policy)){ dpm.setUninstallBlocked(admin,getPackageName(),true); dpm.setDeviceOwnerLockScreenInfo(admin,o.optString("message","Aparelho em atraso no crediário KV CELL")); dpm.lockNow(); } else if("normal".equals(policy)||"quitado".equals(policy)||"pausado".equals(policy)){ dpm.setUninstallBlocked(admin,getPackageName(),false); dpm.setDeviceOwnerLockScreenInfo(admin,null); } }catch(Exception ignored){} }
 }
