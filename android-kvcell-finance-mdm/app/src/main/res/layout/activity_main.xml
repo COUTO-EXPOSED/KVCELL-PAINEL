@@ -1,0 +1,6 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:orientation="vertical" android:padding="24dp" android:layout_width="match_parent" android:layout_height="match_parent">
+    <TextView android:id="@+id/title" android:text="KV CELL • Crediário" android:textSize="24sp" android:textStyle="bold" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+    <TextView android:id="@+id/status" android:text="Aguardando matrícula por QR" android:layout_marginTop="12dp" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+    <TextView android:id="@+id/finance" android:text="Saldo: —\nPróximo vencimento: —\nParcelas restantes: —" android:layout_marginTop="18dp" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+    <Button android:id="@+id/pay" android:text="Ver opções de pagamento" android:layout_marginTop="20dp" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+</LinearLayout>

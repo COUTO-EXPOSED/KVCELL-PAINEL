@@ -2,3 +2,5 @@
 # Uses Python standard library only: sqlite3, http.server, zipfile, json.
 
 cryptography>=43,<47
+
+qrcode>=7.4,<9

@@ -1,6 +1,8 @@
 import os, json, sqlite3, hashlib, secrets, base64, zipfile, io, csv, html, urllib.request, urllib.parse, urllib.error, time, re, threading, shutil
 from datetime import datetime, date, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import qrcode
+from io import BytesIO
 from urllib.parse import urlparse, parse_qs
 
 BASE=os.path.dirname(os.path.abspath(__file__))
@@ -83,8 +85,8 @@ SCHEMA='''
 CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT,email TEXT UNIQUE,password_hash TEXT,role TEXT,unit TEXT,permissions TEXT,active INTEGER DEFAULT 1,created_at TEXT);
 CREATE TABLE IF NOT EXISTS customers(id INTEGER PRIMARY KEY AUTOINCREMENT,type TEXT,name TEXT,document_type TEXT,document TEXT,phone_type TEXT,phone TEXT,email TEXT,address TEXT,city TEXT,birth_date TEXT,balance REAL DEFAULT 0,observations TEXT,created_at TEXT);
 CREATE TABLE IF NOT EXISTS devices(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,customer_id INTEGER,brand TEXT,model TEXT,imei TEXT,serial TEXT,color TEXT,storage TEXT,status TEXT,photos TEXT DEFAULT '[]',notes TEXT,created_at TEXT);
-CREATE TABLE IF NOT EXISTS services(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,customer_id INTEGER,device_id INTEGER,kind TEXT,description TEXT,checklist TEXT,diagnosis TEXT,status TEXT,technician TEXT,price REAL,warranty TEXT,photos TEXT DEFAULT '[]',notes TEXT,public_token TEXT,created_at TEXT,updated_at TEXT,cost_material REAL DEFAULT 0,cost_labor REAL DEFAULT 0,cost_extra REAL DEFAULT 0,cost_total REAL DEFAULT 0,profit REAL DEFAULT 0,warranty_of_id INTEGER DEFAULT NULL,details_json TEXT DEFAULT '{}');
-CREATE TABLE IF NOT EXISTS unlocks(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,customer_id INTEGER,device_id INTEGER,brand TEXT,model TEXT,imei TEXT,kind TEXT,checklist TEXT,status TEXT,operator TEXT,price REAL,photos TEXT DEFAULT '[]',notes TEXT,public_token TEXT,created_at TEXT,cost_material REAL DEFAULT 0,cost_labor REAL DEFAULT 0,cost_extra REAL DEFAULT 0,cost_total REAL DEFAULT 0,profit REAL DEFAULT 0,warranty_of_id INTEGER DEFAULT NULL,details_json TEXT DEFAULT '{}');
+CREATE TABLE IF NOT EXISTS services(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,customer_id INTEGER,device_id INTEGER,kind TEXT,description TEXT,checklist TEXT,diagnosis TEXT,status TEXT,technician TEXT,price REAL,warranty TEXT,photos TEXT DEFAULT '[]',notes TEXT,public_token TEXT,created_at TEXT,updated_at TEXT,cost_material REAL DEFAULT 0,cost_labor REAL DEFAULT 0,cost_extra REAL DEFAULT 0,cost_total REAL DEFAULT 0,profit REAL DEFAULT 0,warranty_of_id INTEGER DEFAULT NULL,details_json TEXT DEFAULT '{}',technician_id INTEGER DEFAULT NULL);
+CREATE TABLE IF NOT EXISTS unlocks(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,customer_id INTEGER,device_id INTEGER,brand TEXT,model TEXT,imei TEXT,kind TEXT,checklist TEXT,status TEXT,operator TEXT,price REAL,photos TEXT DEFAULT '[]',notes TEXT,public_token TEXT,created_at TEXT,cost_material REAL DEFAULT 0,cost_labor REAL DEFAULT 0,cost_extra REAL DEFAULT 0,cost_total REAL DEFAULT 0,profit REAL DEFAULT 0,warranty_of_id INTEGER DEFAULT NULL,details_json TEXT DEFAULT '{}',technician_id INTEGER DEFAULT NULL);
 CREATE TABLE IF NOT EXISTS purchases(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,customer_id INTEGER,brand TEXT,model TEXT,imei TEXT,purchase_date TEXT,amount REAL,expenses REAL,freight REAL,total_cost REAL,suggested_price REAL,expected_profit REAL,photos TEXT DEFAULT '[]',checklist TEXT,observations TEXT,status TEXT,created_at TEXT);
 CREATE TABLE IF NOT EXISTS inventory(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,code TEXT,name TEXT,type TEXT,category TEXT,qty REAL,min_qty REAL,cost REAL,price REAL,supplier TEXT,compatibility TEXT,notes TEXT,created_at TEXT);
 CREATE TABLE IF NOT EXISTS models(id INTEGER PRIMARY KEY AUTOINCREMENT,brand TEXT,model TEXT,service_prices TEXT,margin REAL,warranty TEXT,notes TEXT,created_at TEXT);
@@ -108,12 +110,10 @@ CREATE TABLE IF NOT EXISTS guarantees(id INTEGER PRIMARY KEY AUTOINCREMENT,unit 
 CREATE TABLE IF NOT EXISTS community_posts(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,user_name TEXT,title TEXT,message TEXT,type TEXT,status TEXT,created_at TEXT);
 CREATE TABLE IF NOT EXISTS referrals(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,customer_id INTEGER,service_name TEXT,commission REAL DEFAULT 0,referrer TEXT,link TEXT,status TEXT,created_at TEXT);
 CREATE TABLE IF NOT EXISTS catalog_products(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,name TEXT,category TEXT,price REAL DEFAULT 0,stock REAL DEFAULT 0,image TEXT,active INTEGER DEFAULT 1,created_at TEXT);
-CREATE TABLE IF NOT EXISTS fiado_accounts(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,customer_id INTEGER,source_type TEXT,source_id INTEGER,description TEXT,total REAL DEFAULT 0,down_payment REAL DEFAULT 0,balance REAL DEFAULT 0,due_date TEXT,status TEXT DEFAULT 'aberto',notes TEXT,created_at TEXT);
+CREATE TABLE IF NOT EXISTS fiado_accounts(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,customer_id INTEGER,source_type TEXT,source_id INTEGER,description TEXT,total REAL DEFAULT 0,down_payment REAL DEFAULT 0,balance REAL DEFAULT 0,due_date TEXT,status TEXT DEFAULT 'aberto',notes TEXT,installments INTEGER DEFAULT 1,installment_value REAL DEFAULT 0,frequency TEXT DEFAULT 'Mensal (30 dias)',created_at TEXT);
 CREATE TABLE IF NOT EXISTS fiado_payments(id INTEGER PRIMARY KEY AUTOINCREMENT,account_id INTEGER,amount REAL,payment TEXT,paid_at TEXT,notes TEXT,created_at TEXT);
-CREATE TABLE IF NOT EXISTS mdm_contracts(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,customer_id INTEGER,device_id INTEGER,contract_number TEXT UNIQUE,enrollment_token TEXT UNIQUE,device_token TEXT UNIQUE,brand TEXT,model TEXT,imei TEXT,serial TEXT,device_name TEXT,status TEXT DEFAULT 'aguardando',policy_status TEXT DEFAULT 'normal',installment_total REAL DEFAULT 0,installment_count INTEGER DEFAULT 0,installment_amount REAL DEFAULT 0,down_payment REAL DEFAULT 0,paid_amount REAL DEFAULT 0,next_due_date TEXT,payment_url TEXT,pix_copy_paste TEXT,notes TEXT,metadata_json TEXT DEFAULT '{}',created_at TEXT,updated_at TEXT,last_seen TEXT,last_ip TEXT,app_version TEXT);
-CREATE TABLE IF NOT EXISTS mdm_installments(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER,number INTEGER,due_date TEXT,amount REAL,paid_amount REAL DEFAULT 0,status TEXT DEFAULT 'aberta',paid_at TEXT,payment_ref TEXT,created_at TEXT);
-CREATE TABLE IF NOT EXISTS mdm_events(id INTEGER PRIMARY KEY AUTOINCREMENT,contract_id INTEGER,device_token TEXT,event_type TEXT,payload TEXT,created_at TEXT);
-
+CREATE TABLE IF NOT EXISTS mdm_devices(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,customer_id INTEGER,purchase_id INTEGER,fiado_id INTEGER,brand TEXT,model TEXT,imei TEXT,serial TEXT,android_version TEXT,device_name TEXT,enrollment_token TEXT UNIQUE,qr_payload TEXT,status TEXT DEFAULT 'aguardando',policy_state TEXT DEFAULT 'normal',custom_message TEXT,installment_total REAL DEFAULT 0,installment_paid REAL DEFAULT 0,next_due TEXT,app_version TEXT,last_seen TEXT,battery INTEGER,installment_count INTEGER DEFAULT 1,installment_value REAL DEFAULT 0,paid_installments INTEGER DEFAULT 0,payment_url TEXT,pix_copy_paste TEXT,created_at TEXT,updated_at TEXT);
+CREATE TABLE IF NOT EXISTS mdm_events(id INTEGER PRIMARY KEY AUTOINCREMENT,device_id INTEGER,action TEXT,message TEXT,created_at TEXT);
 
 '''
 
@@ -134,6 +134,24 @@ def migrate_v10():
         for name,typ in [('cost_material','REAL DEFAULT 0'),('cost_labor','REAL DEFAULT 0'),('cost_extra','REAL DEFAULT 0'),('cost_total','REAL DEFAULT 0'),('profit','REAL DEFAULT 0'),('warranty_of_id','INTEGER DEFAULT NULL')]:
             if name not in cols: c.execute(f'ALTER TABLE {table} ADD COLUMN {name} {typ}')
         if 'details_json' not in cols: c.execute("ALTER TABLE "+table+" ADD COLUMN details_json TEXT DEFAULT '{}'")
+        if 'technician_id' not in cols: c.execute("ALTER TABLE "+table+" ADD COLUMN technician_id INTEGER DEFAULT NULL")
+    cols={r[1] for r in c.execute('PRAGMA table_info(fiado_accounts)').fetchall()}
+    for name,typ in [('installments','INTEGER DEFAULT 1'),('installment_value','REAL DEFAULT 0'),('frequency',"TEXT DEFAULT 'Mensal (30 dias)'")]:
+        if name not in cols: c.execute('ALTER TABLE fiado_accounts ADD COLUMN '+name+' '+typ)
+    cols={r[1] for r in c.execute('PRAGMA table_info(purchases)').fetchall()}
+    for name,typ in [('device_id','INTEGER DEFAULT NULL'),('details_json',"TEXT DEFAULT '{}'")]:
+        if name not in cols: c.execute('ALTER TABLE purchases ADD COLUMN '+name+' '+typ)
+    cols={r[1] for r in c.execute('PRAGMA table_info(sales)').fetchall()}
+    if 'purchase_id' not in cols: c.execute('ALTER TABLE sales ADD COLUMN purchase_id INTEGER DEFAULT NULL')
+    cols={r[1] for r in c.execute('PRAGMA table_info(forgotten)').fetchall()}
+    if 'customer_id' not in cols: c.execute('ALTER TABLE forgotten ADD COLUMN customer_id INTEGER DEFAULT NULL')
+    cols={r[1] for r in c.execute('PRAGMA table_info(inventory)').fetchall()}
+    for name,typ in [('source_type','TEXT'),('source_id','INTEGER DEFAULT NULL')]:
+        if name not in cols: c.execute('ALTER TABLE inventory ADD COLUMN '+name+' '+typ)
+    cols={r[1] for r in c.execute('PRAGMA table_info(mdm_devices)').fetchall()}
+    if 'fiado_id' not in cols: c.execute('ALTER TABLE mdm_devices ADD COLUMN fiado_id INTEGER DEFAULT NULL')
+    for name,typ in [('installment_count','INTEGER DEFAULT 1'),('installment_value','REAL DEFAULT 0'),('paid_installments','INTEGER DEFAULT 0'),('payment_url','TEXT'),('pix_copy_paste','TEXT')]:
+        if name not in cols: c.execute('ALTER TABLE mdm_devices ADD COLUMN '+name+' '+typ)
     c.commit();c.close()
 migrate_v10()
 
@@ -295,23 +313,19 @@ class Handler(BaseHTTPRequestHandler):
         if path=='/api/undo': return self.undo_list()
         if path=='/api/ai/chat': return self.ai_chat_list()
         if path=='/api/fiado': return self.fiado_api(qs)
+        if path=='/api/fiado-payments': return self.json(rows('SELECT * FROM fiado_payments WHERE account_id=? ORDER BY id DESC',(int(qs.get('id',['0'])[0] or 0),)))
         if path=='/api/appointments': return self.json(self.resource_with_customer('appointments',qs))
         if path=='/api/technicians': return self.json(rows('SELECT * FROM technicians ORDER BY id DESC LIMIT 500'))
+        if path=='/api/technician-stats': return self.technician_stats(qs.get('unit',['TODOS'])[0])
         if path=='/api/suppliers': return self.json(rows('SELECT * FROM suppliers ORDER BY id DESC LIMIT 500'))
         if path=='/api/guarantees': return self.json(self.resource_with_customer('guarantees',qs))
         if path=='/api/community': return self.json(rows('SELECT * FROM community_posts ORDER BY id DESC LIMIT 200'))
         if path=='/api/referrals': return self.json(self.resource_with_customer('referrals',qs))
         if path=='/api/catalog-products': return self.json(rows('SELECT * FROM catalog_products ORDER BY id DESC LIMIT 500'))
-        if path=='/api/mdm/contracts': return self.mdm_contracts(qs)
-        if path=='/api/mdm/summary': return self.mdm_summary(qs.get('unit',['TODOS'])[0])
-        if path.startswith('/api/mdm/contract/'):
-            return self.mdm_contract_detail(int(path.split('/')[-1]))
-        if path=='/api/mdm/qr': return self.mdm_qr(qs.get('token',[''])[0])
-        if path.startswith('/public/mdm/qr/'):
-            return self.mdm_qr(path.split('/')[-1], public=True)
-        if path.startswith('/public/mdm/device/'):
-            return self.mdm_public_device(path.split('/')[-1])
-
+        if path=='/api/mdm': return self.mdm_list(qs)
+        if path=='/api/mdm/qr': return self.mdm_qr(qs)
+        if path=='/api/mdm/device': return self.mdm_device(qs)
+        if path=='/api/mdm/events': return self.json(rows('SELECT * FROM mdm_events ORDER BY id DESC LIMIT 300'))
         if path.startswith('/api/'): return self.list_api(path[5:],qs)
         self.send(404,b'Not found','text/plain')
     def do_POST(self):
@@ -320,11 +334,14 @@ class Handler(BaseHTTPRequestHandler):
         if path=='/api/logout': return self.logout()
         if path.startswith('/public/quote/'):
             return self.public_quote_action(path.split('/')[-1], data)
+        if path.startswith('/public/mdm/enroll/'):
+            return self.mdm_enroll(path.split('/')[-1], data)
+        if path.startswith('/public/mdm/heartbeat/'):
+            return self.mdm_heartbeat(path.split('/')[-1], data)
+        if path.startswith('/public/mdm/payment/'):
+            return self.mdm_payment_request(path.split('/')[-1], data)
         if path.startswith('/public/os/'):
             return self.public_os_action(path.split('/')[-1], data)
-        if path=='/public/mdm/enroll': return self.mdm_enroll(data)
-        if path=='/public/mdm/heartbeat': return self.mdm_heartbeat(data)
-        if path=='/public/mdm/payment-intent': return self.mdm_payment_intent(data)
         if path.startswith('/public/'): return self.send(405,b'','text/plain')
         u=self.require()
         if not u:return
@@ -336,10 +353,8 @@ class Handler(BaseHTTPRequestHandler):
         if path=='/api/ai/chat': return self.ai_chat(data,u)
         if path=='/api/undo': return self.undo_action(data,u)
         if path=='/api/fiado/payment': return self.fiado_payment(data,u)
-        if path=='/api/mdm/contract': return self.mdm_create(data,u)
         if path=='/api/mdm/action': return self.mdm_action(data,u)
-        if path=='/api/mdm/payment': return self.mdm_record_payment(data,u)
-        if path=='/api/mdm/installment': return self.mdm_record_payment(data,u)
+        if path=='/api/mdm/create': return self.mdm_create(data,u)
         if path.startswith('/api/'):
             try:return self.create_api(path[5:],data,u)
             except sqlite3.IntegrityError as e:return self.json({'error':'Registro inválido ou duplicado: '+str(e)},400)
@@ -427,37 +442,46 @@ class Handler(BaseHTTPRequestHandler):
         elif r=='devices': rid=write('INSERT INTO devices(unit,customer_id,brand,model,imei,serial,color,storage,status,photos,notes,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('brand'),d.get('model'),d.get('imei'),d.get('serial'),d.get('color'),d.get('storage'),d.get('status','Em bancada'),js(d.get('photos',[])),d.get('notes'),now()))
         elif r=='services':
             t=token(); price=float(d.get('price') or 0); cm=float(d.get('cost_material') or 0); cl=float(d.get('cost_labor') or 0); ce=float(d.get('cost_extra') or 0); ct=cm+cl+ce; profit=price-ct
-            rid=write('INSERT INTO services(unit,customer_id,device_id,kind,description,checklist,diagnosis,status,technician,price,warranty,photos,notes,public_token,created_at,updated_at,cost_material,cost_labor,cost_extra,cost_total,profit,warranty_of_id,details_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('device_id') or None,d.get('kind','conserto'),d.get('description'),js(d.get('checklist',{})),d.get('diagnosis'),d.get('status','aberto'),d.get('technician'),price,d.get('warranty'),js(d.get('photos',[])),d.get('notes'),t,now(),now(),cm,cl,ce,ct,profit,d.get('warranty_of_id') or None,js(d.get('details',{}))))
-            if price>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),'entrada','Serviço',d.get('description') or 'Conserto',price,'service',rid,now()))
-            if ct>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),'saida','Custo OS',d.get('description') or 'Custo de serviço',ct,'service_cost',rid,now()))
+            rid=write('INSERT INTO services(unit,customer_id,device_id,kind,description,checklist,diagnosis,status,technician,technician_id,price,warranty,photos,notes,public_token,created_at,updated_at,cost_material,cost_labor,cost_extra,cost_total,profit,warranty_of_id,details_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('device_id') or None,d.get('kind','conserto'),d.get('description'),js(d.get('checklist',{})),d.get('diagnosis'),d.get('status','aberto'),d.get('technician'),d.get('technician_id') or None,price,d.get('warranty'),js(d.get('photos',[])),d.get('notes'),t,now(),now(),cm,cl,ce,ct,profit,d.get('warranty_of_id') or None,js(d.get('details',{}))))
+            if d.get('status') in ('entregue',):
+                if price>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),'entrada','Serviço',d.get('description') or 'Conserto',price,'service',rid,now()))
+                if ct>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),'saida','Custo OS',d.get('description') or 'Custo de serviço',ct,'service_cost',rid,now()))
         elif r=='unlocks':
             t=token(); price=float(d.get('price') or 0); cm=float(d.get('cost_material') or 0); cl=float(d.get('cost_labor') or 0); ce=float(d.get('cost_extra') or 0); ct=cm+cl+ce; profit=price-ct
-            rid=write('INSERT INTO unlocks(unit,customer_id,device_id,brand,model,imei,kind,checklist,status,operator,price,photos,notes,public_token,created_at,cost_material,cost_labor,cost_extra,cost_total,profit,warranty_of_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('device_id') or None,d.get('brand'),d.get('model'),d.get('imei'),d.get('kind'),js(d.get('checklist',{})),d.get('status','aberto'),d.get('operator'),price,js(d.get('photos',[])),d.get('notes'),t,now(),cm,cl,ce,ct,profit,d.get('warranty_of_id') or None))
+            rid=write('INSERT INTO unlocks(unit,customer_id,device_id,brand,model,imei,kind,checklist,status,operator,technician_id,price,photos,notes,public_token,created_at,cost_material,cost_labor,cost_extra,cost_total,profit,warranty_of_id,details_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('device_id') or None,d.get('brand'),d.get('model'),d.get('imei'),d.get('kind'),js(d.get('checklist',{})),d.get('status','aberto'),d.get('operator'),d.get('technician_id') or None,price,js(d.get('photos',[])),d.get('notes'),t,now(),cm,cl,ce,ct,profit,d.get('warranty_of_id') or None,js(d.get('details',{}))))
             write('UPDATE unlocks SET details_json=? WHERE id=?',(js(d.get('details',{})),rid))
             if price>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),'entrada','Desbloqueio',d.get('kind') or 'Desbloqueio',price,'unlock',rid,now()))
             if ct>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),'saida','Custo Desbloqueio',d.get('kind') or 'Custo de desbloqueio',ct,'unlock_cost',rid,now()))
         elif r=='purchases':
             total=float(d.get('amount') or 0)+float(d.get('expenses') or 0)+float(d.get('freight') or 0); sp=float(d.get('suggested_price') or 0); sold=1 if str(d.get('sold','')).lower() in ('1','true','sim','on') else 0
             status='vendido' if sold else d.get('status','vitrine')
-            rid=write('INSERT INTO purchases(unit,customer_id,brand,model,imei,purchase_date,amount,expenses,freight,total_cost,suggested_price,expected_profit,photos,checklist,observations,status,created_at,sold,sale_date,sale_place,sale_price,sale_payment,sale_installments,sale_fee,sale_notes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('brand'),d.get('model'),d.get('imei'),d.get('purchase_date') or date.today().isoformat(),float(d.get('amount') or 0),float(d.get('expenses') or 0),float(d.get('freight') or 0),total,sp,sp-total,js(d.get('photos',[])),js(d.get('checklist',{})),d.get('observations'),status,now(),sold,d.get('sale_date'),d.get('sale_place'),float(d.get('sale_price') or 0),d.get('sale_payment'),int(d.get('sale_installments') or 1),float(d.get('sale_fee') or 0),d.get('sale_notes')))
+            rid=write('INSERT INTO purchases(unit,customer_id,device_id,brand,model,imei,purchase_date,amount,expenses,freight,total_cost,suggested_price,expected_profit,photos,checklist,observations,status,created_at,sold,sale_date,sale_place,sale_price,sale_payment,sale_installments,sale_fee,sale_notes,details_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('device_id') or None,d.get('brand'),d.get('model'),d.get('imei'),d.get('purchase_date') or date.today().isoformat(),float(d.get('amount') or 0),float(d.get('expenses') or 0),float(d.get('freight') or 0),total,sp,sp-total,js(d.get('photos',[])),js(d.get('checklist',{})),d.get('observations'),status,now(),sold,d.get('sale_date'),d.get('sale_place'),float(d.get('sale_price') or 0),d.get('sale_payment'),int(d.get('sale_installments') or 1),float(d.get('sale_fee') or 0),d.get('sale_notes'),js(d.get('details',{}))))
             write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),'saida','Compra de aparelho',f"{d.get('brand','')} {d.get('model','')}",total,'purchase',rid,now()))
+            invname=f"{d.get('brand','')} {d.get('model','')}".strip(); code=d.get('imei') or ('PUR-'+str(rid)); write('INSERT INTO inventory(unit,code,name,type,category,qty,min_qty,cost,price,supplier,compatibility,notes,created_at,source_type,source_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),code,invname,'Aparelho','Vitrine',1,0,total,sp,d.get('supplier'),'IMEI: '+str(d.get('imei') or ''),(d.get('observations') or '')+' • Compra e Venda #'+str(rid),now(),'purchase',rid))
             if sold and float(d.get('sale_price') or 0)>0:
                 net=float(d.get('sale_price') or 0)-float(d.get('sale_fee') or 0)
                 write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),'entrada','Venda de aparelho',f"{d.get('brand','')} {d.get('model','')}",net,'purchase_sale',rid,now()))
         elif r=='inventory': rid=write('INSERT INTO inventory(unit,code,name,type,category,qty,min_qty,cost,price,supplier,compatibility,notes,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('code'),d.get('name'),d.get('type','Peça'),d.get('category'),float(d.get('qty') or 0),float(d.get('min_qty') or 0),float(d.get('cost') or 0),float(d.get('price') or 0),d.get('supplier'),d.get('compatibility'),d.get('notes'),now()))
         elif r=='models': rid=write('INSERT INTO models(brand,model,service_prices,margin,warranty,notes,created_at) VALUES(?,?,?,?,?,?,?)',(d.get('brand'),d.get('model'),js(d.get('service_prices',{})),float(d.get('margin') or 0),d.get('warranty'),d.get('notes'),now()))
         elif r=='quotes':
-            num='ORC-'+datetime.now().strftime('%Y%m')+'-'+str(secrets.randbelow(9000)+1000); t=token(); items=d.get('items',[]); total=float(d.get('total') or 0); travel_enabled=1 if str(d.get('travel_enabled','0')).lower() in ('1','true','sim','on') else 0; travel_fee=float(d.get('travel_fee') or 0) if travel_enabled else 0; warranty_days=int(d.get('warranty_days') or 0); rid=write('INSERT INTO quotes(number,unit,customer_id,device_id,items,subtotal,total,warranty_type,warranty_days,travel_enabled,travel_fee,quote_type,conditions,observations,valid_until,status,public_token,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(num,d.get('unit','TODOS'),d.get('customer_id') or None,d.get('device_id') or None,js(items),float(d.get('subtotal') or total),total,d.get('warranty_type','personalizada'),warranty_days,travel_enabled,travel_fee,d.get('quote_type','servico'),d.get('conditions'),d.get('observations'),d.get('valid_until'),d.get('status','aberto'),t,now()))
+            num='ORC-'+datetime.now().strftime('%Y%m')+'-'+str(secrets.randbelow(9000)+1000); t=token(); items=d.get('items',[]); total=float(d.get('total') or 0); auto_total=sum(float(x.get('total',x.get('price',0)) or 0) for x in (items or [])); travel_enabled=1 if str(d.get('travel_enabled','0')).lower() in ('1','true','sim','on') else 0; travel_fee=float(d.get('travel_fee') or 0) if travel_enabled else 0; total=(total if total>0 else auto_total+travel_fee); warranty_days=int(d.get('warranty_days') or 0); rid=write('INSERT INTO quotes(number,unit,customer_id,device_id,items,subtotal,total,warranty_type,warranty_days,travel_enabled,travel_fee,quote_type,conditions,observations,valid_until,status,public_token,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(num,d.get('unit','TODOS'),d.get('customer_id') or None,d.get('device_id') or None,js(items),float(d.get('subtotal') or total),total,d.get('warranty_type','personalizada'),warranty_days,travel_enabled,travel_fee,d.get('quote_type','servico'),d.get('conditions'),d.get('observations'),d.get('valid_until'),d.get('status','aberto'),t,now()))
             return self.json({'ok':True,'id':rid,'number':num,'public_url':f'/public/quote/{t}'})
         elif r=='sales':
             total=float(d.get('total') or 0); fee=float(d.get('payment_fee') or 0); net=float(d.get('net_total') or (total-fee))
-            rid=write('INSERT INTO sales(unit,customer_id,items,total,payment,created_at,payment_fee,net_total,payment_details) VALUES(?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('items'),total,d.get('payment'),now(),fee,net,d.get('payment_details')))
+            rid=write('INSERT INTO sales(unit,customer_id,purchase_id,items,total,payment,created_at,payment_fee,net_total,payment_details) VALUES(?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('purchase_id') or None,d.get('items'),total,d.get('payment'),now(),fee,net,d.get('payment_details')))
             write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),'entrada','Venda',d.get('items') or 'Venda',net,'sale',rid,now()))
+            if d.get('purchase_id'):
+                pid=int(d.get('purchase_id')); pp=one('SELECT * FROM purchases WHERE id=?',(pid,))
+                if pp and pp.get('status')!='vendido':
+                    write("UPDATE purchases SET sold=1,status='vendido',sale_date=?,sale_place='PDV',sale_price=?,sale_payment=?,sale_fee=? WHERE id=?",(date.today().isoformat(),total,d.get('payment'),fee,pid))
+                    if pp.get('device_id'): write("UPDATE devices SET status='Vendido' WHERE id=?",(pp['device_id'],))
+                    write("UPDATE inventory SET qty=0,notes=COALESCE(notes,'')||' • VENDIDO NO PDV' WHERE source_type='purchase' AND source_id=?",(pid,))
             if str(d.get('payment') or '').lower()=='fiado':
-                due=d.get('due_date'); down=float(d.get('down_payment') or 0); balance=max(0,total-down); fid=write('INSERT INTO fiado_accounts(unit,customer_id,source_type,source_id,description,total,down_payment,balance,due_date,status,notes,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,'sale',rid,d.get('items') or 'Venda fiada',total,down,balance,due,'aberto',d.get('payment_details'),now()))
+                due=d.get('due_date'); down=float(d.get('down_payment') or 0); balance=max(0,total-down); installments=max(1,int(d.get('installments') or 1)); inst_value=float(d.get('installment_value') or (balance/installments if installments else balance)); frequency=d.get('frequency') or 'Mensal (30 dias)'
+                fid=write('INSERT INTO fiado_accounts(unit,customer_id,source_type,source_id,description,total,down_payment,balance,due_date,status,notes,installments,installment_value,frequency,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,'sale',rid,d.get('items') or 'Venda fiada',total,down,balance,due,'aberto',d.get('payment_details'),installments,inst_value,frequency,now()))
                 if down>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),'entrada','Fiado / Entrada',d.get('items') or 'Venda fiada',down,'fiado',fid,now()))
         elif r=='finance': rid=write('INSERT INTO finance(unit,type,category,description,amount,due_date,paid,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('type','entrada'),d.get('category'),d.get('description'),float(d.get('amount') or 0),d.get('due_date'),1 if d.get('paid',True) else 0,now()))
-        elif r=='forgotten': rid=write('INSERT INTO forgotten(unit,brand,model,imei,possible_owner,phone,photos,checklist,notes,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('brand'),d.get('model'),d.get('imei'),d.get('possible_owner'),d.get('phone'),js(d.get('photos',[])),js(d.get('checklist',{})),d.get('notes'),d.get('status','aguardando identificação'),now()))
+        elif r=='forgotten': rid=write('INSERT INTO forgotten(unit,customer_id,brand,model,imei,possible_owner,phone,photos,checklist,notes,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('brand'),d.get('model'),d.get('imei'),d.get('possible_owner'),d.get('phone'),js(d.get('photos',[])),js(d.get('checklist',{})),d.get('notes'),d.get('status','aguardando identificação'),now()))
         elif r=='contracts': rid=write('INSERT INTO contracts(unit,type,customer_id,device_id,payload,customer_signature,store_signature,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('type'),d.get('customer_id') or None,d.get('device_id') or None,js(d.get('payload',{})),d.get('customer_signature'),d.get('store_signature'),now()))
         elif r=='users':
             if u['role']!='admin':return self.json({'error':'Somente administrador'},403)
@@ -478,7 +502,8 @@ class Handler(BaseHTTPRequestHandler):
             rid=write('INSERT INTO catalog_products(unit,name,category,price,stock,image,active,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('name'),d.get('category'),float(d.get('price') or 0),float(d.get('stock') or 0),d.get('image'),1 if d.get('active',True) else 0,now()))
         elif r=='fiado':
             total=float(d.get('total') or 0); down=float(d.get('down_payment') or 0); balance=max(0,total-down); due=d.get('due_date'); status='pago' if balance<=0 else ('atrasado' if due and due<date.today().isoformat() else 'aberto')
-            rid=write('INSERT INTO fiado_accounts(unit,customer_id,source_type,source_id,description,total,down_payment,balance,due_date,status,notes,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('source_type'),d.get('source_id') or None,d.get('description'),total,down,balance,due,status,d.get('notes'),now()))
+            installments=max(1,int(d.get('installments') or 1)); inst_value=float(d.get('installment_value') or (balance/installments if installments else balance)); frequency=d.get('frequency') or 'Mensal (30 dias)'
+            rid=write('INSERT INTO fiado_accounts(unit,customer_id,source_type,source_id,description,total,down_payment,balance,due_date,status,notes,installments,installment_value,frequency,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('source_type'),d.get('source_id') or None,d.get('description'),total,down,balance,due,status,d.get('notes'),installments,inst_value,frequency,now()))
             if down>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),'entrada','Fiado / Entrada',d.get('description') or 'Entrada de fiado',down,'fiado',rid,now()))
         elif r=='film_compat': rid=write('INSERT INTO film_compat(brand,model,aliases,master_code,group_name,screen_size,fit_notes,source_note,confidence,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)',(d.get('brand'),d.get('model'),d.get('aliases'),d.get('master_code'),d.get('group_name'),d.get('screen_size'),d.get('fit_notes'),d.get('source_note','cadastro interno'),d.get('confidence','manual'),now()))
         elif r=='chat': rid=write('INSERT INTO chat(unit,user_name,message,created_at) VALUES(?,?,?,?)',(d.get('unit','TODOS'),u['name'],d.get('message'),now()))
@@ -486,14 +511,14 @@ class Handler(BaseHTTPRequestHandler):
         audit(u['id'],'create',r,rid,js(d)); uu=dict(u); uu['unit']=d.get('unit',u.get('unit','TODOS')); activity(uu,'LOG',f'Criou {r}',r,rid,js(d)); push_undo(uu,f'Criou {r}',r,rid,{},d); return self.json({'ok':True,'id':rid})
     def update_api(self,r,d,u):
         table=r; rid=d.get('id')
-        allowed={'services':['status','diagnosis','technician','price','warranty','notes','checklist','photos','cost_material','cost_labor','cost_extra','warranty_of_id','details_json'],'unlocks':['status','operator','price','notes','checklist','photos','cost_material','cost_labor','cost_extra','warranty_of_id','details_json'],'devices':['status','notes','photos'],'forgotten':['status','notes','possible_owner','photos'],'quotes':['status','valid_until','observations'],'inventory':['qty','min_qty','price','cost','compatibility','notes'],'purchases':['sold','sale_date','sale_place','sale_price','sale_payment','sale_installments','sale_fee','sale_notes','status','suggested_price','observations'],'appointments':['title','service_type','start_at','end_at','status','technician','notes'],'technicians':['name','phone','email','specialties','active'],'suppliers':['name','document','phone','email','city','notes'],'guarantees':['status','end_date','notes'],'community':['title','message','type','status'],'referrals':['service_name','commission','referrer','link','status'],'catalog-products':['name','category','price','stock','image','active']}
+        allowed={'customers':['type','name','document_type','document','phone_type','phone','email','address','city','birth_date','balance','observations'],'models':['brand','model','service_prices','margin','warranty','notes'],'users':['name','email','role','unit','permissions','active'],'services':['unit','customer_id','device_id','kind','description','status','diagnosis','technician','technician_id','price','warranty','notes','checklist','photos','cost_material','cost_labor','cost_extra','warranty_of_id','details_json'],'unlocks':['unit','customer_id','device_id','brand','model','kind','status','operator','technician_id','price','notes','checklist','photos','cost_material','cost_labor','cost_extra','warranty_of_id','details_json'],'devices':['unit','customer_id','brand','model','imei','serial','color','storage','status','notes','photos'],'forgotten':['unit','customer_id','brand','model','imei','possible_owner','phone','status','notes','photos','checklist'],'quotes':['unit','customer_id','device_id','status','valid_until','observations','conditions','warranty_type','warranty_days','travel_enabled','travel_fee','items','subtotal','total'],'inventory':['unit','code','name','type','category','qty','min_qty','price','cost','supplier','compatibility','notes'],'purchases':['unit','customer_id','device_id','brand','model','imei','purchase_date','amount','expenses','freight','total_cost','suggested_price','expected_profit','sold','sale_date','sale_place','sale_price','sale_payment','sale_installments','sale_fee','sale_notes','status','observations','photos','checklist','details_json'],'sales':['unit','customer_id','purchase_id','items','total','payment','payment_fee','net_total','payment_details'],'finance':['unit','type','category','description','amount','due_date','paid'],'appointments':['unit','customer_id','title','service_type','start_at','end_at','status','technician','notes'],'technicians':['unit','name','phone','email','specialties','active'],'suppliers':['unit','name','document','phone','email','city','notes'],'guarantees':['unit','customer_id','source_type','source_id','device','description','start_date','end_date','status','notes'],'community':['unit','title','message','type','status'],'referrals':['unit','customer_id','service_name','commission','referrer','link','status'],'catalog-products':['unit','name','category','price','stock','image','active'],'fiado':['unit','customer_id','source_type','source_id','description','total','down_payment','balance','due_date','status','notes','installments','installment_value','frequency']}
         if table not in allowed:return self.json({'error':'Atualização não permitida'},400)
         before=one('SELECT * FROM '+table+' WHERE id=?',(rid,))
         if not before:return self.json({'error':'Registro não encontrado'},404)
         fields=[f for f in allowed[table] if f in d]; vals=[]
         if not fields:return self.json({'error':'Nenhum campo'},400)
         for f in fields:
-            v=d[f]; v=js(v) if f in ('checklist','photos','details_json') and not isinstance(v,str) else v; vals.append(v)
+            v=d[f]; v=js(v) if f in ('checklist','photos','details_json','items','permissions','service_prices') and not isinstance(v,str) else v; vals.append(v)
         if table in ('services','unlocks'):
             price=float(d.get('price',before['price']) or 0); cm=float(d.get('cost_material',before['cost_material']) or 0); cl=float(d.get('cost_labor',before['cost_labor']) or 0); ce=float(d.get('cost_extra',before['cost_extra']) or 0);
             for k,v in [('cost_material',cm),('cost_labor',cl),('cost_extra',ce),('cost_total',cm+cl+ce),('profit',price-(cm+cl+ce))]:
@@ -502,7 +527,7 @@ class Handler(BaseHTTPRequestHandler):
         vals.append(rid); write('UPDATE '+table+' SET '+','.join(f+'=?' for f in fields)+' WHERE id=?',vals)
         after=one('SELECT * FROM '+table+' WHERE id=?',(rid,))
         # V100: on finalization, process parts/products linked to the OS exactly once.
-        if table=='services' and after and str(after['status'] or '') in ('entregue','pronto') and str(before['status'] or '') not in ('entregue','pronto'):
+        if table=='services' and after and str(after['status'] or '')=='entregue' and str(before['status'] or '')!='entregue':
             try:
                 det=json.loads(after['details_json'] or '{}')
                 if not det.get('stock_processed'):
@@ -528,21 +553,89 @@ class Handler(BaseHTTPRequestHandler):
         if table in ('services','unlocks'):
             rt='service' if table=='services' else 'unlock'; label='Serviço' if table=='services' else 'Desbloqueio'; costrt=rt+'_cost'
             write('DELETE FROM finance WHERE ref_type IN (?,?) AND ref_id=?',(rt,costrt,rid))
-            if float(after['price'] or 0)>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(after['unit'],'entrada',label,after['description'] if table=='services' else after['kind'],float(after['price'] or 0),rt,rid,now()))
-            if float(after['cost_total'] or 0)>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(after['unit'],'saida','Custo '+('OS' if table=='services' else 'Desbloqueio'),after['description'] if table=='services' else after['kind'],float(after['cost_total'] or 0),costrt,rid,now()))
+            finance_ok=(table=='unlocks' or str(after['status'] or '')=='entregue')
+            if finance_ok:
+                if float(after['price'] or 0)>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(after['unit'],'entrada',label,after['description'] if table=='services' else after['kind'],float(after['price'] or 0),rt,rid,now()))
+                if float(after['cost_total'] or 0)>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(after['unit'],'saida','Custo '+('OS' if table=='services' else 'Desbloqueio'),after['description'] if table=='services' else after['kind'],float(after['cost_total'] or 0),costrt,rid,now()))
+        if table=='sales':
+            write("DELETE FROM finance WHERE ref_type='sale' AND ref_id=?",(rid,));
+            net2=float(after['net_total'] or after['total'] or 0); 
+            if net2>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(after['unit'],'entrada','Venda',after['items'] or 'Venda',net2,'sale',rid,now()))
+        if table=='purchases':
+            write("DELETE FROM finance WHERE ref_type IN ('purchase','purchase_sale') AND ref_id=?",(rid,));
+            if float(after['total_cost'] or 0)>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(after['unit'],'saida','Compra de aparelho',f"{after['brand'] or ''} {after['model'] or ''}",float(after['total_cost'] or 0),'purchase',rid,now()))
+            if int(after['sold'] or 0) and float(after['sale_price'] or 0)>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(after['unit'],'entrada','Venda de aparelho',f"{after['brand'] or ''} {after['model'] or ''}",float(after['sale_price'] or 0)-float(after['sale_fee'] or 0),'purchase_sale',rid,now()))
+        if table=='purchases':
+            if str(after['status'] or '')=='vitrine' and not int(after['sold'] or 0): write("UPDATE inventory SET qty=1,price=?,cost=?,notes=REPLACE(COALESCE(notes,''),' • VENDIDO NO PDV','') WHERE source_type='purchase' AND source_id=?",(float(after['suggested_price'] or 0),float(after['total_cost'] or 0),rid))
+            if str(after['status'] or '') in ('vendido','sucata') or int(after['sold'] or 0): write("UPDATE inventory SET qty=0 WHERE source_type='purchase' AND source_id=?",(rid,))
+        if table=='fiado':
+            paid=float(one('SELECT COALESCE(SUM(amount),0) n FROM fiado_payments WHERE account_id=?',(rid,))['n'] or 0); bal=max(0,float(after['total'] or 0)-float(after['down_payment'] or 0)-paid); write('UPDATE fiado_accounts SET balance=?,status=? WHERE id=?',(bal,'pago' if bal<=0 else ('atrasado' if after['due_date'] and after['due_date']<date.today().isoformat() else 'aberto'),rid))
         audit(u['id'],'update',table,rid,js(d)); uu=dict(u); uu['unit']=before['unit'] if 'unit' in before.keys() else u.get('unit','TODOS'); activity(uu,'LOG',f'Alterou {table}',table,rid,js(d)); push_undo(uu,f'Alterou {table}',table,rid,dict(before),dict(after)); return self.json({'ok':True,'profit':float(after.get('profit',0) or 0)})
     def do_DELETE(self):
         p=urlparse(self.path); u=self.require()
         if not u:return
         if not p.path.startswith('/api/'): return self.send(404,b'Not found','text/plain')
         resource=p.path[5:]; qs=parse_qs(p.query); rid=int(qs.get('id',['0'])[0] or 0)
-        maps={'customers':'customers','devices':'devices','services':'services','unlocks':'unlocks','purchases':'purchases','inventory':'inventory','models':'models','quotes':'quotes','sales':'sales','finance':'finance','forgotten':'forgotten','film_compat':'film_compat','chat':'chat','appointments':'appointments','technicians':'technicians','suppliers':'suppliers','guarantees':'guarantees','community':'community_posts','referrals':'referrals','catalog-products':'catalog_products','fiado':'fiado_accounts'}
+        maps={'customers':'customers','devices':'devices','services':'services','unlocks':'unlocks','purchases':'purchases','inventory':'inventory','models':'models','quotes':'quotes','sales':'sales','finance':'finance','forgotten':'forgotten','film_compat':'film_compat','chat':'chat','appointments':'appointments','technicians':'technicians','suppliers':'suppliers','guarantees':'guarantees','community':'community_posts','referrals':'referrals','catalog-products':'catalog_products','fiado':'fiado_accounts','users':'users','mdm':'mdm_devices'}
         if resource not in maps:return self.json({'error':'Recurso inválido'},404)
         row=one('SELECT * FROM '+maps[resource]+' WHERE id=?',(rid,))
         if not row:return self.json({'error':'Registro não encontrado'},404)
         if u['role']!='admin' and resource in ('users','finance'):return self.json({'error':'Sem permissão'},403)
+        if resource in ('services','unlocks','sales','purchases'):
+            refs={'services':('service','service_cost'),'unlocks':('unlock','unlock_cost'),'sales':('sale',),'purchases':('purchase','purchase_sale')}[resource]
+            for rt in refs: write('DELETE FROM finance WHERE ref_type=? AND ref_id=?',(rt,rid))
+        if resource=='fiado': write("DELETE FROM fiado_payments WHERE account_id=?",(rid,)); write("DELETE FROM finance WHERE ref_type='fiado' AND ref_id=?",(rid,))
         write('DELETE FROM '+maps[resource]+' WHERE id=?',(rid,)); uu=dict(u); uu['unit']=row['unit'] if 'unit' in row.keys() else u.get('unit','TODOS'); activity(uu,'LOG',f'Excluiu {resource}',resource,rid,js(dict(row))); push_undo(uu,f'Excluiu {resource}',maps[resource],rid,dict(row),{}); return self.json({'ok':True})
 
+    def mdm_list(self,qs):
+        unit=qs.get('unit',['TODOS'])[0]; sql='SELECT m.*,c.name customer_name,c.phone customer_phone FROM mdm_devices m LEFT JOIN customers c ON c.id=m.customer_id'; args=[]
+        if unit!='TODOS': sql+=' WHERE m.unit=?'; args.append(unit)
+        sql+=' ORDER BY m.id DESC LIMIT 500'; return self.json(rows(sql,args))
+    def mdm_device(self,qs):
+        t=qs.get('token',[''])[0]; d=one('SELECT m.*,c.name customer_name,c.phone customer_phone FROM mdm_devices m LEFT JOIN customers c ON c.id=m.customer_id WHERE m.enrollment_token=?',(t,))
+        if not d:return self.json({'error':'Token MDM inválido.'},404)
+        balance=max(0,float(d['installment_total'] or 0)-float(d['installment_paid'] or 0))
+        days=None
+        if d['next_due']:
+            try: days=(date.fromisoformat(d['next_due'])-date.today()).days
+            except: pass
+        return self.json({'ok':True,'device':dict(d),'balance':balance,'days_to_due':days,'installments_remaining':max(0,int(d['installment_count'] or 0)-int(d['paid_installments'] or 0))})
+
+    def mdm_qr(self,qs):
+        mid=int(qs.get('id',['0'])[0] or 0); d=one('SELECT * FROM mdm_devices WHERE id=?',(mid,))
+        if not d:return self.json({'error':'MDM não encontrado'},404)
+        payload=d['qr_payload'] or ('https://'+self.headers.get('Host','kvcell.squareweb.app')+'/public/mdm/enroll/'+d['enrollment_token'])
+        img=qrcode.make(payload); buf=BytesIO(); img.save(buf,format='PNG'); data='data:image/png;base64,'+base64.b64encode(buf.getvalue()).decode(); return self.json({'ok':True,'payload':payload,'data_url':data})
+    def mdm_create(self,d,u):
+        tokenv=token(); unit=d.get('unit','TODOS'); enroll_url='https://'+self.headers.get('Host','kvcell.squareweb.app')+'/public/mdm/enroll/'+tokenv; apk_url=(os.environ.get('MDM_AGENT_APK_URL') or '').strip(); payload=enroll_url
+        if apk_url:
+            payload=json.dumps({'android.app.extra.PROVISIONING_DEVICE_ADMIN_COMPONENT_NAME':'br.com.kvcell.finance.mdm/br.com.kvcell.mdmd.KVCellDeviceAdminReceiver','android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_DOWNLOAD_LOCATION':apk_url,'android.app.extra.PROVISIONING_ADMIN_EXTRAS_BUNDLE':json.dumps({'enrollment_token':tokenv,'server':'https://'+self.headers.get('Host','kvcell.squareweb.app')})},ensure_ascii=False,separators=(',',':'))
+        rid=write('INSERT INTO mdm_devices(unit,customer_id,purchase_id,fiado_id,brand,model,imei,serial,android_version,device_name,enrollment_token,qr_payload,status,policy_state,custom_message,installment_total,installment_paid,next_due,app_version,last_seen,battery,installment_count,installment_value,paid_installments,payment_url,pix_copy_paste,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(unit,d.get('customer_id') or None,d.get('purchase_id') or None,d.get('fiado_id') or None,d.get('brand'),d.get('model'),d.get('imei'),d.get('serial'),d.get('android_version'),d.get('device_name') or f"{d.get('brand','')} {d.get('model','')}".strip(),tokenv,payload,'aguardando','normal',d.get('custom_message') or 'Aparelho em crediário KV CELL',float(d.get('installment_total') or 0),float(d.get('installment_paid') or 0),d.get('next_due'),d.get('app_version'),None,None,int(d.get('installment_count') or 1),float(d.get('installment_value') or 0),int(d.get('paid_installments') or 0),d.get('payment_url'),d.get('pix_copy_paste'),now(),now()))
+        write('INSERT INTO mdm_events(device_id,action,message,created_at) VALUES(?,?,?,?)',(rid,'criado','Cadastro de política MDM criado.',now())); return self.json({'ok':True,'id':rid,'token':tokenv,'payload':payload})
+    def mdm_action(self,d,u):
+        mid=int(d.get('id') or 0); action=d.get('action'); dev=one('SELECT * FROM mdm_devices WHERE id=?',(mid,))
+        if not dev:return self.json({'error':'Dispositivo MDM não encontrado.'},404)
+        allowed={'lock':'bloqueado','unlock':'normal','pause':'pausado'}
+        if action not in allowed:return self.json({'error':'Ação MDM inválida.'},400)
+        state=allowed[action]; msg=d.get('message') or dev['custom_message'] or ''
+        write('UPDATE mdm_devices SET policy_state=?,status=?,custom_message=?,updated_at=? WHERE id=?',(state,'online' if action=='unlock' else 'bloqueio solicitado' if action=='lock' else 'pausado',msg,now(),mid))
+        write('INSERT INTO mdm_events(device_id,action,message,created_at) VALUES(?,?,?,?)',(mid,action,msg,now())); activity(u,'MDM',f'Ação MDM: {action}','mdm_devices',mid,msg); return self.json({'ok':True,'policy_state':state,'note':'A ação é uma política remota; o bloqueio físico só é aplicado por um agente MDM Android devidamente provisionado no aparelho.'})
+    def mdm_heartbeat(self,t,d):
+        dev=one('SELECT * FROM mdm_devices WHERE enrollment_token=?',(t,))
+        if not dev:return self.json({'error':'Token MDM inválido.'},404)
+        write('UPDATE mdm_devices SET status=?,last_seen=?,battery=?,app_version=?,updated_at=? WHERE id=?',('online',now(),int(d.get('battery') or 0),d.get('app_version'),now(),dev['id']))
+        return self.json({'ok':True,'policy_state':dev['policy_state'],'message':dev['custom_message'],'next_due':dev['next_due']})
+    def mdm_payment_request(self,t,d):
+        dev=one('SELECT * FROM mdm_devices WHERE enrollment_token=?',(t,))
+        if not dev:return self.json({'error':'Token MDM inválido.'},404)
+        msg='Solicitação de pagamento do crediário MDM'
+        write('INSERT INTO mdm_events(device_id,action,message,created_at) VALUES(?,?,?,?)',(dev['id'],'payment_request',msg,now()))
+        return self.json({'ok':True,'payment_url':dev['payment_url'],'pix_copy_paste':dev['pix_copy_paste'],'message':'Solicitação registrada. A confirmação financeira depende do meio de pagamento configurado pela KV CELL.'})
+
+    def mdm_enroll(self,t,d):
+        dev=one('SELECT * FROM mdm_devices WHERE enrollment_token=?',(t,))
+        if not dev:return self.json({'error':'Token MDM inválido ou expirado.'},404)
+        write("UPDATE mdm_devices SET status='online',last_seen=?,updated_at=? WHERE id=?",(now(),now(),dev['id'])); write('INSERT INTO mdm_events(device_id,action,message,created_at) VALUES(?,?,?,?)',(dev['id'],'enroll','Dispositivo entrou no fluxo de provisionamento.',now())); return self.json({'ok':True,'device_id':dev['id'],'device_name':dev['device_name'],'policy_state':dev['policy_state'],'message':dev['custom_message'],'next_due':dev['next_due']})
     def upload(self,d,u):
         # Images are data URLs stored in DB through caller; endpoint returns a compact data URL for the frontend.
         s=d.get('data','');
@@ -587,21 +680,38 @@ class Handler(BaseHTTPRequestHandler):
         data=rows('SELECT c.*, COALESCE((SELECT COUNT(*) FROM services s WHERE s.customer_id=c.id),0) service_count, (SELECT MAX(created_at) FROM services s WHERE s.customer_id=c.id) last_service FROM customers c WHERE c.name LIKE ? OR REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(c.phone,"(",""),")",""),"-","")," ",""),"+","") LIKE ? ORDER BY c.name LIMIT 20',(like,phone_like))
         today=date.today()
         for x in data:
-            x['score']=min(100,int(x['service_count'])*10)
+            x['score']=min(100,int(x['service_count'])*10+int(one('SELECT COUNT(*) n FROM unlocks WHERE customer_id=?',(x['id'],))['n'] or 0)*10)
             x['inactive_days']=(today-date.fromisoformat(x['last_service'][:10])).days if x.get('last_service') else None
         return self.json(data)
     def customer_stats(self,cid):
         c=one('SELECT * FROM customers WHERE id=?',(cid,))
         if not c:return self.json({'error':'Cliente não encontrado'},404)
-        count=one('SELECT COUNT(*) n FROM services WHERE customer_id=?',(cid,))['n']
-        total=0.0
+        svc=int(one('SELECT COUNT(*) n FROM services WHERE customer_id=?',(cid,))['n'] or 0)
+        unl=int(one('SELECT COUNT(*) n FROM unlocks WHERE customer_id=?',(cid,))['n'] or 0)
+        sales_count=int(one('SELECT COUNT(*) n FROM sales WHERE customer_id=?',(cid,))['n'] or 0)
+        count=svc+unl; total=0.0
         for rt,table in [('service','services'),('unlock','unlocks'),('sale','sales')]:
             ids=[r['id'] for r in rows(f'SELECT id FROM {table} WHERE customer_id=?',(cid,))]
             if ids:
                 marks=','.join('?' for _ in ids)
                 total+=float(one(f'SELECT COALESCE(SUM(amount),0) n FROM finance WHERE ref_type=? AND ref_id IN ({marks})',(rt,*ids))['n'] or 0)
-        last=one('SELECT MAX(created_at) v FROM services WHERE customer_id=?',(cid,))['v']
-        return self.json({'id':cid,'service_count':count,'score':min(100,int(count)*10),'last_service':last,'total_spent':float(total or 0)})
+        last=one('SELECT MAX(v) v FROM (SELECT MAX(created_at) v FROM services WHERE customer_id=? UNION ALL SELECT MAX(created_at) v FROM unlocks WHERE customer_id=? UNION ALL SELECT MAX(created_at) v FROM sales WHERE customer_id=?)',(cid,cid,cid))['v']
+        return self.json({'id':cid,'service_count':count,'technical_count':svc,'unlock_count':unl,'sales_count':sales_count,'score':min(100,count*10+sales_count*2),'last_service':last,'total_spent':float(total or 0)})
+
+    def technician_stats(self,unit):
+        cond=''; args=[]
+        if unit!='TODOS': cond=' WHERE t.unit=?'; args=[unit]
+        techs=rows('SELECT t.* FROM technicians t'+cond+' ORDER BY t.name COLLATE NOCASE',(args if args else ()))
+        out=[]
+        for t in techs:
+            tid=t['id']; ucond=' AND s.unit=?' if unit!='TODOS' else ''; uargs=[tid]+([unit] if unit!='TODOS' else [])
+            svc=one('SELECT COUNT(*) n, COALESCE(SUM(price),0) revenue, COALESCE(SUM(cost_total),0) costs FROM services s WHERE (s.technician_id=? OR (s.technician_id IS NULL AND s.technician=?))'+ucond,[tid,t['name']]+([unit] if unit!='TODOS' else []))
+            unargs=[tid,t['name']]+([unit] if unit!='TODOS' else [])
+            unl=one('SELECT COUNT(*) n, COALESCE(SUM(price),0) revenue FROM unlocks x WHERE (x.technician_id=? OR (x.technician_id IS NULL AND x.operator=?))'+(' AND x.unit=?' if unit!='TODOS' else ''),unargs)
+            completed=one('SELECT COUNT(*) n FROM services s WHERE (s.technician_id=? OR (s.technician_id IS NULL AND s.technician=?)) AND s.status IN ("pronto","entregue","aprovado pelo cliente")'+ucond,[tid,t['name']]+([unit] if unit!='TODOS' else []))
+            total=int(svc['n'] or 0)+int(unl['n'] or 0); revenue=float(svc['revenue'] or 0)+float(unl['revenue'] or 0); costs=float(svc['costs'] or 0); score=min(100,total*8+int(completed['n'] or 0)*2)
+            out.append({**t,'service_count':total,'technical_count':int(svc['n'] or 0),'unlock_count':int(unl['n'] or 0),'completed_count':int(completed['n'] or 0),'earnings':revenue,'costs':costs,'profit':revenue-costs,'score':score})
+        return self.json(out)
 
     def film_search(self,q):
         q=(q or '').strip()
@@ -772,123 +882,6 @@ class Handler(BaseHTTPRequestHandler):
 
     def inventory_csv(self):
         data=rows('SELECT * FROM inventory ORDER BY id DESC'); out=io.StringIO();w=csv.writer(out);w.writerow(data[0].keys() if data else ['id']);[w.writerow(x.values()) for x in data];return self.send(200,out.getvalue(),'text/csv')
-    def mdm_contracts(self,qs):
-        unit=qs.get('unit',['TODOS'])[0]
-        sql="""SELECT m.*,c.name customer_name,c.phone customer_phone,c.document customer_document,
-        COALESCE((SELECT SUM(i.paid_amount) FROM mdm_installments i WHERE i.contract_id=m.id),0) installment_paid,
-        (SELECT COUNT(*) FROM mdm_installments i WHERE i.contract_id=m.id AND i.status='paga') installments_paid_count,
-        (SELECT COUNT(*) FROM mdm_installments i WHERE i.contract_id=m.id AND i.status!='paga') installments_open_count
-        FROM mdm_contracts m LEFT JOIN customers c ON c.id=m.customer_id"""
-        args=[]
-        if unit!='TODOS': sql+=' WHERE m.unit=?'; args.append(unit)
-        sql+=' ORDER BY m.id DESC LIMIT 500'
-        data=rows(sql,args)
-        for x in data:
-            x['remaining']=max(0,float(x.get('installment_total') or 0)-float(x.get('installment_paid') or 0)-float(x.get('down_payment') or 0))
-        return self.json(data)
-
-    def mdm_summary(self,unit):
-        wh='' if unit=='TODOS' else ' WHERE unit=?'; args=[] if unit=='TODOS' else [unit]
-        total=one('SELECT COUNT(*) n FROM mdm_contracts'+wh,args)['n']
-        active=one("SELECT COUNT(*) n FROM mdm_contracts"+(wh+(' AND ' if wh else ' WHERE ')+'status IN (\'ativo\',\'restrito\',\'bloqueado\')'),args)['n']
-        blocked=one("SELECT COUNT(*) n FROM mdm_contracts"+(wh+(' AND ' if wh else ' WHERE ')+'policy_status=\'bloqueado\''),args)['n']
-        overdue=one("SELECT COUNT(*) n FROM mdm_installments i JOIN mdm_contracts m ON m.id=i.contract_id WHERE i.status!='paga' AND i.due_date<?"+(' AND m.unit=?' if unit!='TODOS' else ''),[date.today().isoformat()]+([] if unit=='TODOS' else [unit]))['n']
-        receivable=one("SELECT COALESCE(SUM(i.amount-i.paid_amount),0) n FROM mdm_installments i JOIN mdm_contracts m ON m.id=i.contract_id WHERE i.status!='paga'"+(' AND m.unit=?' if unit!='TODOS' else ''),([] if unit=='TODOS' else [unit]))['n']
-        return self.json({'contracts':total,'active':active,'blocked':blocked,'overdue_installments':overdue,'receivable':float(receivable or 0)})
-
-    def mdm_contract_detail(self,cid):
-        c=one('SELECT m.*,cu.name customer_name,cu.phone customer_phone,cu.document customer_document FROM mdm_contracts m LEFT JOIN customers cu ON cu.id=m.customer_id WHERE m.id=?',(cid,))
-        if not c:return self.json({'error':'Contrato MDM não encontrado.'},404)
-        c['installments']=rows('SELECT * FROM mdm_installments WHERE contract_id=? ORDER BY number',(cid,))
-        c['events']=rows('SELECT * FROM mdm_events WHERE contract_id=? ORDER BY id DESC LIMIT 100',(cid,))
-        return self.json(c)
-
-    def mdm_qr(self,token_value,public=False):
-        c=one('SELECT * FROM mdm_contracts WHERE enrollment_token=?',(token_value,))
-        if not c:return self.send(404,'QR não encontrado','text/plain')
-        server=os.environ.get('KVCELL_PUBLIC_URL','https://kvcell.squareweb.app').rstrip('/')
-        payload=json.dumps({'type':'KV_CELL_FINANCE_MDM','version':1,'server':server,'token':token_value,'contract':c['contract_number'],'expires':c['created_at']},ensure_ascii=False,separators=(',',':'))
-        deep='kvcellmdm://enroll?'+urllib.parse.urlencode({'server':server,'token':token_value,'contract':c['contract_number']})
-        try:
-            import qrcode
-            qr=qrcode.QRCode(version=None,error_correction=qrcode.constants.ERROR_CORRECT_M,box_size=8,border=4)
-            qr.add_data(deep); qr.make(fit=True); img=qr.make_image(); out=io.BytesIO(); img.save(out,format='PNG')
-            return self.send(200,out.getvalue(),'image/png',{'Content-Disposition':'inline; filename="kvcell-mdm-qr.png"'})
-        except Exception as e:
-            return self.json({'error':'Não foi possível gerar o QR','detail':str(e)},500)
-
-    def mdm_create(self,d,u):
-        unit=d.get('unit','TODOS'); customer_id=d.get('customer_id') or None; device_id=d.get('device_id') or None
-        total=float(d.get('installment_total') or d.get('total') or 0); count=int(d.get('installment_count') or 0); amount=float(d.get('installment_amount') or (total/count if count else 0)); down=float(d.get('down_payment') or 0)
-        contract='KVC-MDM-'+datetime.now().strftime('%Y%m%d')+'-'+secrets.token_hex(3).upper(); enrollment=secrets.token_urlsafe(24); device_token=secrets.token_urlsafe(32)
-        rid=write('INSERT INTO mdm_contracts(unit,customer_id,device_id,contract_number,enrollment_token,device_token,brand,model,imei,serial,device_name,status,policy_status,installment_total,installment_count,installment_amount,down_payment,paid_amount,next_due_date,payment_url,pix_copy_paste,notes,metadata_json,created_at,updated_at,app_version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(unit,customer_id,device_id,contract,enrollment,device_token,d.get('brand'),d.get('model'),d.get('imei'),d.get('serial'),d.get('device_name'), 'aguardando','normal',total,count,amount,down,down,d.get('next_due_date'),d.get('payment_url'),d.get('pix_copy_paste'),d.get('notes'),js(d.get('metadata',{})),now(),now(),''))
-        start=date.fromisoformat(str(d.get('first_due_date'))[:10]) if d.get('first_due_date') else date.today()+timedelta(days=30)
-        for i in range(1,count+1):
-            due=(start+timedelta(days=30*(i-1))).isoformat(); st='paga' if i==1 and down>=amount else 'aberta'; paid=amount if st=='paga' else 0
-            write('INSERT INTO mdm_installments(contract_id,number,due_date,amount,paid_amount,status,created_at) VALUES(?,?,?,?,?,?,?)',(rid,i,due,amount,paid,st,now()))
-        write('INSERT INTO mdm_events(contract_id,device_token,event_type,payload,created_at) VALUES(?,?,?,?,?)',(rid,device_token,'created',js({'unit':unit,'customer_id':customer_id}),now()))
-        return self.json({'ok':True,'id':rid,'contract_number':contract,'enrollment_token':enrollment,'device_token':device_token,'qr_url':f'/api/mdm/qr?token={urllib.parse.quote(enrollment)}','public_qr':f'/public/mdm/qr/{enrollment}'})
-
-    def mdm_action(self,d,u):
-        cid=int(d.get('contract_id') or 0); action=d.get('action','')
-        c=one('SELECT * FROM mdm_contracts WHERE id=?',(cid,))
-        if not c:return self.json({'error':'Contrato MDM não encontrado.'},404)
-        mapping={'activate':('ativo','normal'),'restrict':('restrito','restrito'),'lock':('bloqueado','bloqueado'),'unlock':('ativo','normal'),'pause':('pausado','normal'),'revoke':('revogado','normal')}
-        if action not in mapping:return self.json({'error':'Ação MDM inválida.'},400)
-        status,policy=mapping[action]; write('UPDATE mdm_contracts SET status=?,policy_status=?,updated_at=? WHERE id=?',(status,policy,now(),cid)); write('INSERT INTO mdm_events(contract_id,device_token,event_type,payload,created_at) VALUES(?,?,?,?,?)',(cid,c['device_token'],action,js({'by':u.get('name')}),now())); audit(u['id'],'mdm_'+action,'mdm_contracts',cid,js({'policy':policy}))
-        return self.json({'ok':True,'status':status,'policy_status':policy})
-
-    def mdm_record_payment(self,d,u):
-        cid=int(d.get('contract_id') or 0); iid=int(d.get('installment_id') or 0); amount=float(d.get('amount') or 0)
-        inst=one('SELECT * FROM mdm_installments WHERE id=?',(iid,)) if iid else None
-        c=one('SELECT * FROM mdm_contracts WHERE id=?',(cid,))
-        if inst: cid=inst['contract_id']; c=one('SELECT * FROM mdm_contracts WHERE id=?',(cid,))
-        if not c or amount<=0:return self.json({'error':'Contrato/parcela inválidos.'},400)
-        if not inst:
-            inst=one('SELECT * FROM mdm_installments WHERE contract_id=? AND status!=\'paga\' ORDER BY number LIMIT 1',(cid,))
-        if not inst:return self.json({'error':'Não há parcelas em aberto.'},400)
-        newpaid=min(float(inst['amount']),float(inst['paid_amount'] or 0)+amount); status='paga' if newpaid>=float(inst['amount']) else 'parcial'; paid_at=now() if status=='paga' else None
-        write('UPDATE mdm_installments SET paid_amount=?,status=?,paid_at=?,payment_ref=? WHERE id=?',(newpaid,status,paid_at,d.get('payment_ref'),inst['id']))
-        totalpaid=float(one('SELECT COALESCE(SUM(paid_amount),0) n FROM mdm_installments WHERE contract_id=?',(cid,))['n'] or 0)+float(c.get('down_payment') or 0)
-        nexti=one('SELECT due_date FROM mdm_installments WHERE contract_id=? AND status!=\'paga\' ORDER BY number LIMIT 1',(cid,)); policy='normal' if nexti and nexti['due_date']>=date.today().isoformat() else ('restrito' if nexti else 'normal')
-        write('UPDATE mdm_contracts SET paid_amount=?,next_due_date=?,policy_status=?,status=?,updated_at=? WHERE id=?',(totalpaid,nexti['due_date'] if nexti else None,policy,'ativo' if nexti else 'quitado',now(),cid))
-        write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(c['unit'],'entrada','Crediário MDM','Parcela '+str(inst['number'])+' • '+c['contract_number'],amount,'mdm_payment',inst['id'],now()))
-        write('INSERT INTO mdm_events(contract_id,device_token,event_type,payload,created_at) VALUES(?,?,?,?,?)',(cid,c['device_token'],'payment',js({'amount':amount,'installment':inst['number']}),now()))
-        return self.json({'ok':True,'installment_id':inst['id'],'status':status,'paid_amount':newpaid,'next_due_date':nexti['due_date'] if nexti else None,'policy_status':policy})
-
-    def mdm_enroll(self,d):
-        token_value=d.get('enrollment_token') or d.get('token'); c=one('SELECT * FROM mdm_contracts WHERE enrollment_token=?',(token_value,))
-        if not c:return self.json({'error':'Token de matrícula inválido ou expirado.'},401)
-        device_token=c['device_token'];
-        updates=(d.get('brand') or c['brand'],d.get('model') or c['model'],d.get('imei') or c['imei'],d.get('serial') or c['serial'],d.get('device_name') or c['device_name'],d.get('app_version') or c['app_version'],now(),self.client_address[0],device_token)
-        write('UPDATE mdm_contracts SET brand=?,model=?,imei=?,serial=?,device_name=?,app_version=?,status=\'ativo\',last_seen=?,last_ip=?,updated_at=? WHERE device_token=?',(updates[0],updates[1],updates[2],updates[3],updates[4],updates[5],updates[6],updates[7],now(),device_token))
-        write('INSERT INTO mdm_events(contract_id,device_token,event_type,payload,created_at) VALUES(?,?,?,?,?)',(c['id'],device_token,'enrolled',js(d),now()))
-        return self.json({'ok':True,'device_token':device_token,'server_time':now(),'policy_status':c['policy_status'],'status':'ativo'})
-
-    def mdm_heartbeat(self,d):
-        token_value=d.get('device_token'); c=one('SELECT * FROM mdm_contracts WHERE device_token=?',(token_value,))
-        if not c:return self.json({'error':'Dispositivo não matriculado.'},401)
-        write('UPDATE mdm_contracts SET last_seen=?,last_ip=?,updated_at=?,app_version=? WHERE id=?',(now(),self.client_address[0],now(),d.get('app_version') or c['app_version'],c['id']))
-        inst=one('SELECT * FROM mdm_installments WHERE contract_id=? AND status!=\'paga\' ORDER BY number LIMIT 1',(c['id'],))
-        today=date.today().isoformat(); policy=c['policy_status'];
-        if inst and str(inst['due_date'])[:10]<today and policy=='normal': policy='restrito'; write('UPDATE mdm_contracts SET policy_status=?,status=?,updated_at=? WHERE id=?',(policy,'restrito',now(),c['id']))
-        days=(date.fromisoformat(str(inst['due_date'])[:10])-date.today()).days if inst and inst.get('due_date') else 0
-        count=int(one('SELECT COUNT(*) n FROM mdm_installments WHERE contract_id=?',(c['id'],))['n'] or 0)
-        paid_count=int(one("SELECT COUNT(*) n FROM mdm_installments WHERE contract_id=? AND status='paga'",(c['id'],))['n'] or 0)
-        remaining=max(0,float(c.get('installment_total') or 0)-float(c.get('down_payment') or 0)-float(one('SELECT COALESCE(SUM(paid_amount),0) n FROM mdm_installments WHERE contract_id=?',(c['id'],))['n'] or 0))
-        return self.json({'ok':True,'status':c['status'],'policy_status':policy,'contract_number':c['contract_number'],'installment':inst,'installment_count':count,'installments_paid':paid_count,'installments_left':max(0,count-paid_count),'days_remaining':days,'remaining_total':remaining,'payment_url':c['payment_url'],'pix_copy_paste':c['pix_copy_paste'],'server_time':now()})
-
-    def mdm_public_device(self,device_token):
-        c=one('SELECT m.contract_number,m.brand,m.model,m.device_name,m.installment_total,m.installment_count,m.installment_amount,m.down_payment,m.paid_amount,m.next_due_date,m.policy_status,m.status,cu.name customer_name FROM mdm_contracts m LEFT JOIN customers cu ON cu.id=m.customer_id WHERE m.device_token=?',(device_token,))
-        if not c:return self.json({'error':'Dispositivo não encontrado.'},404)
-        c['installments']=rows('SELECT number,due_date,amount,paid_amount,status,paid_at FROM mdm_installments WHERE contract_id=(SELECT id FROM mdm_contracts WHERE device_token=?) ORDER BY number',(device_token,))
-        return self.json(c)
-
-    def mdm_payment_intent(self,d):
-        token_value=d.get('device_token'); c=one('SELECT * FROM mdm_contracts WHERE device_token=?',(token_value,))
-        if not c:return self.json({'error':'Dispositivo não encontrado.'},404)
-        return self.json({'ok':True,'contract_number':c['contract_number'],'payment_url':c['payment_url'],'pix_copy_paste':c['pix_copy_paste'],'message':'Configure payment_url/pix_copy_paste no contrato ou conecte um gateway no servidor.'})
-
     def backup(self):
         buf=io.BytesIO();
         with zipfile.ZipFile(buf,'w',zipfile.ZIP_DEFLATED) as z:
@@ -900,6 +893,10 @@ class Handler(BaseHTTPRequestHandler):
             c.close()
         return self.send(200,buf.getvalue(),'application/zip',{'Content-Disposition':'attachment; filename=kvcell-backup.zip'})
     def public(self,path):
+        if path.startswith('/public/mdm/enroll/'):
+            t=path.split('/')[-1]; d=one('SELECT * FROM mdm_devices WHERE enrollment_token=?',(t,))
+            if not d:return self.send(404,'Convite MDM não encontrado','text/html')
+            return self.send(200,public_mdm_enroll(d),'text/html')
         if path.startswith('/public/quote/'):
             t=path.split('/')[-1]; q=one('SELECT * FROM quotes WHERE public_token=?',(t,))
             if not q:return self.send(404,'Orçamento não encontrado','text/html')
@@ -916,6 +913,9 @@ class Handler(BaseHTTPRequestHandler):
             cust=one('SELECT * FROM customers WHERE id=?',(x['customer_id'],)) if x['customer_id'] else None
             return self.send(200,public_unlock(x,cust),'text/html')
         self.send(404,b'Not found','text/plain')
+
+def public_mdm_enroll(d):
+    return """<!doctype html><html lang="pt-BR"><meta name="viewport" content="width=device-width,initial-scale=1"><title>KV CELL • MDM</title><style>{css}.hero h1{{font-size:32px}}.warn{{border-color:#6b5b00;background:#171500}}</style><main><header><b>KV CELL</b><span>MDM • CREDIÁRIO ANDROID</span></header><section class="hero"><small>PROVISIONAMENTO</small><h1>{name}</h1><p>{brand} {model}</p><div class="status">Token de enrollment pronto</div></section><div class="box"><h2>Como conectar</h2><ol><li>Instale o agente MDM autorizado da KV CELL no Android.</li><li>Abra o leitor de QR do fluxo de provisionamento.</li><li>Leia este convite e confirme a política no aparelho.</li></ol><p>Este portal não instala software oculto nem remove proteções do Android; a aplicação da política depende de um agente MDM provisionado legitimamente.</p></div><div class="box warn"><b>Política atual</b><p>{policy}</p><p>{msg}</p></div><footer>KV CELL • Crediário Android</footer></main></html>""".format(css=PUBLIC_CSS,name=safe(d['device_name']),brand=safe(d['brand']),model=safe(d['model']),policy=safe(d['policy_state']),msg=safe(d['custom_message']))
 
 def public_quote(q,c):
     items=json.loads(q['items'] or '[]'); rows=''.join(f"<tr><td>{safe(x.get('description',x.get('name','Serviço')))}</td><td>{safe(x.get('qty',1))}</td><td>R$ {float(x.get('total',x.get('price',0))):,.2f}</td></tr>" for x in items)
@@ -937,6 +937,38 @@ PUBLIC_CSS='''*{box-sizing:border-box}body{margin:0;background:#070707;color:#f5
 '''
 
 INDEX='''<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>KV CELL OS PREMIUM</title><link rel="stylesheet" href="/static/app.css"></head><body><div id="app"></div><script src="/static/app.js"></script></body></html>'''
+
+# V400 public portal override
+def public_quote(q,c):
+    items=json.loads(q['items'] or '[]')
+    rows_html=''.join(f"<tr><td>{safe(x.get('description',x.get('name','Serviço')))}</td><td>{safe(x.get('qty',1))}</td><td>R$ {float(x.get('total',x.get('price',0)) or 0):,.2f}</td></tr>" for x in items)
+    status=q.get('status') or 'aberto'
+    buttons='' if status in ('aprovado','recusado','expirado') else '<div class="actions"><button class="ok" onclick="respond(\'aprovado\')">✓ Aprovar Orçamento</button><button class="no" onclick="respond(\'recusado\')">✕ Recusar Orçamento</button></div>'
+    return f'''<!doctype html><html lang="pt-BR"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{safe(q['number'])} • KV CELL</title><style>{PUBLIC_CSS}.hero{{background:linear-gradient(135deg,#171700,#0e0e0e)}}.hero h1{{font-size:46px}}.ok{{background:#ffd400;color:#070707}}.no{{background:#262626;color:#fff}}.actions{{display:flex;gap:10px;flex-wrap:wrap}}button{{border:0;border-radius:12px;padding:14px 18px;font-weight:900;cursor:pointer}}</style><main><header><b>KV CELL</b><span>ORÇAMENTO • RESPOSTA ONLINE</span></header><section class="hero"><small>ORÇAMENTO DIGITAL</small><h1>{safe(q['number'])}</h1><p>{safe(c['name'] if c else 'Cliente')} • Unidade {safe(q['unit'])}</p><div class="status">{safe(status)}</div></section><div class="grid"><div class="box"><h2>Serviços e peças</h2><table><tr><th>Descrição</th><th>Qtd.</th><th>Total</th></tr>{rows_html}</table><div style="text-align:right;margin-top:16px"><small>SUBTOTAL</small><h2>R$ {float(q['subtotal'] or 0):,.2f}</h2><strong style="color:#ffd400;font-size:24px">TOTAL R$ {float(q['total'] or 0):,.2f}</strong></div></div><div class="box"><h2>Resumo</h2><p>Status: <b>{safe(status)}</b></p><p>Garantia: <b>{int(q.get('warranty_days') or 0)} dias</b></p><p>Válido até: <b>{safe(q.get('valid_until'))}</b></p><p>Deslocamento: <b>{'Sim • R$ '+format(float(q.get('travel_fee') or 0),'.2f') if q.get('travel_enabled') else 'Não'}</b></p></div></div><div class="box"><h2>Condições</h2><p>{safe(q.get('conditions'))}</p><p>{safe(q.get('observations'))}</p></div>{buttons}<footer>KV CELL • Lagos + Magé • orçamento online</footer></main><script>async function respond(a){{let msg=prompt(a==='aprovado'?'Mensagem opcional para a KV CELL:':'Motivo da recusa (opcional):','');let r=await fetch(location.pathname,{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{action:a,message:msg||''}})}});let d=await r.json();if(d.ok)location.reload();else alert(d.error||'Não foi possível enviar.')}}</script></html>'''
+
+def public_os(s,c):
+    photos=json.loads(s['photos'] or '[]')
+    thumbs=''.join(f'<img src="{x}" />' for x in photos[:6])
+    status=s.get('status') or 'aberto'
+    det=json.loads(s.get('details_json') or '{}')
+    states=[('Entrada registrada',True,s.get('created_at')),('Em diagnóstico / reparo',status in ('em andamento','aguardando peça','pronto','finalizado','entregue'),s.get('updated_at') or 'Aguardando'),('Pronto para retirada',status in ('finalizado','entregue'),s.get('updated_at') if status in ('finalizado','entregue') else 'Pendente'),('Aparelho entregue',status=='entregue',s.get('updated_at') if status=='entregue' else 'Pendente')]
+    tl=''.join(f'<div class="step {"done" if ok else ""}"><b>{"✓" if ok else "○"} {safe(label)}</b><small>{safe(val or "Pendente")}</small></div>' for label,ok,val in states)
+    status_msg={'aberto':'Sua OS foi recebida e aguarda atendimento.','aguardando peça':'Estamos aguardando peça/material.','em andamento':'Seu aparelho está em reparo.','pronto':'Seu aparelho está pronto para retirada.','finalizado':'Seu aparelho foi finalizado e está pronto para retirada.','entregue':'Seu aparelho foi entregue. Obrigado pela preferência!','cancelado':'Esta OS foi cancelada.','garantia':'Esta OS está em atendimento de garantia.'}.get(status,'Status atualizado pela KV CELL.')
+    approval='' if status in ('entregue','cancelado') else '<div class="box"><h2>Aprovação</h2><p>Se a equipe solicitou aprovação, responda aqui.</p><div class="actions"><button class="ok" onclick="respond(\'aprovado\')">✓ Aprovar OS</button><button class="no" onclick="respond(\'recusado\')">✕ Recusar</button></div><p id="msg"></p></div>'
+    return f'''<!doctype html><html lang="pt-BR"><meta name="viewport" content="width=device-width,initial-scale=1"><title>OS-{s['id']} • KV CELL</title><style>{PUBLIC_CSS}.hero{{background:linear-gradient(135deg,#171700,#0e0e0e)}}.hero h1{{font-size:44px}}.actions{{display:flex;gap:10px;flex-wrap:wrap}}button{{border:0;border-radius:12px;padding:14px 18px;font-weight:900;cursor:pointer}}.ok{{background:#ffd400;color:#070707}}.no{{background:#252525;color:#fff}}.step.done b{{color:#ffd400}}.photos img{{width:110px;height:110px;object-fit:cover;border-radius:12px;margin:5px}}</style><main><header><b>KV CELL</b><span>PORTAL DO CLIENTE • ACOMPANHAMENTO EM TEMPO REAL</span></header><section class="hero"><small>ORDEM DE SERVIÇO</small><h1>#OS-{s['id']}</h1><p>{safe(c['name'] if c else 'Cliente')} • Unidade {safe(s['unit'])}</p><div class="status">{safe(status)}</div><p>{safe(status_msg)}</p></section><div class="grid"><div class="box"><h2>Linha do tempo</h2><div class="timeline">{tl}</div></div><div class="box"><h2>Resumo financeiro</h2><h1>R$ {float(s['price'] or 0):,.2f}</h1><p>Garantia: <b>{safe(s.get('warranty') or 'Não informada')}</b></p><p>Técnico: <b>{safe(s.get('technician') or 'Equipe KV CELL')}</b></p></div></div><div class="grid"><div class="box"><h2>Cliente</h2><p><b>{safe(c['name'] if c else 'Cliente')}</b></p><p>{safe(c.get('phone') if c else '')}</p></div><div class="box"><h2>Equipamento</h2><p><b>{safe(det.get('brand',''))} {safe(det.get('model',''))}</b></p><p>IMEI: {safe(det.get('imei',''))}</p><p>Serial: {safe(det.get('serial',''))}</p></div></div><div class="box"><h2>Serviço / problema relatado</h2><p>{safe(s.get('description'))}</p><p>{safe(s.get('diagnosis'))}</p></div>{approval}<div class="box"><h2>Garantia Digital KV CELL</h2><p>Esta página é o acompanhamento oficial desta OS. Guarde o link para consultar o andamento e as condições da entrega.</p></div><div class="box"><h2>Fotos</h2><div class="photos">{thumbs or '<span>Fotos ainda não publicadas.</span>'}</div></div><footer>KV CELL • Laboratório avançado • Desde 2023</footer></main><script>async function respond(a){{let msg=prompt(a==='aprovado'?'Mensagem opcional para a KV CELL:':'Motivo da recusa (opcional):','');let r=await fetch(location.pathname,{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{action:a,message:msg||''}})}});let d=await r.json();document.getElementById('msg').textContent=d.ok?'Resposta enviada à KV CELL.':(d.error||'Falha');if(d.ok)location.reload()}}</script></html>'''
+
+
+# V500 public MDM portal override: financial status + payment options + enrollment instructions.
+def public_mdm_enroll(d):
+    balance=max(0,float(d['installment_total'] or 0)-float(d['installment_paid'] or 0))
+    days='—'
+    if d['next_due']:
+        try: days=str((date.fromisoformat(d['next_due'])-date.today()).days)
+        except: pass
+    remaining=max(0,int(d['installment_count'] or 0)-int(d['paid_installments'] or 0))
+    pay=d['payment_url'] or ''
+    pix=d['pix_copy_paste'] or ''
+    return f'''<!doctype html><html lang="pt-BR"><meta name="viewport" content="width=device-width,initial-scale=1"><title>KV CELL • Crediário</title><style>{PUBLIC_CSS}.hero h1{{font-size:34px}}.pay{{border-color:#5d5100;background:#151300}}code{{display:block;white-space:pre-wrap;word-break:break-all;background:#080808;padding:12px;border-radius:10px;color:#ffd400}}.ok{{display:inline-block;background:#ffd400;color:#080808;padding:12px 16px;border-radius:10px;text-decoration:none;font-weight:800}}</style><main><header><b>KV CELL</b><span>CREDIÁRIO ANDROID • MDM</span></header><section class="hero"><small>APARELHO GERENCIADO</small><h1>{safe(d['device_name'])}</h1><p>{safe(d['brand'])} {safe(d['model'])} • IMEI {safe(d['imei'] or '—')}</p><div class="status">Política: {safe(d['policy_state'])}</div></section><div class="grid"><div class="box"><h2>Parcelas</h2><p>Saldo: <strong>R$ {balance:,.2f}</strong></p><p>Próximo vencimento: <strong>{safe(d['next_due'] or '—')}</strong></p><p>Dias restantes: <strong>{days}</strong></p><p>Parcelas restantes: <strong>{remaining}</strong></p></div><div class="box pay"><h2>Pagamento</h2>{('<a class="ok" href="'+safe(pay)+'" target="_blank">Pagar parcela</a>') if pay else '<p>Forma de pagamento online ainda não configurada.</p>'}{('<p><b>PIX copia e cola</b></p><code>'+safe(pix)+'</code>') if pix else ''}</div></div><div class="box"><h2>Conexão do aplicativo</h2><ol><li>Instale o agente oficial da KV CELL.</li><li>Use o QR individual fornecido pelo painel para matrícula.</li><li>Confirme o gerenciamento do dispositivo.</li></ol><p>Em modo Device Owner, o agente pode aplicar as políticas autorizadas pelo contrato, inclusive impedir sua própria desinstalação. Sem Device Owner, o Android limita o nível de controle.</p></div><div class="box"><h2>Mensagem da KV CELL</h2><p>{safe(d['custom_message'] or '')}</p></div><footer>KV CELL • Crediário Android • gestão transparente do dispositivo</footer></main></html>'''
 
 if __name__=='__main__':
     print(f'KV CELL OS PREMIUM on port {PORT}',flush=True)

@@ -1,111 +1,71 @@
-# KV CELL OS PREMIUM — ULTIMATE SUPREME V100
+# KV CELL OS PREMIUM — ULTIMATE SUPREME V500
 
-Versão V100 consolidada do KV CELL OS PREMIUM para Square Cloud.
+## Base de evolução
+V500 foi construída sobre a V300 como baseline funcional. O objetivo desta versão é avançar sem regressão de navegação: módulos removidos deliberadamente nas versões anteriores (como Plano e Serviços e Indicações) não foram recolocados no menu.
 
-## Principais módulos
+## V500 — adições/fixes principais
+- Cliente: busca pelo início do nome ou telefone; seleção sem expor ID interno; Nome/CPF-CNPJ/Telefone preenchidos automaticamente.
+- Score do cliente: considera OS técnicas + desbloqueios + vendas.
+- OS: ações completas, editar, excluir, copiar link, garantia, finalizar, entregar e status sincronizado com portal público.
+- Finalizar Serviço: status FINALIZADO + abertura do WhatsApp com link público.
+- Serviço Entregue: checklist de saída em tela clara + status ENTREGUE + sincronização financeira.
+- OS técnica: desenho de senha arrastável em 9 pontos e PIN de 4–6 dígitos.
+- Desbloqueio: formulário simplificado, sem checklist, sem fotos e SEM GARANTIA.
+- Aparelhos + Abandonados: central única, estado Sucata e criação de OS direta.
+- Compra e Venda: conexão com aparelho, Vitrine, PDV e criação de OS direta.
+- Orçamentos: edição real dos itens, cálculo automático, link público, excluir e aprovado → Gerar OS.
+- Fiado: preservada a calculadora V300 de parcelas/frequência e adicionadas as áreas CRM & Cobrança e Crediário / MDM.
+- Crediário MDM Android: contrato/aparelho/cliente, parcelas, saldo, vencimento, dias restantes, QR individual, token, eventos, status online e política remota.
+- QR MDM: payload URL por padrão; se `MDM_AGENT_APK_URL` estiver configurado, o QR passa a usar o formato de provisionamento Android Device Owner com extras de enrollment.
+- Aplicativo Android companion incluído em `android-kvcell-finance-mdm/`.
+- ADB / Antivírus: hub profissional, diagnóstico, ficha técnica completa, laudo, controles, tela/segurança, terminal, galeria, recuperação, backup e ferramentas do técnico.
+- Portal público de OS e orçamento: visual premium, linha do tempo, aprovação e acompanhamento.
 
-- Dashboard com filtro global TODOS / LAGOS / MAGÉ
-- Ordens de Serviço unificadas: assistência técnica + desbloqueios
-- OS técnica completa com cliente, aparelho, IMEI/SN, PIN/padrão, checklist, mapa de avarias, fotos, peças, produtos, custos, técnico, bancada, previsão e aprovação pública
-- OS de desbloqueio profissional sem checklist e sem garantia após finalização
-- Busca de cliente por início do nome ou telefone; ao selecionar, o ID interno nunca é exibido ao usuário
-- Agenda
-- Orçamentos com link público e aprovação/recusa
-- Precificação
-- Garantias
-- Controle de Fiado integrado a OS, desbloqueios e vendas, com parcelas e recebimento
-- Clientes / CRM / Radar de Recompra
-- Técnicos e fornecedores
-- Compra e Venda / Vitrine
-- Estoque
-- Financeiro e lucro
-- PDV / vendas
-- Catálogo Digital
-- Películas / compatibilidade
-- Comunidade e área preparada para Messenger
-- Serviços e Indicações
-- Funcionários / permissões
-- Administração / backup
-- Chat entre unidades separado da I.A. e dos Logs
-- I.A. separada: OpenRouter Free como principal e Gemini como fallback
-- Persistência opcional do SQLite via Square Cloud Blob
+## MDM — limite técnico importante
+O painel não usa persistência oculta, bypass de Factory Reset, exploração de vulnerabilidades ou remoção de proteções Android. O bloqueio físico depende de um agente DPC/MDM legitimamente provisionado como Device Owner ou do nível de administração permitido pelo Android. O companion inclui Device Admin e preparação para Device Owner.
 
-## IA
-
-Configure no Square Cloud:
-
+## Configuração Square Cloud
 ```text
-OPENROUTER_API_KEY=...
+PORT=80
+ADMIN_EMAIL=admin@kvcell.local
+ADMIN_PASSWORD=troque-esta-senha
+OPENROUTER_API_KEY=
 OPENROUTER_MODEL=openrouter/free
 OPENROUTER_HTTP_REFERER=https://kvcell.squareweb.app/
-```
-
-Gemini fica somente como fallback:
-
-```text
-GEMINI_API_KEY=...
+GEMINI_API_KEY=
 GEMINI_MODEL=gemini-2.5-flash
-```
-
-A IA continua exigindo `/bot` no endpoint técnico. O frontend da aba I.A. adiciona esse prefixo automaticamente.
-
-## Banco persistente
-
-Para não perder o banco ao publicar outro ZIP, configure:
-
-```text
-SQUARE_BLOB_API_KEY=...
-SQUARE_BLOB_ACCOUNT_ID=...
+SQUARE_BLOB_API_KEY=
+SQUARE_BLOB_ACCOUNT_ID=
 SQUARE_BLOB_DB_NAME=kvcell_database
 SQUARE_BLOB_PREFIX=kvcell
 SQUARE_BLOB_PUBLIC_URL=
-KVCELL_DB_ENCRYPTION_KEY=<Fernet key>
+KVCELL_DB_ENCRYPTION_KEY=
 KVCELL_DATA_DIR=/application/data
+MDM_AGENT_APK_URL=
 ```
 
-Nunca coloque chaves reais no GitHub ou no ZIP.
+`MDM_AGENT_APK_URL` é opcional. Quando preenchido com uma URL HTTPS pública para o APK oficial, o QR pode carregar os dados de provisionamento Device Owner. Sem ele, o QR aponta para o portal de enrollment.
 
-## Square Cloud
+## Aplicativo Android
+O projeto-fonte está em `android-kvcell-finance-mdm/`.
 
-- Porta: 80
-- Bind: 0.0.0.0
-- Publicação Web habilitada para o domínio squareweb.app
+Fluxo previsto:
+1. Instalar o agente oficial.
+2. Ler o QR individual.
+3. Vincular o token ao aparelho.
+4. Sincronizar saldo, vencimento, parcelas e política.
+5. Quando legitimamente provisionado como Device Owner, aplicar as políticas administrativas permitidas pelo Android.
 
-## Testes realizados
+O projeto não contém APK pré-compilado nem segredo de produção.
 
-- `python -m py_compile app.py`
-- `node --check static/app.js`
-- health/login
-- criação de cliente
-- criação de OS técnica
-- criação de OS de desbloqueio sem checklist
-- busca/seleção de cliente
-- fiado e recebimento
-- agenda
-- técnicos
-- fornecedores
-- garantias
-- comunidade
-- indicações
-- catálogo
-- aprovação pública de OS
-- integridade do ZIP
-
-## V101 — ADB/Antivírus + Crediário MDM
-
-Esta atualização é aditiva sobre a V100. O módulo ADB/Antivírus agora possui cockpit técnico com Hub, Diagnóstico, Laudo, Controles, Tela, Terminal autorizado, Galeria, Recuperação, Backup e Ferramentas. A ficha técnica contempla Identificação, Software, Hardware, Armazenamento/Bateria e Rede/Segurança.
-
-Foi adicionado o Crediário MDM com:
-- contratos por cliente/unidade;
-- parcelas, entrada, vencimento e saldo;
-- QR de matrícula por token;
-- aplicativo Android companion em `android-kvcell-finance-mdm/`;
-- heartbeat e sincronização de política;
-- estados normal, restrito, bloqueado, pausado, revogado e quitado;
-- registro de eventos e pagamentos no financeiro;
-- link de pagamento/PIX configurável;
-- contagem de parcelas restantes e dias até vencimento no app;
-- modo de cobrança visível usando Device Owner/Lock Task somente quando o aparelho foi provisionado legitimamente.
-
-### Produção do aplicativo
-O projeto Android não inclui uma chave privada de assinatura. Gere o APK assinado pela KV CELL e publique-o em HTTPS antes de usar o QR em aparelhos reais. Para Device Owner, siga o provisionamento oficial do Android; o QR deste painel é um QR de vínculo do contrato, não um bypass do provisionamento Android.
+## Validação V500
+- Python `py_compile` ✅
+- JavaScript `node --check` ✅
+- SQLite/migração V300 → V500 ✅
+- Login/API local ✅
+- Cliente + score OS/desbloqueio ✅
+- OS entregue → Financeiro ✅
+- Compra → Vitrine ✅
+- Fiado com parcelas e cálculo ✅
+- MDM → QR PNG → token → consulta financeira ✅
+- ZIP íntegro será verificado antes da entrega.

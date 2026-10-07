@@ -1,11 +1,14 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-    <application android:theme="@style/AppTheme" android:label="@string/app_name" android:allowBackup="false" android:supportsRtl="true">
+    <application android:theme="@style/AppTheme" android:label="KV CELL Crediário" android:allowBackup="false" android:supportsRtl="true">
         <activity android:name=".MainActivity" android:exported="true">
-            <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
-            <intent-filter><action android:name="android.intent.action.VIEW"/><category android:name="android.intent.category.DEFAULT"/><category android:name="android.intent.category.BROWSABLE"/><data android:scheme="kvcellmdm" android:host="enroll"/></intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
         </activity>
-        <receiver android:name=".KVCellDeviceAdminReceiver" android:permission="android.permission.BIND_DEVICE_ADMIN" android:exported="true"><meta-data android:name="android.app.device_admin" android:resource="@xml/device_admin_receiver"/><intent-filter><action android:name="android.app.action.DEVICE_ADMIN_ENABLED"/><action android:name="android.intent.action.BOOT_COMPLETED"/></intent-filter></receiver>
+        <receiver android:name=".KVCellDeviceAdminReceiver" android:permission="android.permission.BIND_DEVICE_ADMIN" android:exported="true">
+            <meta-data android:name="android.app.device_admin" android:resource="@xml/device_admin" />
+            <intent-filter><action android:name="android.app.action.DEVICE_ADMIN_ENABLED"/></intent-filter>
+        </receiver>
     </application>
 </manifest>
