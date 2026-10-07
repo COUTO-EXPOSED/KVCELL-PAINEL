@@ -1225,12 +1225,18 @@ function adb600Hub(){
 }
 
 window.pages.adb = async function(){
-  try{const ds=await kvAdbDevices();window.__kvAdbDevices=ds}catch(e){window.__kvAdbDevices=[]}
+  // IMPORTANTE: a abertura da aba não depende da ponte localhost. O seletor USB do próprio Chrome/Edge deve abrir imediatamente.
+  let usb=[]; try{ if(navigator.usb) usb=await navigator.usb.getDevices(); }catch(e){}
   const d=kvAdbDevice();
-  $('#content').innerHTML=analyticsHeader('ADB & Antivírus','Central real de bancada • USB + ADB + diagnóstico Android + segurança',`<span class="badge y">${d.serial?'APARELHO CONECTADO':'AGUARDANDO USB'}</span>`)+
-  `<div class="adb600-wrap"><div class="adb600-header"><div><span class="badge g">KV CELL • BANCADA</span><h1>ADB & Antivírus</h1><p>Selecione um aparelho USB ou use FORÇAR ADB para trabalhar com o ADB instalado no computador.</p></div>${v600UsbButton()}</div><div class="adb600-tabs">${[['hub','Visão geral'],['diagnostico','Diagnóstico'],['antivirus','Antivírus'],['controles','Controles'],['terminal','Terminal'],['tela','Tela'],['recuperacao','Recuperação'],['galeria','Evidências'],['laudo','Laudo']].map(t=>`<button class="${window.__kvAdbTab===t[0]?'active':''}" onclick="kvAdbTab('${t[0]}')">${t[1]}</button>`).join('')}</div><div id="adb600Body"></div></div>`;
+  window.__kvUsbDevices=usb;
+  $('#content').innerHTML=analyticsHeader('ADB & Antivírus','Central de bancada • seletor USB nativo do navegador + ADB autorizado + diagnóstico Android',`<span class="badge y">${d.serial?'APARELHO CONECTADO':'AGUARDANDO USB'}</span>`)+
+  `<div class="adb600-wrap"><div class="adb600-header"><div><span class="badge g">KV CELL • BANCADA</span><h1>ADB & Antivírus</h1><p>O botão abaixo usa o painel nativo do Chrome/Edge para selecionar o USB. A ponte local só é chamada quando você pedir ADB real ou injeção.</p></div><div class="adb600-usbrow"><button class="btn adb600-primary" onclick="kvUsbSelect()">▣ SELECIONAR DISPOSITIVO USB</button><button class="btn ghost" onclick="kvAdbConnect()">⚡ FORÇAR ADB</button><button class="btn ghost" onclick="kvAdbBridgeCheck()">↻ Testar ADB</button></div></div>
+  <section class="adb600-panel adb600-browserusb"><div class="adb600-paneltitle"><div><small>WEBUSB / NAVEGADOR</small><h3>Dispositivos USB autorizados para esta sessão</h3></div><button class="btn ghost" onclick="kvUsbRefresh()">↻ Atualizar</button></div><div id="kvUsbList">${usb.length?usb.map((u,i)=>`<button class="adb600-device ${window.__kvUsbDevice&&window.__kvUsbDevice===u?'active':''}" onclick="kvUsbUseExisting(${i})"><span class="adb600-device-dot online"></span><span><b>${esc([u.manufacturerName,u.productName].filter(Boolean).join(' ')||'Dispositivo USB')}</b><small>VID ${String(u.vendorId||0).padStart(4,'0')} • PID ${String(u.productId||0).padStart(4,'0')}</small></span><strong>USB</strong></button>`).join(''):`<div class="adb600-empty">Nenhum USB autorizado ainda. Clique em <b>SELECIONAR DISPOSITIVO USB</b> para abrir o painel nativo do navegador.</div>`}</div></section>
+  <div class="adb600-tabs">${[['hub','Visão geral'],['diagnostico','Diagnóstico'],['antivirus','Antivírus'],['controles','Controles'],['terminal','Terminal'],['tela','Tela'],['recuperacao','Recuperação'],['galeria','Evidências'],['laudo','Laudo']].map(t=>`<button class="${window.__kvAdbTab===t[0]?'active':''}" onclick="kvAdbTab('${t[0]}')">${t[1]}</button>`).join('')}</div><div id="adb600Body"></div></div>`;
   kvAdbTab(window.__kvAdbTab||'hub');
 };
+window.kvUsbRefresh=async function(){try{window.__kvUsbDevices=navigator.usb?await navigator.usb.getDevices():[];await pages.adb()}catch(e){toast(e.message,'error')}};
+window.kvUsbUseExisting=async function(i){const u=(window.__kvUsbDevices||[])[i];if(!u)return;window.__kvUsbDevice=u;toast('USB selecionado • '+([u.manufacturerName,u.productName].filter(Boolean).join(' ')||'Dispositivo'));await pages.adb()};
 
 window.kvAdbTab=function(tab){
   window.__kvAdbTab=tab;
@@ -1247,6 +1253,28 @@ window.mdmQR=async function(id){
   try{
     const app=await api('/api/mdm/qr?id='+id+'&mode=app');
     let prov=null; try{prov=await api('/api/mdm/qr?id='+id+'&mode=provisioning')}catch{}
-    formModal('KV CELL MDM • MATRÍCULA',`<div class="mdm600-qr"><section class="panel"><h3>QR do aplicativo</h3><img src="${app.data_url}" alt="QR KV CELL MDM"><p class="muted">Este QR abre a matrícula do aplicativo já instalado.</p><code>${esc(app.payload)}</code></section><section class="panel"><h3>QR Android de provisionamento</h3>${prov?`<img src="${prov.data_url}" alt="QR provisionamento Android"><p class="muted">Use durante o fluxo de configuração/provisionamento suportado pelo Android.</p>`:`<div class="mdm600-warning">QR de provisionamento não está disponível porque o servidor ainda não possui MDM_AGENT_APK_URL configurado.</div>`}</section><section class="panel full"><h3>Alternativa de bancada</h3><p>Se o QR não for aceito pelo aparelho, use <b>FORÇAR ADB</b> na aba ADB & Antivírus e instale o APK autorizado diretamente por USB.</p></section></div>`,async()=>closeModal());
+    formModal('KV CELL MDM • INSTALAÇÃO / ADB FORCE',`<div class="mdm600-qr mdm600-force">
+      <section class="panel mdm-force-main"><span class="badge y">KVCELL MDM</span><h3>QR ADB FORCE APP</h3><p>Use o QR de matrícula para abrir o vínculo do crediário no KV CELL MDM. O QR não substitui a instalação do APK.</p><img src="${app.data_url}" alt="QR KV CELL MDM"><code>${esc(app.payload)}</code></section>
+      <section class="panel"><h3>💻 INJETAR APP MDM KV CELL PELO ADB</h3><p>Escolha o APK autorizado do KV CELL MDM e o sistema envia o arquivo para o aparelho ADB selecionado.</p><div class="mdm-inject-box"><input id="kvMdmApkFile" type="file" accept=".apk" class="input"><button class="btn adb600-primary" onclick="kvMdmInjectAPK(${id})">⚡ INJETAR MDM PELO ADB</button><small class="muted">O Android ainda precisa autorizar o ADB e aceitar as regras normais de Device Owner. Nenhuma proteção de segurança é contornada.</small></div></section>
+      <section class="panel"><h3>▣ Selecionar USB pelo navegador</h3><p>Se o ADB Bridge não estiver iniciado, primeiro selecione o aparelho pelo painel nativo do Chrome/Edge.</p><button class="btn" onclick="closeModal();kvUsbSelect()">SELECIONAR DISPOSITIVO USB</button><button class="btn ghost" onclick="closeModal();kvAdbConnect()">FORÇAR ADB</button></section>
+      ${prov?`<section class="panel"><h3>Provisionamento Android</h3><img src="${prov.data_url}" alt="QR provisionamento Android"><p class="muted">Disponível quando o servidor estiver configurado com o APK público de provisionamento.</p></section>`:''}
+    </div>`,async()=>closeModal());
   }catch(e){toast(e.message,'error')}
+};
+window.kvMdmInjectAPK=async function(id){
+  const file=$('#kvMdmApkFile')?.files?.[0];
+  if(!file)return toast('Selecione primeiro o APK do KV CELL MDM.','error');
+  if(!/\.apk$/i.test(file.name))return toast('Selecione um arquivo .apk.','error');
+  if(file.size>30*1024*1024)return toast('APK acima de 30 MB não é aceito por esta rotina.','error');
+  try{
+    const serial=kvAdbSerial();
+    if(!serial)throw new Error('Nenhum aparelho ADB selecionado. Abra FORÇAR ADB e selecione o celular.');
+    const h=await kvBridge('/health'); if(!h?.ok)throw new Error('ADB Bridge offline. Para INJETAR PELO ADB, execute tools\\INICIAR_KV_CELL_BRIDGE.bat no PC da bancada.');
+    const buf=await file.arrayBuffer(); let binary=''; const bytes=new Uint8Array(buf); const chunk=0x8000; for(let i=0;i<bytes.length;i+=chunk)binary+=String.fromCharCode(...bytes.subarray(i,Math.min(i+chunk,bytes.length)));
+    const b64=btoa(binary);
+    toast('Enviando APK para a ponte ADB...','info');
+    const r=await fetch(window.__kvAdbBridge+'/mdm/install-upload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({serial,filename:file.name,data:b64})});
+    const j=await r.json(); if(!r.ok||!j.ok)throw new Error(j.error||'Falha ao instalar o MDM pelo ADB.');
+    toast('KV CELL MDM instalado pelo ADB • '+(j.output||'OK'),'success');
+  }catch(e){toast(e.message||'Falha na injeção ADB.','error')}
 };

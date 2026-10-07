@@ -227,6 +227,18 @@ class H(BaseHTTPRequestHandler):
                 return self.sendj({'ok':True,'key':key,'output':adb(serial,SAFE_COMMANDS[key].split())[:30000]})
             if p.path=='/mdm/install':
                 return self.sendj({'ok':True,**install_mdm(serial)})
+            if p.path=='/mdm/install-upload':
+                import base64, tempfile
+                data=d.get('data',''); filename=os.path.basename(d.get('filename') or 'KV_CELL_MDM.apk')
+                if not data: return self.sendj({'error':'APK vazio.'},400)
+                if not filename.lower().endswith('.apk'): return self.sendj({'error':'Arquivo enviado não é APK.'},400)
+                raw=base64.b64decode(data,validate=True)
+                if len(raw)>30*1024*1024: return self.sendj({'error':'APK acima de 30 MB.'},413)
+                tmp=os.path.join(tempfile.gettempdir(),'KV_CELL_MDM_UPLOAD.apk')
+                with open(tmp,'wb') as f: f.write(raw)
+                target(serial)
+                out=run((['-s',target(serial)['serial']] if serial else [])+['install','-r',tmp],timeout=90)
+                return self.sendj({'ok':True,'serial':target(serial)['serial'],'package':MDM_PACKAGE,'filename':filename,'output':out.strip()})
             if p.path=='/mdm/provision':
                 return self.sendj(mdm_provision(serial,d.get('token')))
             if p.path=='/action':
