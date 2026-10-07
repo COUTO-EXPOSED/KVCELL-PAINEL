@@ -66,7 +66,7 @@ def sync_db_to_blob():
     try:
         with DB_SYNC_LOCK:
             if not os.path.exists(DB): return
-            c=sqlite3.connect(DB); c.execute('PRAGMA wal_checkpoint(TRUNCATE)'); c.close()
+            c=sqlite3.connect(DB); c.execute('PRAGMA wal_checkpoint(PASSIVE)'); c.close()
             raw=open(DB,'rb').read(); enc=f.encrypt(raw)
             _multipart_upload(enc)
             print('KV CELL BLOB SYNC: banco persistido na Square Cloud.',flush=True)
@@ -77,7 +77,7 @@ def schedule_blob_sync():
     if not BLOB_ENABLED: return
     try:
         if DB_SYNC_TIMER and DB_SYNC_TIMER.is_alive(): return
-        DB_SYNC_TIMER=threading.Timer(1.0,sync_db_to_blob); DB_SYNC_TIMER.daemon=True; DB_SYNC_TIMER.start()
+        DB_SYNC_TIMER=threading.Timer(4.0,sync_db_to_blob); DB_SYNC_TIMER.daemon=True; DB_SYNC_TIMER.start()
     except Exception: pass
 
 
@@ -223,9 +223,74 @@ def migrate():
             if name not in existing:
                 try:c.execute(f'ALTER TABLE {table} ADD COLUMN {col}')
                 except Exception:pass
+    # V500.2: repair missing public tokens from older versions.
+    for table in ('services','unlocks','quotes'):
+        try:
+            missing=c.execute(f"SELECT id FROM {table} WHERE public_token IS NULL OR TRIM(public_token)=''").fetchall()
+            for rr in missing:
+                c.execute(f"UPDATE {table} SET public_token=? WHERE id=?",(secrets.token_urlsafe(18).replace('-','').replace('_',''),rr[0]))
+        except Exception:
+            pass
     c.commit();c.close()
 
 seed(); migrate()
+
+def seed_films_v502():
+    c=db()
+    groups={
+      'SAM-A02-A03-LEGACY':[('Samsung','Galaxy A02'),('Samsung','Galaxy A02s'),('Samsung','Galaxy A03'),('Samsung','Galaxy A03s'),('Samsung','Galaxy A03 Core'),('Samsung','Galaxy A04'),('Samsung','Galaxy A04s'),('Samsung','Galaxy A04e'),('Samsung','Galaxy A12'),('Samsung','Galaxy A13'),('Samsung','Galaxy M12')],
+      'SAM-A13-M12':[('Samsung','Galaxy A13'),('Samsung','Galaxy M12'),('Samsung','Galaxy A12')],
+      'SAM-A15-A25-REFERENCE':[('Samsung','Galaxy A15'),('Samsung','Galaxy A15 5G')],
+      'SAM-A16':[('Samsung','Galaxy A16'),('Samsung','Galaxy A16 5G')],
+      'SAM-A24':[('Samsung','Galaxy A24'),('Samsung','Galaxy A24 4G')],
+      'SAM-A25':[('Samsung','Galaxy A25 5G')],
+      'SAM-A26':[('Samsung','Galaxy A26 5G')],
+      'SAM-A34':[('Samsung','Galaxy A34 5G')],
+      'SAM-A35':[('Samsung','Galaxy A35 5G')],
+      'SAM-A54':[('Samsung','Galaxy A54 5G')],
+      'SAM-A55':[('Samsung','Galaxy A55 5G')],
+      'SAM-S23':[('Samsung','Galaxy S23')],
+      'SAM-S24':[('Samsung','Galaxy S24')],
+      'SAM-S25':[('Samsung','Galaxy S25')],
+      'MOT-G04-G05-REF':[('Motorola','Moto G04'),('Motorola','Moto G04s'),('Motorola','Moto G05')],
+      'MOT-G14':[('Motorola','Moto G14')],
+      'MOT-G23-G53-REF':[('Motorola','Moto G23'),('Motorola','Moto G53 5G')],
+      'MOT-G24-G04-REF':[('Motorola','Moto G24'),('Motorola','Moto G04')],
+      'MOT-G34-G54-REF':[('Motorola','Moto G34 5G'),('Motorola','Moto G54 5G')],
+      'MOT-G35':[('Motorola','Moto G35 5G')],
+      'MOT-G55':[('Motorola','Moto G55 5G')],
+      'MOT-G84':[('Motorola','Moto G84 5G')],
+      'MOT-G85':[('Motorola','Moto G85 5G')],
+      'MOT-G75':[('Motorola','Moto G75 5G')],
+      'MOT-EDGE50':[('Motorola','Edge 50 Fusion')],
+      'XIA-REDMI-NOTE12':[('Xiaomi','Redmi Note 12'),('Xiaomi','Redmi Note 12 4G'),('Xiaomi','Redmi Note 12 5G')],
+      'XIA-REDMI-NOTE13':[('Xiaomi','Redmi Note 13'),('Xiaomi','Redmi Note 13 4G')],
+      'XIA-REDMI-NOTE13-5G':[('Xiaomi','Redmi Note 13 5G')],
+      'XIA-REDMI-NOTE13-PRO':[('Xiaomi','Redmi Note 13 Pro')],
+      'XIA-REDMI-NOTE14':[('Xiaomi','Redmi Note 14'),('Xiaomi','Redmi Note 14 4G')],
+      'XIA-REDMI-NOTE14-5G':[('Xiaomi','Redmi Note 14 5G')],
+      'XIA-REDMI-13':[('Xiaomi','Redmi 13'),('Xiaomi','Redmi 13 4G')],
+      'XIA-POCO-X6':[('Xiaomi','POCO X6 5G')],
+      'XIA-POCO-X6-PRO':[('Xiaomi','POCO X6 Pro 5G')],
+      'XIA-POCO-X5-PRO':[('Xiaomi','POCO X5 Pro 5G')],
+      'APPLE-IP11':[('Apple','iPhone 11')],
+      'APPLE-IP12':[('Apple','iPhone 12'),('Apple','iPhone 12 Pro')],
+      'APPLE-IP13':[('Apple','iPhone 13'),('Apple','iPhone 13 Pro')],
+      'APPLE-IP14':[('Apple','iPhone 14'),('Apple','iPhone 14 Plus')],
+      'APPLE-IP15':[('Apple','iPhone 15'),('Apple','iPhone 15 Plus')],
+      'APPLE-IP16':[('Apple','iPhone 16'),('Apple','iPhone 16 Plus')],
+      'REALME-C55':[('Realme','C55')],
+      'REALME-C53-C51-REF':[('Realme','C53'),('Realme','C51')],
+      'INFINIX-HOT40':[('Infinix','Hot 40'),('Infinix','Hot 40i')],
+    }
+    for group,pairs in groups.items():
+        for brand,model in pairs:
+            exists=c.execute('SELECT 1 FROM film_compat WHERE brand=? AND model=? LIMIT 1',(brand,model)).fetchone()
+            if exists: continue
+            c.execute('INSERT INTO film_compat(brand,model,aliases,master_code,group_name,screen_size,fit_notes,source_note,confidence,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)',(brand,model,model,group,group,'','Relação de catálogo/referência; confirmar recorte, borda e sensores antes da aplicação.','Pesquisa web: VivaCell, Tabela Películas, Ordita/FilmFinder; relação não tratada como garantia universal.','referencia-web',now()))
+    c.commit();c.close()
+
+seed_films_v502()
 
 def rowdict(r): return dict(r) if r else None
 def rows(sql,args=()):
@@ -389,6 +454,15 @@ class Handler(BaseHTTPRequestHandler):
             wh.append('customer_id=?');args.append(int(qs['customer_id'][0]))
         sql='SELECT * FROM '+table+(' WHERE '+' AND '.join(wh) if wh else '')+' ORDER BY id DESC LIMIT 500'
         data=rows(sql,args)
+        if resource in ('services','unlocks','quotes'):
+            for x in data:
+                if not str(x.get('public_token') or '').strip():
+                    t=secrets.token_urlsafe(18).replace('-','').replace('_','')
+                    try:
+                        write(f"UPDATE {table} SET public_token=? WHERE id=?",(t,x['id']))
+                        x['public_token']=t
+                    except Exception:
+                        pass
         if resource in ('services','unlocks'):
             for x in data:
                 if x.get('customer_id'):
@@ -602,16 +676,52 @@ class Handler(BaseHTTPRequestHandler):
         return self.json({'ok':True,'device':dict(d),'balance':balance,'days_to_due':days,'installments_remaining':max(0,int(d['installment_count'] or 0)-int(d['paid_installments'] or 0))})
 
     def mdm_qr(self,qs):
-        mid=int(qs.get('id',['0'])[0] or 0); d=one('SELECT * FROM mdm_devices WHERE id=?',(mid,))
+        mid=int(qs.get('id',['0'])[0] or 0); mode=qs.get('mode',['app'])[0]
+        d=one('SELECT * FROM mdm_devices WHERE id=?',(mid,))
         if not d:return self.json({'error':'MDM não encontrado'},404)
-        payload=d['qr_payload'] or ('https://'+self.headers.get('Host','kvcell.squareweb.app')+'/public/mdm/enroll/'+d['enrollment_token'])
-        img=qrcode.make(payload); buf=BytesIO(); img.save(buf,format='PNG'); data='data:image/png;base64,'+base64.b64encode(buf.getvalue()).decode(); return self.json({'ok':True,'payload':payload,'data_url':data})
+        host=self.headers.get('Host','kvcell.squareweb.app'); tokenv=d['enrollment_token']
+        if mode=='provisioning':
+            apk_url=(os.environ.get('MDM_AGENT_APK_URL') or '').strip()
+            if not apk_url:return self.json({'error':'Defina MDM_AGENT_APK_URL para gerar QR de provisionamento Android.'},400)
+            payload=json.dumps({'android.app.extra.PROVISIONING_DEVICE_ADMIN_COMPONENT_NAME':'br.com.kvcell.finance.mdm/br.com.kvcell.mdmd.KVCellDeviceAdminReceiver','android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_DOWNLOAD_LOCATION':apk_url,'android.app.extra.PROVISIONING_ADMIN_EXTRAS_BUNDLE':json.dumps({'enrollment_token':tokenv,'server':'https://'+host},ensure_ascii=False)},ensure_ascii=False,separators=(',',':'))
+        else:
+            payload='kvcellmdm://enroll/'+tokenv
+        img=qrcode.make(payload); buf=BytesIO(); img.save(buf,format='PNG'); data='data:image/png;base64,'+base64.b64encode(buf.getvalue()).decode()
+        return self.json({'ok':True,'mode':mode,'payload':payload,'data_url':data})
     def mdm_create(self,d,u):
-        tokenv=token(); unit=d.get('unit','TODOS'); enroll_url='https://'+self.headers.get('Host','kvcell.squareweb.app')+'/public/mdm/enroll/'+tokenv; apk_url=(os.environ.get('MDM_AGENT_APK_URL') or '').strip(); payload=enroll_url
+        tokenv=secrets.token_urlsafe(18).replace('-','').replace('_','')
+        unit=d.get('unit','TODOS')
+        host=self.headers.get('Host','kvcell.squareweb.app')
+        enroll_url='https://'+host+'/public/mdm/enroll/'+tokenv
+        apk_url=(os.environ.get('MDM_AGENT_APK_URL') or '').strip()
+        payload=enroll_url
         if apk_url:
-            payload=json.dumps({'android.app.extra.PROVISIONING_DEVICE_ADMIN_COMPONENT_NAME':'br.com.kvcell.finance.mdm/br.com.kvcell.mdmd.KVCellDeviceAdminReceiver','android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_DOWNLOAD_LOCATION':apk_url,'android.app.extra.PROVISIONING_ADMIN_EXTRAS_BUNDLE':json.dumps({'enrollment_token':tokenv,'server':'https://'+self.headers.get('Host','kvcell.squareweb.app')})},ensure_ascii=False,separators=(',',':'))
-        rid=write('INSERT INTO mdm_devices(unit,customer_id,purchase_id,fiado_id,brand,model,imei,serial,android_version,device_name,enrollment_token,qr_payload,status,policy_state,custom_message,installment_total,installment_paid,next_due,app_version,last_seen,battery,installment_count,installment_value,paid_installments,payment_url,pix_copy_paste,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(unit,d.get('customer_id') or None,d.get('purchase_id') or None,d.get('fiado_id') or None,d.get('brand'),d.get('model'),d.get('imei'),d.get('serial'),d.get('android_version'),d.get('device_name') or f"{d.get('brand','')} {d.get('model','')}".strip(),tokenv,payload,'aguardando','normal',d.get('custom_message') or 'Aparelho em crediário KV CELL',float(d.get('installment_total') or 0),float(d.get('installment_paid') or 0),d.get('next_due'),d.get('app_version'),None,None,int(d.get('installment_count') or 1),float(d.get('installment_value') or 0),int(d.get('paid_installments') or 0),d.get('payment_url'),d.get('pix_copy_paste'),now(),now()))
-        write('INSERT INTO mdm_events(device_id,action,message,created_at) VALUES(?,?,?,?)',(rid,'criado','Cadastro de política MDM criado.',now())); return self.json({'ok':True,'id':rid,'token':tokenv,'payload':payload})
+            payload=json.dumps({
+                'android.app.extra.PROVISIONING_DEVICE_ADMIN_COMPONENT_NAME':'br.com.kvcell.finance.mdm/br.com.kvcell.mdmd.KVCellDeviceAdminReceiver',
+                'android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_DOWNLOAD_LOCATION':apk_url,
+                'android.app.extra.PROVISIONING_ADMIN_EXTRAS_BUNDLE':json.dumps({'enrollment_token':tokenv,'server':'https://'+host},ensure_ascii=False)
+            },ensure_ascii=False,separators=(',',':'))
+        total=float(d.get('installment_total') or 0); paid=float(d.get('installment_paid') or 0)
+        count=max(1,int(d.get('installment_count') or 1)); value=float(d.get('installment_value') or 0) or max(0,(total-paid)/count)
+        c=None
+        try:
+            c=db()
+            cur=c.execute("INSERT INTO mdm_devices(unit,customer_id,purchase_id,fiado_id,brand,model,imei,serial,android_version,device_name,enrollment_token,qr_payload,status,policy_state,custom_message,installment_total,installment_paid,next_due,app_version,last_seen,battery,installment_count,installment_value,paid_installments,payment_url,pix_copy_paste,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(unit,d.get('customer_id') or None,d.get('purchase_id') or None,d.get('fiado_id') or None,d.get('brand'),d.get('model'),d.get('imei'),d.get('serial'),d.get('android_version'),d.get('device_name') or f"{d.get('brand','')} {d.get('model','')}".strip(),tokenv,payload,'aguardando','normal',d.get('custom_message') or 'Aparelho em crediário KV CELL',total,paid,d.get('next_due'),d.get('app_version'),None,None,count,value,int(d.get('paid_installments') or 0),d.get('payment_url'),d.get('pix_copy_paste'),now(),now()))
+            rid=cur.lastrowid
+            c.execute("INSERT INTO mdm_events(device_id,action,message,created_at) VALUES(?,?,?,?)",(rid,'criado','Cadastro de política MDM criado.',now()))
+            c.commit(); c.close(); c=None; schedule_blob_sync()
+            return self.json({'ok':True,'id':rid,'token':tokenv,'payload':payload,'enroll_url':enroll_url})
+        except sqlite3.IntegrityError:
+            if c:
+                try:c.rollback();c.close()
+                except Exception:pass
+            return self.json({'error':'Não foi possível criar o crediário MDM: registro duplicado ou inválido.'},409)
+        except Exception:
+            if c:
+                try:c.rollback();c.close()
+                except Exception:pass
+            return self.json({'error':'Não foi possível criar o crediário MDM agora. Tente novamente.'},503)
+
     def mdm_action(self,d,u):
         mid=int(d.get('id') or 0); action=d.get('action'); dev=one('SELECT * FROM mdm_devices WHERE id=?',(mid,))
         if not dev:return self.json({'error':'Dispositivo MDM não encontrado.'},404)

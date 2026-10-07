@@ -69,3 +69,11 @@ O projeto não contém APK pré-compilado nem segredo de produção.
 - Fiado com parcelas e cálculo ✅
 - MDM → QR PNG → token → consulta financeira ✅
 - ZIP íntegro será verificado antes da entrega.
+
+## V500.2
+Correções incrementais sobre a V500, sem remoção deliberada de módulos existentes. Inclui reparo de links públicos antigos, redução de contenção SQLite/Blob, MDM transacional com QR de aplicativo/provisionamento, picker de cliente sem sobreposição, PDV avançado e módulo de películas com busca reversa.
+
+### MDM Android
+- `MDM_AGENT_APK_URL` habilita QR de provisionamento Android completo.
+- Sem essa variável, o QR do aplicativo usa `kvcellmdm://enroll/<token>` e o portal público permanece disponível.
+- O agente deve ser provisionado legitimamente como Device Admin/Device Owner conforme as capacidades do Android; o painel não faz bypass de proteções.
