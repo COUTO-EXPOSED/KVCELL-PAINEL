@@ -349,7 +349,7 @@ def dashboard(unit):
     return {'customers':customers,'open_services':services,'vitrine':vitrine,'low_stock':low,'income':float(income or 0),'expense':float(expense or 0),'sales':sales}
 
 class Handler(BaseHTTPRequestHandler):
-    server_version='KV-CELL-PREMIUM/2.0'
+    server_version='KV-CELL-PREMIUM/10.0'
     def log_message(self,*a): pass
     def send(self,status,body,ctype='application/json',headers=None):
         if isinstance(body,str): body=body.encode()
@@ -372,7 +372,7 @@ class Handler(BaseHTTPRequestHandler):
         return u
     def do_GET(self):
         p=urlparse(self.path); path=p.path; qs=parse_qs(p.query)
-        if path=='/api/health': return self.json({'ok':True,'app':'KV CELL OS PREMIUM','port':PORT,'time':now()})
+        if path=='/api/health': return self.json({'ok':True,'app':'KV CELL OS PREMIUM','version':'1000.0','port':PORT,'time':now()})
         if path.startswith('/public/'):
             return self.public(path)
         if path=='/': return self.send(200,INDEX,'text/html')
@@ -1107,6 +1107,18 @@ class Handler(BaseHTTPRequestHandler):
             c.close()
         return self.send(200,buf.getvalue(),'application/zip',{'Content-Disposition':'attachment; filename=kvcell-backup.zip'})
     def public(self,path):
+        if path == '/public/mdm/apk':
+            configured=(os.environ.get('MDM_AGENT_APK_PATH') or '').strip()
+            candidates=[configured] if configured else []
+            candidates += [
+                os.path.join(BASE,'tools','mdm','KV_CELL_MDM.apk'),
+                os.path.join(BASE,'android-kvcell-finance-mdm','app','build','outputs','apk','debug','app-debug.apk')
+            ]
+            apk=next((x for x in candidates if x and os.path.isfile(x)),None)
+            if not apk:
+                return self.send(404,'APK do agente MDM ainda não foi publicado. Gere o APK e coloque-o em tools/mdm/KV_CELL_MDM.apk ou configure MDM_AGENT_APK_PATH.','text/plain')
+            raw=open(apk,'rb').read()
+            return self.send(200,raw,'application/vnd.android.package-archive',{'Content-Disposition':'inline; filename=KV_CELL_MDM.apk','Cache-Control':'public, max-age=300'})
         if path.startswith('/public/mdm/portal/'):
             t=path.split('/')[-1]
             d=one('SELECT m.*,c.name customer_name,c.phone customer_phone FROM mdm_devices m LEFT JOIN customers c ON c.id=m.customer_id WHERE m.enrollment_token=?',(t,))
@@ -1148,6 +1160,9 @@ def public_mdm_portal(d,ins):
     ) or '<tr><td colspan="4">Nenhuma parcela detalhada.</td></tr>'
     payment=d['payment_url'] or ''
     pix=d['pix_copy_paste'] or ''
+    phone=''.join(ch for ch in str(d['customer_phone'] or '') if ch.isdigit())
+    wa_url=('https://wa.me/'+(phone if phone.startswith('55') else '55'+phone)+'?text='+urllib.parse.quote('Olá! Quero falar sobre meu crediário e meu aparelho na KV CELL.') if phone else '')
+    wa_box=(f'<div class="actions"><a class="whatsapp" href="{safe(wa_url)}" target="_blank" rel="noopener">💬 Falar com a KV CELL pelo WhatsApp</a></div>' if phone else '')
     payment_box=(
         '<div class="actions"><a class="pay" href="'+safe(payment)+'" target="_blank" rel="noopener">Pagar / atualizar crediário</a></div>'
         if payment else
@@ -1175,7 +1190,7 @@ body{{background:radial-gradient(circle at 50% -20%,#292400 0,#080808 48%);}}
 <div><small>Política KV CELL</small><b>{policy}</b></div><div><small>Mensagem</small><b>{message}</b></div>
 </div></div>
 <div class="box"><h2>Parcelas</h2><div class="tablewrap"><table><tr><th>Parcela</th><th>Valor</th><th>Vencimento</th><th>Status</th></tr>{rows}</table></div></div>
-<div class="box"><h2>Pagamento</h2>{payment_box}{pix_box}</div>
+<div class="box"><h2>Pagamento</h2>{payment_box}{pix_box}{wa_box}</div>
 <footer>KV CELL • Lagos + Magé • Portal protegido por token de matrícula</footer></main></html>""".format(
         css=PUBLIC_CSS,customer=safe(d['customer_name'] or 'Cliente'),
         device=safe(d['device_name'] or (d['brand']+' '+d['model'])),unit=safe(d['unit'] or 'KV CELL'),
@@ -1184,11 +1199,14 @@ body{{background:radial-gradient(circle at 50% -20%,#292400 0,#080808 48%);}}
         due=safe(d['next_due'] or '—'),brand=safe(d['brand']),model=safe(d['model']),
         imei=safe(d['imei'] or '—'),serial=safe(d['serial'] or '—'),android=safe(d['android_version'] or '—'),
         battery=safe(str(d['battery'])+'%' if d['battery'] is not None else '—'),last_seen=safe(d['last_seen'] or '—'),
-        message=safe(d['custom_message'] or '—'),rows=rows_html,payment_box=payment_box,pix_box=pix_box)
+        message=safe(d['custom_message'] or '—'),rows=rows_html,payment_box=payment_box,pix_box=pix_box,wa_box=wa_box)
 
 def public_quote(q,c):
     items=json.loads(q['items'] or '[]'); rows=''.join(f"<tr><td>{safe(x.get('description',x.get('name','Serviço')))}</td><td>{safe(x.get('qty',1))}</td><td>R$ {float(x.get('total',x.get('price',0))):,.2f}</td></tr>" for x in items)
-    buttons='' if q['status'] in ('aprovado','recusado','expirado') else '<div class="box"><h3>Responder orçamento</h3><div class="actions"><button class="ok" onclick="respond(\'aprovado\')">✓ Aceitar orçamento</button><button class="no" onclick="respond(\'recusado\')">✕ Recusar orçamento</button></div><p id="msg"></p></div>'
+    phone=''.join(ch for ch in str(c.get('phone','') if c else '') if ch.isdigit())
+    wa=('https://wa.me/'+(phone if phone.startswith('55') else '55'+phone)+'?text='+urllib.parse.quote('Olá! Vi o orçamento '+str(q['number'])+' da KV CELL e preciso falar sobre ele.') if phone else '')
+    contact=(f"<div class='actions'><a class='whatsapp' href='{safe(wa)}' target='_blank' rel='noopener'>💬 Falar com a KV CELL</a><button class='no' onclick='navigator.clipboard?.writeText(location.href);this.textContent=\"Link copiado\"'>🔗 Copiar link</button></div>")
+    buttons=('' if q['status'] in ('aprovado','recusado','expirado') else '<div class="box"><h3>Responder orçamento</h3><div class="actions"><button class="ok" onclick="respond(\'aprovado\')">✓ Aceitar orçamento</button><button class="no" onclick="respond(\'recusado\')">✕ Recusar orçamento</button></div><p id="msg"></p></div>')+contact
     return f"""<!doctype html><html lang="pt-BR"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{safe(q['number'])} • KV CELL</title><style>{PUBLIC_CSS}.actions{{display:flex;gap:10px;flex-wrap:wrap}}button{{border:0;border-radius:12px;padding:14px 20px;font-weight:800;cursor:pointer}}.ok{{background:#ffd400;color:#090909}}.no{{background:#2a2a2a;color:#fff}}</style><main><header><b>KV CELL</b><span>ORÇAMENTO • RESPOSTA ONLINE</span></header><section class="hero"><small>ORÇAMENTO</small><h1>{safe(q['number'])}</h1><p>{safe(c['name'] if c else 'Cliente')} • Unidade {safe(q['unit'])}</p></section><div class="grid"><div class="box"><b>Itens</b><table><tr><th>Serviço</th><th>Qtd.</th><th>Total</th></tr>{rows}</table></div><div class="box"><b>Status</b><div class="status" id="status">{safe(q['status'])}</div><p>Garantia: {int(q.get('warranty_days') or 0)} dias</p><p>Válido até: {safe(q['valid_until'])}</p><strong>Total: R$ {float(q['total'] or 0):,.2f}</strong></div></div><div class="box"><b>Condições</b><p>{safe(q['conditions'])}</p><p>{safe(q['observations'])}</p></div>{buttons}<footer>KV CELL • Lagos + Magé</footer></main><script>async function respond(a){{let msg=prompt(a==='aprovado'?'Mensagem opcional para a KV CELL:':'Motivo da recusa (opcional):','');let r=await fetch(location.pathname,{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{action:a,message:msg||''}})}});let d=await r.json();document.getElementById('msg').textContent=d.ok?'Resposta enviada à KV CELL.':'Não foi possível enviar. Tente novamente.';if(d.ok)document.getElementById('status').textContent=a}}</script></html>"""
 def public_os(s,c):
     ck=json.loads(s['checklist'] or '{}'); photos=json.loads(s['photos'] or '[]'); thumbs=''.join(f'<img src=\"{x}\" />' for x in photos[:8]); status=s.get('status') or 'aberto'
@@ -1209,7 +1227,10 @@ INDEX='''<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta nam
 # V400 public portal override
 def public_quote(q,c):
     items=json.loads(q['items'] or '[]'); rows=''.join(f"<tr><td>{safe(x.get('description',x.get('name','Serviço')))}</td><td>{safe(x.get('qty',1))}</td><td>R$ {float(x.get('total',x.get('price',0))):,.2f}</td></tr>" for x in items)
-    buttons='' if q['status'] in ('aprovado','recusado','expirado') else '<div class="box"><h3>Responder orçamento</h3><div class="actions"><button class="ok" onclick="respond(\'aprovado\')">✓ Aceitar orçamento</button><button class="no" onclick="respond(\'recusado\')">✕ Recusar orçamento</button></div><p id="msg"></p></div>'
+    phone=''.join(ch for ch in str(c.get('phone','') if c else '') if ch.isdigit())
+    wa=('https://wa.me/'+(phone if phone.startswith('55') else '55'+phone)+'?text='+urllib.parse.quote('Olá! Vi o orçamento '+str(q['number'])+' da KV CELL e preciso falar sobre ele.') if phone else '')
+    contact=(f"<div class='actions'><a class='whatsapp' href='{safe(wa)}' target='_blank' rel='noopener'>💬 Falar com a KV CELL</a><button class='no' onclick='navigator.clipboard?.writeText(location.href);this.textContent=\"Link copiado\"'>🔗 Copiar link</button></div>")
+    buttons=('' if q['status'] in ('aprovado','recusado','expirado') else '<div class="box"><h3>Responder orçamento</h3><div class="actions"><button class="ok" onclick="respond(\'aprovado\')">✓ Aceitar orçamento</button><button class="no" onclick="respond(\'recusado\')">✕ Recusar orçamento</button></div><p id="msg"></p></div>')+contact
     return f"""<!doctype html><html lang="pt-BR"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{safe(q['number'])} • KV CELL</title><style>{PUBLIC_CSS}.actions{{display:flex;gap:10px;flex-wrap:wrap}}button{{border:0;border-radius:12px;padding:14px 20px;font-weight:800;cursor:pointer}}.ok{{background:#ffd400;color:#090909}}.no{{background:#2a2a2a;color:#fff}}</style><main><header><b>KV CELL</b><span>ORÇAMENTO • RESPOSTA ONLINE</span></header><section class="hero"><small>ORÇAMENTO</small><h1>{safe(q['number'])}</h1><p>{safe(c['name'] if c else 'Cliente')} • Unidade {safe(q['unit'])}</p></section><div class="grid"><div class="box"><b>Itens</b><table><tr><th>Serviço</th><th>Qtd.</th><th>Total</th></tr>{rows}</table></div><div class="box"><b>Status</b><div class="status" id="status">{safe(q['status'])}</div><p>Garantia: {int(q.get('warranty_days') or 0)} dias</p><p>Válido até: {safe(q['valid_until'])}</p><strong>Total: R$ {float(q['total'] or 0):,.2f}</strong></div></div><div class="box"><b>Condições</b><p>{safe(q['conditions'])}</p><p>{safe(q['observations'])}</p></div>{buttons}<footer>KV CELL • Lagos + Magé</footer></main><script>async function respond(a){{let msg=prompt(a==='aprovado'?'Mensagem opcional para a KV CELL:':'Motivo da recusa (opcional):','');let r=await fetch(location.pathname,{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{action:a,message:msg||''}})}});let d=await r.json();document.getElementById('msg').textContent=d.ok?'Resposta enviada à KV CELL.':'Não foi possível enviar. Tente novamente.';if(d.ok)document.getElementById('status').textContent=a}}</script></html>"""
 def public_os(s,c):
     ck=json.loads(s['checklist'] or '{}'); photos=json.loads(s['photos'] or '[]'); thumbs=''.join(f'<img src=\"{x}\" />' for x in photos[:8]); status=s.get('status') or 'aberto'
@@ -1217,7 +1238,11 @@ def public_os(s,c):
     tl=''.join('<div class=\"step '+('done' if ok else '')+'\"><b>'+('✓' if ok else '○')+' '+safe(label)+'</b><small>'+safe(val or 'Pendente')+'</small></div>' for label,ok,val in timeline)
     details=json.loads(s['details_json'] or '{}') if s.get('details_json') else {}
     approval='' if status in ('aprovado pelo cliente','recusado pelo cliente','entregue','cancelado') else '<div class=\"box\"><h3>Aprovação da OS</h3><p>Revise as informações e autorize o início do serviço.</p><div class=\"actions\"><button class=\"ok\" onclick=\"respond(\'aprovado\')\">✓ Aprovar OS</button><button class=\"no\" onclick=\"respond(\'recusado\')\">✕ Recusar</button></div><p id=\"msg\"></p></div>'
-    return f"""<!doctype html><html lang="pt-BR"><meta name="viewport" content="width=device-width,initial-scale=1"><title>OS-{s['id']} • KV CELL</title><style>{PUBLIC_CSS}.actions{{display:flex;gap:10px;flex-wrap:wrap}}button{{border:0;border-radius:12px;padding:14px 20px;font-weight:800;cursor:pointer}}.ok{{background:#ffd400;color:#090909}}.no{{background:#2a2a2a;color:#fff}}.photos img{{width:100px;height:100px;object-fit:cover;border-radius:10px;margin:5px}}</style><main><header><b>KV CELL</b><span>PORTAL DO CLIENTE</span></header><section class="hero"><small>ORDEM DE SERVIÇO</small><h1>#OS-{s['id']}</h1><p>{safe(c['name'] if c else 'Cliente')} • {safe(s['unit'])}</p><div class="status">{safe(status)}</div></section><div class="grid"><div class="box"><h2>Serviço</h2><p>{safe(s['description'])}</p><p>Modelo: {safe(details.get('model',''))}</p><p>IMEI: {safe(details.get('imei',''))}</p></div><div class="box"><h2>Valor</h2><h1>R$ {float(s['price'] or 0):,.2f}</h1><p>Garantia: {safe(s.get('warranty'))}</p></div></div><div class="box"><h2>Linha do Tempo</h2><div class="timeline">{tl}</div></div>{approval}<div class="box"><b>Garantia Digital</b><p>OS #{s['id']} • Verificação oficial KV CELL</p></div><div class="box"><b>Fotos do aparelho</b><div class="photos">{thumbs or '<span>Sem fotos cadastradas.</span>'}</div></div><div class="box"><b>Cliente</b><p>{safe(c['name'] if c else 'Cliente')}</p><p>{safe(c.get('phone') if c else '')}</p><b>Técnico</b><p>{safe(s['technician'])}</p></div><footer>KV CELL • Link de acompanhamento</footer></main><script>async function respond(a){{let msg=prompt(a==='aprovado'?'Mensagem opcional para a KV CELL:':'Motivo da recusa (opcional):','');let r=await fetch(location.pathname,{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{action:a,message:msg||''}})}});let d=await r.json();document.getElementById('msg').textContent=d.ok?'Resposta enviada à KV CELL.':'Não foi possível enviar.';if(d.ok)location.reload()}}</script></html>"""
+    phone=''.join(ch for ch in str(c.get('phone','') if c else '') if ch.isdigit())
+    wa=('https://wa.me/'+(phone if phone.startswith('55') else '55'+phone)+'?text='+urllib.parse.quote('Olá! Estou acompanhando a OS #'+str(s['id'])+' da KV CELL e preciso de atendimento.') if phone else '')
+    contact=(f"<div class='actions'><a class='whatsapp' href='{safe(wa)}' target='_blank' rel='noopener'>💬 Falar com a KV CELL</a><button class='no' onclick='navigator.clipboard?.writeText(location.href);this.textContent=\"Link copiado\"'>🔗 Copiar acompanhamento</button></div>")
+
+    return f"""<!doctype html><html lang="pt-BR"><meta name="viewport" content="width=device-width,initial-scale=1"><title>OS-{s['id']} • KV CELL</title><style>{PUBLIC_CSS}.actions{{display:flex;gap:10px;flex-wrap:wrap}}button{{border:0;border-radius:12px;padding:14px 20px;font-weight:800;cursor:pointer}}.ok{{background:#ffd400;color:#090909}}.no{{background:#2a2a2a;color:#fff}}.photos img{{width:100px;height:100px;object-fit:cover;border-radius:10px;margin:5px}}</style><main><header><b>KV CELL</b><span>PORTAL DO CLIENTE</span></header><section class="hero"><small>ORDEM DE SERVIÇO</small><h1>#OS-{s['id']}</h1><p>{safe(c['name'] if c else 'Cliente')} • {safe(s['unit'])}</p><div class="status">{safe(status)}</div></section><div class="grid"><div class="box"><h2>Serviço</h2><p>{safe(s['description'])}</p><p>Modelo: {safe(details.get('model',''))}</p><p>IMEI: {safe(details.get('imei',''))}</p></div><div class="box"><h2>Valor</h2><h1>R$ {float(s['price'] or 0):,.2f}</h1><p>Garantia: {safe(s.get('warranty'))}</p></div></div><div class="box"><h2>Linha do Tempo</h2><div class="timeline">{tl}</div></div>{approval}{contact}<div class="box"><b>Garantia Digital</b><p>OS #{s['id']} • Verificação oficial KV CELL</p></div><div class="box"><b>Fotos do aparelho</b><div class="photos">{thumbs or '<span>Sem fotos cadastradas.</span>'}</div></div><div class="box"><b>Cliente</b><p>{safe(c['name'] if c else 'Cliente')}</p><p>{safe(c.get('phone') if c else '')}</p><b>Técnico</b><p>{safe(s['technician'])}</p></div><footer>KV CELL • Link de acompanhamento</footer></main><script>async function respond(a){{let msg=prompt(a==='aprovado'?'Mensagem opcional para a KV CELL:':'Motivo da recusa (opcional):','');let r=await fetch(location.pathname,{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{action:a,message:msg||''}})}});let d=await r.json();document.getElementById('msg').textContent=d.ok?'Resposta enviada à KV CELL.':'Não foi possível enviar.';if(d.ok)location.reload()}}</script></html>"""
 
 
 
@@ -1225,7 +1250,7 @@ def public_os(s,c):
 if __name__ == '__main__':
     host = os.environ.get('HOST', '0.0.0.0')
     server = ThreadingHTTPServer((host, PORT), Handler)
-    print(f'KV CELL OS PREMIUM V810.0 listening on {host}:{PORT}', flush=True)
+    print(f'KV CELL OS PREMIUM V1000.0 listening on {host}:{PORT}', flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

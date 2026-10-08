@@ -4,7 +4,7 @@ from urllib.parse import urlencode
 
 ROOT=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 port='18111'
-env=os.environ.copy(); env['PORT']=port
+env=os.environ.copy(); env['PORT']=port; env.setdefault('ADMIN_PASSWORD','kvcell123'); env['KVCELL_DATA_DIR']=os.path.join(ROOT,'_smoke_data')
 p=subprocess.Popen([sys.executable,os.path.join(ROOT,'app.py')],cwd=ROOT,env=env,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
 jar=CookieJar(); opener=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
 

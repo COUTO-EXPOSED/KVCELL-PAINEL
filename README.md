@@ -126,3 +126,8 @@ Inclui:
 - entrypoint do servidor compatível com `MAIN=app.py`;
 - projeto-fonte do agente Android com correção de compilação;
 - script de build do APK em `tools/mdm/BUILD_KV_CELL_MDM.bat`.
+
+## V1000.0 — ADB e MDM
+A V1000 adiciona uma camada de conexão ADB que não tenta repetidamente acessar o localhost quando a ponte ainda não foi verificada. No Windows, use `tools\INICIAR_KV_CELL_BRIDGE.bat` ou `tools\bridge\INSTALAR_BRIDGE_AUTO.bat`.
+
+O painel Square Cloud não consegue iniciar o processo local por conta das restrições de segurança do navegador. A ponte é necessária para ADB real e instalação do APK via ADB.

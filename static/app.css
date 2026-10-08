@@ -133,3 +133,34 @@ table thead th{font-weight:700;letter-spacing:.35px}
 .kv-link-card strong{color:#ffd400}
 @media(max-width:900px){.cards{grid-template-columns:repeat(2,1fr)}.main{margin-left:0;width:100%;padding:15px}.sidebar{position:relative;width:100%;height:auto}.shell{display:block}}
 @media(max-width:620px){.cards{grid-template-columns:1fr}.page-title{align-items:flex-start;flex-direction:column}}
+
+/* ================================================================
+   V1000.0 — PREMIUM REFERENCE UI / TECH OS PRO INSPIRED
+   Additive visual layer only. No existing selectors or functions removed.
+================================================================ */
+:root{--kv-accent:#ffd400;--kv-accent2:#ffe56a;--kv-surface:#0d0d0d;--kv-surface2:#121212;--kv-border2:#262626;--kv-text2:#b7b7b7}
+body{background:radial-gradient(900px 450px at 70% -10%,rgba(255,212,0,.08),transparent 60%),radial-gradient(700px 400px at 20% 0%,rgba(255,212,0,.045),transparent 65%),#060606}
+.sidebar{background:linear-gradient(180deg,#0b0b0b 0%,#080808 100%);box-shadow:18px 0 55px rgba(0,0,0,.42)}
+.nav button{min-height:42px;border-radius:12px;font-weight:600}.nav button.active{background:linear-gradient(90deg,rgba(255,212,0,.12),rgba(255,212,0,.025));border-color:rgba(255,212,0,.25);box-shadow:inset 3px 0 #ffd400,0 8px 25px rgba(0,0,0,.25)}
+.main{padding-top:12px}.topbar{background:rgba(7,7,7,.84);border-bottom-color:#202020;backdrop-filter:blur(18px)}
+.page-title{margin-top:18px}.page-title h1{font-size:31px;font-weight:800}.page-title p{font-size:12px}
+.cards{gap:14px}.metric{background:linear-gradient(145deg,#151515 0%,#0c0c0c 100%);border-color:#282828;box-shadow:0 16px 42px rgba(0,0,0,.34)}.metric:before{content:"";position:absolute;left:0;right:0;top:0;height:1px;background:linear-gradient(90deg,transparent,#ffd40045,transparent)}
+.panel,.box{background:linear-gradient(145deg,#121212,#0d0d0d);border-color:#282828;box-shadow:0 16px 45px rgba(0,0,0,.32)}
+.panel-head h2{font-weight:700}.table-wrap,.table{border-color:#282828}.table th{background:#101010;color:#b8a600;padding-top:13px;padding-bottom:13px}.table td{padding-top:13px;padding-bottom:13px}
+.row-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.iconbtn{min-width:38px!important;height:38px!important;padding:0 10px!important;border-radius:11px!important;background:#151515!important;border:1px solid #303030!important;color:#ddd!important;font-weight:700}.iconbtn:hover{border-color:#ffd400!important;color:#ffd400!important;background:#1a1808!important}
+.btn{min-height:42px;padding:10px 15px;border-radius:12px;font-weight:800}.btn.ghost{background:#111;border-color:#303030}.btn.ghost:hover{background:#1a1800;border-color:#655900}.select,.input,.textarea{background:#0b0b0b;border-color:#303030}.input:focus,.select:focus,.textarea:focus{border-color:#8d7900;box-shadow:0 0 0 3px rgba(255,212,0,.07)}
+.modal{background:rgba(0,0,0,.78);backdrop-filter:blur(12px)}.modalbox{background:linear-gradient(145deg,#131313,#0b0b0b);border-color:#343434;box-shadow:0 35px 110px #000}
+.quick button{background:linear-gradient(145deg,#151515,#0d0d0d);border-color:#2a2a2a}.quick button:hover{border-color:#625700;transform:translateY(-1px)}
+.os-tabs,.subtabs{box-shadow:0 12px 30px rgba(0,0,0,.24)}
+
+/* MDM: denser card layout, clearer action hierarchy, without removing existing controls. */
+.mdm520-dashboard{padding:2px}.mdm520-head{padding:10px 4px 18px}.mdm520-head h2{font-size:28px;letter-spacing:-.5px}.mdm520-metrics>div{min-height:90px;border-radius:16px;background:linear-gradient(145deg,#151515,#0c0c0c);border-color:#292929;box-shadow:0 12px 32px rgba(0,0,0,.25)}
+.mdm520-toolbar{padding:5px 0}.mdm520-toolbar .btn{white-space:nowrap}.mdm520-table{gap:10px}.mdm520-table article{grid-template-columns:minmax(280px,1.8fr) 155px 120px auto;padding:15px;border-radius:16px;background:linear-gradient(145deg,#121212,#0c0c0c);border-color:#252525;box-shadow:0 8px 24px rgba(0,0,0,.22);transition:.16s ease}.mdm520-table article:hover{border-color:#4d4300;transform:translateY(-1px)}
+.mdm520-phone{width:48px;height:48px;border-radius:14px;background:linear-gradient(145deg,#1b1b1b,#101010);border-color:#303030;font-size:20px}.mdm520-main b{font-size:13px}.mdm520-main span{font-size:11px}.mdm520-actions{justify-content:flex-end}.mdm520-actions button{min-height:36px;border-radius:10px;padding:7px 10px;background:#151515}.mdm520-actions button:first-child{background:#ffd400;color:#080808;border-color:#ffd400;font-weight:900}.mdm520-actions button:hover{transform:translateY(-1px)}.mdm520-actions .danger{background:#241010;color:#ff9696;border-color:#472020}.mdm520-money b{font-size:17px}.mdm520-footer-note{padding:14px;border-radius:13px}
+
+/* ADB bancada: Tech OS PRO-like action hierarchy, re-themed for KV CELL. */
+.adb502-page-v502,.adb-page-v502{display:grid;gap:14px}.adb502-top,.adb502-hero{background:linear-gradient(145deg,#141414,#0b0b0b)!important;border-color:#292929!important;border-radius:20px!important;box-shadow:0 18px 50px rgba(0,0,0,.38)!important}.adb502-shortcuts>button{min-height:105px!important}.adb502-tabs{box-shadow:0 12px 32px rgba(0,0,0,.24)}.adb502-panel{background:linear-gradient(145deg,#131313,#0b0b0b)!important;border-color:#292929!important}.adb502-metric{background:#0d0d0d!important;border-color:#252525!important}.adb502-badge.ok{box-shadow:0 0 0 1px rgba(67,227,139,.12)}
+
+/* V1000 local ADB guide */
+.kv-bridge-guide{display:grid;gap:16px}.kv-bridge-hero{padding:18px;border-radius:18px;border:1px solid #393100;background:radial-gradient(circle at 90% 0,rgba(255,212,0,.13),transparent 42%),linear-gradient(145deg,#171500,#0f0f0f)}.kv-bridge-hero h2{margin:9px 0 5px;font-size:24px}.kv-bridge-hero p{margin:0;color:#aaa}.kv-bridge-steps{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.kv-bridge-steps>div{display:flex;gap:12px;align-items:flex-start;padding:14px;border:1px solid #292929;border-radius:14px;background:#0e0e0e}.kv-bridge-steps b{display:grid;place-items:center;min-width:30px;height:30px;border-radius:9px;background:#ffd400;color:#080808;font-size:11px}.kv-bridge-steps span{color:#bbb;font-size:12px;line-height:1.55}.kv-bridge-steps strong{color:#ffd400}.kv-bridge-actions{display:flex;gap:8px;flex-wrap:wrap}.kv-bridge-note{padding:13px 15px;border:1px solid #3b3400;border-radius:13px;background:#141200;color:#a9a9a9;font-size:11px;line-height:1.55}.kv-bridge-note b{color:#ffd400}
+@media(max-width:1000px){.mdm520-table article{grid-template-columns:1fr}.mdm520-actions{justify-content:flex-start}.kv-bridge-steps{grid-template-columns:1fr}}

@@ -1,0 +1,21 @@
+KV CELL OS PREMIUM ULTIMATE SUPREME — V1000.0
+
+FOCO:
+- ADB real sem loop de erro quando o bridge não está iniciado.
+- MDM/crediário com portal + WhatsApp + QR + pagamento.
+- Orçamento e OS públicas com estilo premium KV CELL.
+- Visual inspirado na referência Tech OS Pro fornecida, sem remover módulos existentes.
+
+ADB:
+1. Execute tools\INSTALAR_KV_CELL_BRIDGE.bat uma vez ou tools\bridge\INSTALAR_BRIDGE_AUTO.bat.
+2. Conecte o Android e aceite a chave RSA.
+3. No painel: ADB & Antivírus > Testar ponte > Conectar ADB.
+
+MDM:
+- O APK precisa ser gerado pelo projeto Android em android-kvcell-finance-mdm.
+- Após o build, coloque KV_CELL_MDM.apk em tools\mdm\.
+- Para QR de provisionamento, configure MDM_AGENT_APK_URL com uma URL HTTPS direta para o APK.
+- /public/mdm/apk serve o APK local quando ele existir no pacote.
+
+NÃO REMOVIDO:
+Os módulos e funções anteriores foram preservados; a V1000 adiciona uma camada de compatibilidade e visual.
