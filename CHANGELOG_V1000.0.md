@@ -33,3 +33,11 @@ Evolução incremental do V700/V810 sem apagar módulos, botões ou fluxos exist
 O painel hospedado na Square Cloud não pode iniciar um processo ADB no Windows do técnico por segurança do navegador. O ADB real continua exigindo a ponte local `tools/kvcell_bridge.py`, iniciada pelo script Windows. Isso não é corrigível apenas no backend hospedado.
 
 O MDM também respeita o provisionamento oficial do Android: não há bypass de FRP, senha, bootloader ou Device Owner.
+
+
+## V1000.0 HOTFIX — ADB / STATIC ASSETS
+- Corrigido `pages.adb`: a definição usava `window.pages.adb`, mas `pages` é um objeto local; isso causava `Cannot set properties of undefined (setting 'adb')` e interrompia a execução do restante do `app.js`.
+- Com a execução interrompida, `kvAdbOpenConnectionGuide` nunca era registrado; isso causava o segundo erro `ReferenceError: kvAdbOpenConnectionGuide is not defined`.
+- Corrigido o servidor de arquivos estáticos para preservar subpastas (`/static/fonts/...`) e aplicar MIME types corretos, incluindo `font/woff2`.
+- Isso corrige os 404 das fontes Poppins vistos no DevTools.
+- O erro `ERR_BLOCKED_BY_CLIENT` do Sentry continua sendo externo ao painel quando uma extensão/adblock do navegador bloqueia o endpoint; não é dependência funcional do KV CELL.

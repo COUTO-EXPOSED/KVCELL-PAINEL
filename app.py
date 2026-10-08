@@ -377,8 +377,26 @@ class Handler(BaseHTTPRequestHandler):
             return self.public(path)
         if path=='/': return self.send(200,INDEX,'text/html')
         if path.startswith('/static/'):
-            name=path.split('/')[-1]; fp=os.path.join(BASE,'static',name)
-            if os.path.exists(fp): return self.send(200,open(fp,'rb').read(),'text/css' if name.endswith('.css') else 'application/javascript')
+            rel=urllib.parse.unquote(path[len('/static/'):]).lstrip('/')
+            fp=os.path.abspath(os.path.join(BASE,'static',rel))
+            static_root=os.path.abspath(os.path.join(BASE,'static'))
+            if fp.startswith(static_root+os.sep) and os.path.isfile(fp):
+                ext=os.path.splitext(fp)[1].lower()
+                mime={
+                    '.css':'text/css',
+                    '.js':'application/javascript',
+                    '.json':'application/json',
+                    '.png':'image/png',
+                    '.jpg':'image/jpeg',
+                    '.jpeg':'image/jpeg',
+                    '.svg':'image/svg+xml',
+                    '.ico':'image/x-icon',
+                    '.woff':'font/woff',
+                    '.woff2':'font/woff2',
+                    '.ttf':'font/ttf',
+                    '.webp':'image/webp',
+                }.get(ext,'application/octet-stream')
+                return self.send(200,open(fp,'rb').read(),mime)
             return self.send(404,b'Not found','text/plain')
         u=self.require()
         if not u:return

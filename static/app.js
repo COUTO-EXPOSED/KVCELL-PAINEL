@@ -1248,7 +1248,7 @@ function adb600Hub(){
   ${d.serial?`<section class="adb600-panel adb600-mdm"><div><small>KV CELL MDM</small><h3>Instalação e provisionamento</h3><p>O APK precisa existir localmente na ponte. O Device Owner é aceito pelo Android somente quando as condições de provisionamento permitem.</p></div><div class="adb600-actions"><button class="btn adb600-primary" onclick="kvAdbMDMInstall()">⬇ Instalar MDM via ADB</button><button class="btn ghost" onclick="kvAdbMDMProvision(prompt('Token do crediário MDM:'))">🔐 Provisionar Device Owner</button></div></section>`:''}`;
 }
 
-window.pages.adb = async function(){
+pages.adb = async function(){
   // IMPORTANTE: a abertura da aba não depende da ponte localhost. O seletor USB do próprio Chrome/Edge deve abrir imediatamente.
   let usb=[]; try{ if(navigator.usb) usb=await navigator.usb.getDevices(); }catch(e){}
   const d=kvAdbDevice();
