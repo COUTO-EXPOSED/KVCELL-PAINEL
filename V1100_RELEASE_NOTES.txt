@@ -1,0 +1,9 @@
+KV CELL OS PREMIUM ULTIMATE SUPREME V1100.0
+
+ADB principal: WebUSB direto no navegador.
+MDM: Android Enterprise / Device Owner + QR + agente KV CELL.
+Bridge local 17321: mantido somente como fallback/compatibilidade.
+
+IMPORTANTE: use Chrome/Edge em Windows para WebUSB. O Android precisa estar desbloqueado e a Depuração USB deve ser autorizada para a sessão ADB.
+
+Para QR Device Owner, configure MDM_AGENT_APK_URL com uma URL HTTPS pública do APK oficial KV CELL MDM.

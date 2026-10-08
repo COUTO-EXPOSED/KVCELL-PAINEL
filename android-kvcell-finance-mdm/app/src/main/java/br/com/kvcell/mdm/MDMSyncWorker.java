@@ -1,4 +1,4 @@
-package br.com.kvcell.mdmd;
+package br.com.kvcell.mdm;
 
 import android.app.admin.DevicePolicyManager;
 import android.content.ComponentName;

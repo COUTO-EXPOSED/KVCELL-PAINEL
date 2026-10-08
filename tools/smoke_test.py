@@ -4,7 +4,7 @@ from urllib.parse import urlencode
 
 ROOT=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 port='18111'
-env=os.environ.copy(); env['PORT']=port; env.setdefault('ADMIN_PASSWORD','kvcell123'); env['KVCELL_DATA_DIR']=os.path.join(ROOT,'_smoke_data')
+env=os.environ.copy(); env['PORT']=port; env.setdefault('ADMIN_PASSWORD','kvcell123'); env['MDM_AGENT_APK_URL']='https://kvcell.squareweb.app/public/mdm/apk'; env['KVCELL_DATA_DIR']=os.path.join(ROOT,'_smoke_data')
 p=subprocess.Popen([sys.executable,os.path.join(ROOT,'app.py')],cwd=ROOT,env=env,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
 jar=CookieJar(); opener=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
 
@@ -28,6 +28,8 @@ try:
     found=req('/api/customer-search?q=99999')
     assert any(x['id']==cid for x in found)
     mdm=req('/api/mdm/create','POST',{'unit':'LAGOS','customer_id':cid,'brand':'Samsung','model':'A55','device_name':'Smoke MDM','installment_total':500,'installment_paid':100,'installment_count':4,'installment_value':100,'paid_installments':1,'next_due':'2099-01-01','payment_url':'https://example.com/pagar','pix_copy_paste':'pix-smoke'})
+    qr=req('/api/mdm/qr?id='+str(mdm['id'])+'&mode=provisioning')
+    assert 'br.com.kvcell.finance.mdm/br.com.kvcell.mdm.KVCellDeviceAdminReceiver' in qr['payload']
     portal=opener.open('http://127.0.0.1:'+port+'/public/mdm/portal/'+mdm['token']).read().decode()
     assert 'Portal do aparelho' in portal and 'Samsung' in portal and 'PIX copia e cola' in portal
     hb=req('/public/mdm/heartbeat/'+mdm['token'],'POST',{'battery':88,'app_version':'810.0','brand':'Samsung','model':'A55','device_name':'Smoke MDM','android_version':'15'})

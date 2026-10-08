@@ -1,4 +1,4 @@
-package br.com.kvcell.mdmd;
+package br.com.kvcell.mdm;
 
 import android.app.Activity;
 import android.app.admin.DevicePolicyManager;
@@ -23,7 +23,7 @@ import androidx.work.PeriodicWorkRequest;
 import androidx.work.WorkManager;
 
 public class MainActivity extends Activity {
-    private static final String BASE="https://kvcell.squareweb.app";
+    private static String BASE="https://kvcell.squareweb.app";
     private String token;
     private TextView status,finance,pix;
     private String paymentUrl;
@@ -31,16 +31,27 @@ public class MainActivity extends Activity {
     private ComponentName admin;
 
     @Override public void onCreate(Bundle b){
-        super.onCreate(b); setContentView(br.com.kvcell.mdmd.R.layout.activity_main);
-        status=findViewById(br.com.kvcell.mdmd.R.id.status); finance=findViewById(br.com.kvcell.mdmd.R.id.finance); pix=findViewById(br.com.kvcell.mdmd.R.id.pix);
+        super.onCreate(b); setContentView(br.com.kvcell.mdm.R.layout.activity_main);
+        status=findViewById(br.com.kvcell.mdm.R.id.status); finance=findViewById(br.com.kvcell.mdm.R.id.finance); pix=findViewById(br.com.kvcell.mdm.R.id.pix);
         dpm=(DevicePolicyManager)getSystemService(DEVICE_POLICY_SERVICE); admin=new ComponentName(this,KVCellDeviceAdminReceiver.class);
         Intent in=getIntent();
         if(DevicePolicyManager.ACTION_GET_PROVISIONING_MODE.equals(in.getAction())){
             setResult(RESULT_OK,new Intent().putExtra(DevicePolicyManager.EXTRA_PROVISIONING_MODE,DevicePolicyManager.PROVISIONING_MODE_FULLY_MANAGED_DEVICE)); finish(); return;
         }
         if(DevicePolicyManager.ACTION_ADMIN_POLICY_COMPLIANCE.equals(in.getAction())){ setResult(RESULT_OK); finish(); return; }
-        Uri data=in.getData(); token=data!=null?data.getLastPathSegment():getPreferences(0).getString("token",null);
-        Button pay=findViewById(br.com.kvcell.mdmd.R.id.pay); Button copy=findViewById(br.com.kvcell.mdmd.R.id.copy);
+        // Android Enterprise places the QR extras in the provisioning/admin bundle.
+        // Accept those extras first, then fall back to the deep-link enrollment URL.
+        Bundle adminExtras=in.getBundleExtra(DevicePolicyManager.EXTRA_PROVISIONING_ADMIN_EXTRAS_BUNDLE);
+        if(adminExtras!=null){
+            String configuredServer=adminExtras.getString("server",null);
+            if(configuredServer!=null && !configuredServer.trim().isEmpty()) BASE=configuredServer.replaceAll("/$","");
+            String provisionToken=adminExtras.getString("enrollment_token",null);
+            if(provisionToken!=null && !provisionToken.trim().isEmpty()) token=provisionToken.trim();
+        }
+        Uri data=in.getData();
+        if((token==null || token.isEmpty()) && data!=null) token=data.getLastPathSegment();
+        if(token==null || token.isEmpty()) token=getPreferences(0).getString("token",null);
+        Button pay=findViewById(br.com.kvcell.mdm.R.id.pay); Button copy=findViewById(br.com.kvcell.mdm.R.id.copy);
         pay.setOnClickListener(v->{ if(paymentUrl!=null && !paymentUrl.isEmpty()){ try{ startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(paymentUrl))); }catch(Exception ignored){ syncNow(); } } else if(token!=null) syncNow(); });
         copy.setOnClickListener(v->{ String value=pix.getText().toString().replace("PIX: ","").trim(); if(!value.isEmpty()&&!value.equals("—")){ ClipboardManager cm=(ClipboardManager)getSystemService(CLIPBOARD_SERVICE); cm.setPrimaryClip(ClipData.newPlainText("PIX KV CELL",value)); pix.setText("PIX: chave copiada • "+value); } });
         if(token!=null){ getPreferences(0).edit().putString("token",token).apply(); getSharedPreferences("mdm",0).edit().putString("token",token).apply(); syncNow(); scheduleSync(); }

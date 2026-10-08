@@ -1,6 +1,6 @@
-# KV CELL OS PREMIUM — ULTIMATE SUPREME V810.0
+# KV CELL OS PREMIUM — ULTIMATE SUPREME V1100.0
 
-> V810.0 é uma evolução aditiva sobre a base V700. Nenhum módulo funcional existente foi removido.
+> V1100.0 é uma evolução aditiva sobre a base V700. Nenhum módulo funcional existente foi removido.
 
 ## V810.0 — evolução aplicada
 - **Crediário / MDM:** portal público individual por aparelho com saldo, parcelas, vencimentos, status, dados técnicos básicos e botão de pagamento/PIX.
