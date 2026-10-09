@@ -16425,4 +16425,28 @@ window.KVTechAdbWebUSB = {
   async installApk(session, file) { return await Vu(session.adb || session, file); },
   async reboot(session, mode) { return await el(session.adb || session, mode); }
 };
+// KV CELL adapter: expose the same real WebUSB -> ADB handshake used by this Tech OS Pro bundle.
+// The UI wrapper calls these functions; selecting a USB device alone is not treated as an ADB session.
+if (typeof globalThis !== "undefined") {
+  globalThis.KVTechAdbWebUSB = {
+    supported: qu(),
+    requestDevice: Uu,
+    run: (session, command, timeout = 12000) => {
+      if (!session || !session.adb) throw new Error("Sessão ADB não autenticada.");
+      return S(session.adb, command, timeout);
+    },
+    installApk: (session, file) => {
+      if (!session || !session.adb) throw new Error("Sessão ADB não autenticada.");
+      return Vu(session.adb, file);
+    },
+    captureScreenshot: (session) => {
+      if (!session || !session.adb) throw new Error("Sessão ADB não autenticada.");
+      return hm(session.adb);
+    },
+    reboot: (session, mode = "system") => {
+      if (!session || !session.adb) throw new Error("Sessão ADB não autenticada.");
+      return el(session.adb, mode);
+    }
+  };
+}
 export { wi as A, uh as a, yh as b };
