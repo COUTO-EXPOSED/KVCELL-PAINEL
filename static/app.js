@@ -1589,3 +1589,188 @@ window.kvMdmInjectAPK=async function(id){
     </div>`,async()=>closeModal());
   };
 })();
+
+/* ================================================================
+   KV CELL V1100.0 — WEBUSB ADB ENGINE + ANDROID ENTERPRISE MDM
+   Primary ADB path mirrors the supplied Tech OS Pro architecture:
+   browser WebUSB -> ADB transport -> authenticated ADB session.
+   The old local bridge remains available as compatibility fallback only.
+================================================================ */
+(function(){
+  window.KVCELL_V1100='V1100.0';
+  window.__kvWebUsbSession=window.__kvWebUsbSession||null;
+  window.__kvWebUsbEnginePromise=null;
+
+  async function loadWebUsbEngine(){
+    if(window.KVTechAdbWebUSB) return window.KVTechAdbWebUSB;
+    if(!navigator.usb) throw new Error('WebUSB não está disponível. Use Chrome ou Edge no Windows.');
+    if(!window.__kvWebUsbEnginePromise){
+      window.__kvWebUsbEnginePromise=import('/static/vendor/kv-adb-engine/Antivirus-Bis0a3Pi.js?v=1100.0')
+        .then(()=>window.KVTechAdbWebUSB);
+    }
+    const engine=await window.__kvWebUsbEnginePromise;
+    if(!engine?.supported) throw new Error('O navegador não disponibilizou WebUSB para esta sessão.');
+    return engine;
+  }
+  window.kvLoadWebUsbAdbEngine=loadWebUsbEngine;
+
+  async function webusbConnect(){
+    const engine=await loadWebUsbEngine();
+    const session=await engine.requestDevice();
+    if(!session?.adb) throw new Error('O dispositivo USB foi selecionado, mas a sessão ADB não foi estabelecida.');
+    window.__kvWebUsbSession=session;
+    window.__kvAdbSerial=session.serial||'';
+    window.__kvAdbDevice={serial:session.serial||'USB-ADB',manufacturer:'Android',model:'Android',source:'WebUSB / ADB',connection:'WebUSB'};
+    localStorage.setItem('kv_adb_serial',window.__kvAdbSerial);
+    localStorage.setItem('kv_adb_transport','webusb');
+    await window.kvWebUsbLoadInfo();
+    return session;
+  }
+  window.kvWebUsbConnect=webusbConnect;
+
+  async function prop(adb,key){
+    try{ const v=await adb.getProp(key); return String(v||'').trim(); }
+    catch{ return ''; }
+  }
+  async function shell(command,timeout=12000){
+    const s=window.__kvWebUsbSession;
+    if(!s?.adb) throw new Error('Nenhuma sessão ADB WebUSB ativa.');
+    const engine=await loadWebUsbEngine();
+    return await engine.run(s,command,timeout);
+  }
+  window.kvWebUsbShell=shell;
+
+  window.kvWebUsbLoadInfo=async function(){
+    const s=window.__kvWebUsbSession;
+    if(!s?.adb) throw new Error('Sessão ADB WebUSB não encontrada.');
+    const a=s.adb;
+    const [manufacturer,model,device,android,sdk,serial,brand,product,board,hardware,arch,cores,batteryRaw,screen,dpi,storage,ram,verified,bootloader] = await Promise.all([
+      prop(a,'ro.product.manufacturer'),prop(a,'ro.product.model'),prop(a,'ro.product.device'),prop(a,'ro.build.version.release'),prop(a,'ro.build.version.sdk'),prop(a,'ro.serialno'),prop(a,'ro.product.brand'),prop(a,'ro.product.name'),prop(a,'ro.product.board'),prop(a,'ro.hardware'),prop(a,'ro.product.cpu.abi'),prop(a,'ro.product.cpu.cores'),shell('dumpsys battery | grep -E "level|status|temperature|voltage|technology"'),prop(a,'vendor.display-size'),prop(a,'ro.sf.lcd_density'),prop(a,'ro.boot.dynamic_partitions'),prop(a,'ro.boot.ram'),prop(a,'ro.boot.verifiedbootstate'),prop(a,'ro.boot.verifiedbootstate')
+    ]);
+    const batteryMatch=String(batteryRaw).match(/level:\s*(\d+)/i);
+    const tempMatch=String(batteryRaw).match(/temperature:\s*(\d+)/i);
+    const voltageMatch=String(batteryRaw).match(/voltage:\s*(\d+)/i);
+    const techMatch=String(batteryRaw).match(/technology:\s*(.+)/i);
+    const d=window.__kvAdbDevice||{};
+    window.__kvAdbDevice={...d,
+      source:'WebUSB / ADB',connection:'WebUSB',serial:serial||s.serial||d.serial||'—',manufacturer:manufacturer||brand||'—',brand:brand||'—',model:model||'—',device_name:device||product||'—',android:android?(android+' (SDK '+(sdk||'—')+')'):'—',build_id:await prop(a,'ro.build.id'),build_type:await prop(a,'ro.build.type'),patch:await prop(a,'ro.build.version.security_patch'),fingerprint:await prop(a,'ro.build.fingerprint'),board:board||'—',hardware:hardware||'—',arch:arch||'—',cores:cores||'—',battery:batteryMatch?batteryMatch[1]+'%':'—',battery_status:tempMatch?('temp '+(Number(tempMatch[1])/10).toFixed(1)+'°C'):'—',voltage:voltageMatch?voltageMatch[1]+' mV':'—',technology:techMatch?techMatch[1].trim():'—',screen:screen||'—',dpi:dpi||'—',storage:await prop(a,'ro.boot.dynamic_partitions')||'—',ram:ram||'—',verified_boot:verified||'—',boot_locked:await prop(a,'ro.boot.flash.locked')==='1'?'Sim':await prop(a,'ro.boot.flash.locked')==='0'?'Não':'—',root:'Não determinado',encryption:await prop(a,'ro.crypto.state')||'—',wifi_ip:'—',wifi_mac:'—',carrier:'—',uptime:await shell('uptime 2>/dev/null || cat /proc/uptime'),process_list:'',logcat:'',webusb:true
+    };
+    return window.__kvAdbDevice;
+  };
+
+  window.kvAdbConnect=async function(){
+    try{
+      toast('Abrindo seletor ADB WebUSB…','info');
+      await webusbConnect();
+      toast('ADB conectado diretamente por WebUSB • '+(window.__kvAdbDevice.model||window.__kvAdbSerial),'success');
+      await pages.adb();
+    }catch(e){
+      if(e?.name==='NotFoundError') return toast('Nenhum dispositivo selecionado.','info');
+      toast(e?.message||'Falha na conexão ADB WebUSB.','error');
+      await pages.adb();
+    }
+  };
+
+  window.kvAdbRefresh=async function(){
+    try{
+      if(window.__kvWebUsbSession?.adb){await kvWebUsbLoadInfo();toast('Leitura ADB WebUSB atualizada','success');return kvAdbTab(window.__kvAdbTab||'hub');}
+      if(kvAdbSerial()) {await kvAdbLoadInfo();toast('Leitura atualizada');kvAdbTab(window.__kvAdbTab||'hub');return;}
+      throw new Error('Nenhum aparelho selecionado.');
+    }catch(e){toast(e.message||'Falha ao atualizar.','error')}
+  };
+
+  const COMMANDS={
+    getprop:'getprop',battery:'dumpsys battery',memory:'dumpsys meminfo',storage:'df -h',packages:'pm list packages -3',packages_installer:'pm list packages -3 -i',security:'getenforce',boot:'getprop ro.boot.verifiedbootstate',network:'ip addr',logcat:'logcat -d -t 250',processes:'ps -A',accounts:'cmd account list',device_policy:'dumpsys device_policy',accessibility:'settings get secure enabled_accessibility_services'
+  };
+  window.kvAdbCommand=async function(key){
+    try{
+      if(window.__kvWebUsbSession?.adb){
+        const cmd=COMMANDS[key]||key;
+        window.__kvAdbOutput=await shell(cmd,20000)||'(sem retorno)';
+        kvAdbTab('terminal');
+        return;
+      }
+      const d=await kvBridge('/command',{method:'POST',body:JSON.stringify({serial:kvAdbSerial(),key})});
+      window.__kvAdbOutput=d.output||'(sem retorno)';kvAdbTab('terminal');
+    }catch(e){toast(e.message||'Falha no comando ADB.','error')}
+  };
+
+  window.kvAdbAction=async function(action){
+    if(!confirm('Confirmar ação ADB: '+action+'?'))return;
+    try{
+      if(window.__kvWebUsbSession?.adb){
+        const mode=action==='normal'?'':' '+action;
+        await shell('reboot'+mode,12000);
+        toast('Comando enviado. A sessão USB será encerrada durante a reinicialização.','success');
+        window.__kvWebUsbSession=null;window.__kvAdbDevice=null;return kvAdbTab('hub');
+      }
+      await kvBridge('/action',{method:'POST',body:JSON.stringify({serial:kvAdbSerial(),action})});toast('Comando enviado ao aparelho');
+    }catch(e){toast(e.message||'Falha ao executar ação.','error')}
+  };
+
+  window.kvAdbMDMInstall=async function(){
+    try{
+      if(!window.__kvWebUsbSession?.adb) return toast('Conecte o aparelho por ADB WebUSB primeiro.','error');
+      const file=await new Promise(resolve=>{const i=document.createElement('input');i.type='file';i.accept='.apk';i.onchange=()=>resolve(i.files?.[0]||null);i.click();});
+      if(!file)return;
+      if(!/\.apk$/i.test(file.name))throw new Error('Selecione um APK válido.');
+      const engine=await loadWebUsbEngine();
+      toast('Enviando APK KV CELL MDM via ADB Sync…','info');
+      const out=await engine.installApk(window.__kvWebUsbSession,file);
+      window.__kvAdbOutput=out||'APK instalado.';toast('KV CELL MDM instalado pelo ADB WebUSB','success');
+    }catch(e){toast(e.message||'Falha na instalação do MDM.','error')}
+  };
+
+  window.kvAdbMDMProvision=async function(token){
+    try{
+      if(!token)throw new Error('Informe o token do crediário MDM.');
+      if(!window.__kvWebUsbSession?.adb)throw new Error('Conecte o aparelho por ADB WebUSB primeiro.');
+      const packageName='br.com.kvcell.finance.mdm';
+      const adminComponent=packageName+'/br.com.kvcell.mdm.KVCellDeviceAdminReceiver';
+      const out=await shell('dpm set-device-owner '+adminComponent,30000);
+      window.__kvAdbOutput=out||'Comando de provisionamento executado.';
+      toast('Solicitação de Device Owner enviada. O Android pode exigir que o aparelho esteja em estado elegível para provisionamento.','success');
+    }catch(e){toast(e.message||'Não foi possível provisionar o Device Owner.','error')}
+  };
+
+  window.kvAdbScan=async function(){
+    try{
+      if(!window.__kvWebUsbSession?.adb)throw new Error('Conecte um aparelho ADB autorizado primeiro.');
+      toast('Analisando aplicativos instalados via ADB…','info');
+      const raw=await shell('pm list packages -3 -i',20000);
+      const lines=String(raw||'').split(/\r?\n/).filter(Boolean);
+      const packages_scanned=lines.length;
+      window.__kvAdbScan={ok:true,packages_scanned,packages:lines.map(x=>({package:x.replace(/^package:/,''),raw:x})),engine:'WebUSB / ADB'};
+      kvAdbTab('antivirus');toast('Análise concluída • '+packages_scanned+' apps verificados','success');
+    }catch(e){toast(e.message||'Falha na análise.','error')}
+  };
+
+  /* Keep the old bridge as an explicit fallback, never the primary ADB path. */
+  window.kvAdbBridgeCheck=async function(){
+    try{const h=await kvBridge('/health',{timeout:2500});localStorage.setItem('kv_adb_bridge_ready','1');toast('Ponte compatível online • '+(h.adb_found?'ADB encontrado':'ADB não encontrado'),'success');return h;}
+    catch(e){localStorage.removeItem('kv_adb_bridge_ready');toast('Bridge opcional offline. O ADB principal do V1100 usa WebUSB.','info');return null;}
+  };
+})();
+
+/* V1100 visual/wording pass: WebUSB is now the primary ADB path. */
+kvAdbTop=function(){
+  const d=kvAdbDevice();
+  const direct=!!window.__kvWebUsbSession?.adb;
+  return `<div class="adb502-top">
+    <div class="adb502-brandline"><div class="adb502-usb">⌁</div><div><strong>KV CELL • ADB & ANTIVÍRUS</strong><small>ADB direto no navegador • WebUSB • sessão autorizada</small></div></div>
+    <div class="adb502-connection">${kvAdbBadge(!!d.serial,direct?'ADB WEBUSB ONLINE':d.serial?'APARELHO CONECTADO':'AGUARDANDO APARELHO')}<button class="btn adb502-mainbtn" onclick="kvAdbConnect()">↔ ${d.serial?'Trocar aparelho':'Procurar dispositivo'}</button></div>
+  </div>`;
+};
+kvAdbHub=function(){
+  const d=kvAdbDevice();
+  if(!d.serial)return `<div class="adb502-empty"><div class="adb502-empty-icon">USB</div><h3>Conecte o aparelho diretamente pelo navegador</h3><p>O KV CELL V1100 usa o mesmo modelo técnico do ADB WebUSB: Chrome/Edge → USB → handshake ADB → sessão autorizada.</p><button class="btn adb502-mainbtn" onclick="kvAdbConnect()">⚡ Procurar dispositivo ADB</button><div class="adb502-note">Desbloqueie o Android, ative Depuração USB e aceite a chave RSA quando o Android solicitar. Nenhuma ponte local é necessária para o ADB principal.</div></div>`;
+  return `<div class="adb502-grid3">${kvAdbMetric('MODELO',d.model)}${kvAdbMetric('ANDROID',d.android)}${kvAdbMetric('BATERIA',d.battery)}${kvAdbMetric('RAM',d.ram)}${kvAdbMetric('ARMAZENAMENTO',d.storage)}${kvAdbMetric('ADB','WEBUSB','oktext')}</div>
+  <div class="adb502-shortcuts"><button onclick="kvAdbMDMInstall()"><b>⬇ Instalar KV CELL MDM</b><small>Envia o APK pela sessão ADB WebUSB.</small></button><button onclick="kvAdbMDMProvision(prompt('Token do crediário MDM:'))"><b>🔐 Device Owner / MDM</b><small>Executa somente o fluxo administrativo permitido pelo Android.</small></button></div>
+  <div class="adb502-shortcuts"><button onclick="kvAdbTab('diagnostico')"><b>⚡ Diagnóstico</b><small>Hardware, software, bateria e memória.</small></button><button onclick="kvAdbTab('terminal')"><b>›_ Terminal</b><small>Comandos ADB diagnósticos reais.</small></button></div>`;
+};
+const __kvAdbPageV1100=pages.adb;
+pages.adb=async function(){
+  await __kvAdbPageV1100();
+  const c=$('#content');
+  if(c) c.innerHTML=c.innerHTML.replaceAll('PONTE LOCAL + ADB','WEBUSB / ADB DIRETO').replaceAll('PONTE LOCAL','WEBUSB');
+};
