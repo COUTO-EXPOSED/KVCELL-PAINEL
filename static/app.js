@@ -1105,7 +1105,7 @@ window.kvAdbRefresh=async function(){try{if(!kvAdbSerial())throw new Error('Nenh
 window.kvAdbCommand=async function(key){try{const d=await kvBridge('/command',{method:'POST',body:JSON.stringify({serial:kvAdbSerial(),key})});window.__kvAdbOutput=d.output||'(sem retorno)';kvAdbTab('terminal')}catch(e){toast(e.message,'error')}};
 window.kvAdbAction=async function(action){if(!kvAdbSerial())return toast('Conecte um aparelho primeiro.','error');const labels={normal:'reiniciar normalmente',recovery:'entrar em Recovery',bootloader:'entrar no Bootloader / Fastboot',sideload:'entrar em ADB Sideload'};if(!confirm('Confirmar '+(labels[action]||action)+'?'))return;try{await kvBridge('/action',{method:'POST',body:JSON.stringify({serial:kvAdbSerial(),action})});toast('Comando enviado ao aparelho');window.__kvAdbDevice=null;kvAdbTab('hub')}catch(e){toast(e.message,'error')}};
 window.kvAdbScan=async function(){try{toast('Analisando aplicativos instalados…','info');const d=await kvBridge('/security-scan?serial='+encodeURIComponent(kvAdbSerial()));window.__kvAdbScan=d;kvAdbTab('antivirus');toast('Análise concluída')}catch(e){toast(e.message,'error')}};
-window.kvAdbShot=async function(){try{if(!kvAdbSerial())throw new Error('Conecte um aparelho primeiro.');const base=(window.__kvAdbBridge||'').replace(/\/$/,'');const r=await fetch(base+'/screenshot?serial='+encodeURIComponent(kvAdbSerial())+'&t='+Date.now());if(!r.ok)throw new Error('Não foi possível capturar a tela.');const blob=await r.blob();const url=URL.createObjectURL(blob);const box=$('#adbShotBox');if(box)box.innerHTML=`<img class="adb502-screenshot" src="${url}" alt="Captura do aparelho"><button class="btn ghost" onclick="kvAdbDownloadShot('${url}')">⇩ Salvar captura</button>`;toast('Captura realizada')}catch(e){toast(e.message,'error')}};
+window.kvAdbShot=async function(){try{if(window.__kvWebUsbSession?.adb){const engine=await loadWebUsbEngine();const url=await engine.captureScreenshot(window.__kvWebUsbSession);if(!url)throw new Error('O Android não retornou uma captura válida.');const box=$('#adbShotBox');if(box)box.innerHTML=`<img class="adb502-screenshot" src="${url}" alt="Captura do aparelho"><button class="btn ghost" onclick="kvAdbDownloadShot('${url}')">⇩ Salvar captura</button>`;return toast('Captura ADB realizada','success')}if(!kvAdbSerial())throw new Error('Conecte um aparelho primeiro.');const base=(window.__kvAdbBridge||'').replace(/\/$/,'');const r=await fetch(base+'/screenshot?serial='+encodeURIComponent(kvAdbSerial())+'&t='+Date.now());if(!r.ok)throw new Error('Captura indisponível: conecte via ADB WebUSB ou inicie a ponte local.');const url=URL.createObjectURL(await r.blob());const box=$('#adbShotBox');if(box)box.innerHTML=`<img class="adb502-screenshot" src="${url}" alt="Captura do aparelho"><button class="btn ghost" onclick="kvAdbDownloadShot('${url}')">⇩ Salvar captura</button>`;toast('Captura realizada','success')}catch(e){toast(e.message||'Falha na captura','error')}};
 window.kvAdbDownloadShot=function(url){const a=document.createElement('a');a.href=url;a.download='kv-cell-evidencia-'+Date.now()+'.png';a.click()};
 window.kvAdbBackup=function(){const payload={exported_at:new Date().toISOString(),unit:UNIT,device:window.__kvAdbDevice,security_scan:window.__kvAdbScan};const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}));a.download='kv-cell-laudo-adb-'+Date.now()+'.json';a.click();toast('Backup técnico baixado')};
 
@@ -1696,15 +1696,17 @@ window.kvMdmInjectAPK=async function(id){
   };
 
   window.kvAdbAction=async function(action){
-    if(!confirm('Confirmar ação ADB: '+action+'?'))return;
+    const labels={normal:'reiniciar normalmente',recovery:'reiniciar em Recovery',bootloader:'reiniciar no Bootloader/Fastboot',sideload:'reiniciar em ADB Sideload',poweroff:'desligar o Android'};
+    if(!confirm('Confirmar: '+(labels[action]||action)+'?'))return;
     try{
       if(window.__kvWebUsbSession?.adb){
-        const mode=action==='normal'?'':' '+action;
-        await shell('reboot'+mode,12000);
-        toast('Comando enviado. A sessão USB será encerrada durante a reinicialização.','success');
-        window.__kvWebUsbSession=null;window.__kvAdbDevice=null;return kvAdbTab('hub');
+        const cmd=action==='normal'?'reboot':action==='poweroff'?'reboot -p':'reboot '+action;
+        const out=await shell(cmd,12000);
+        if(/unknown|not found|permission denied|error/i.test(String(out||'')))throw new Error(String(out));
+        toast('Comando enviado. A sessão USB pode cair quando o aparelho reiniciar/desligar.','success');
+        window.__kvWebUsbSession=null;window.__kvAdbDevice=null;window.__kvAdbSerial='';return kvAdbTab('hub');
       }
-      await kvBridge('/action',{method:'POST',body:JSON.stringify({serial:kvAdbSerial(),action})});toast('Comando enviado ao aparelho');
+      await kvBridge('/action',{method:'POST',body:JSON.stringify({serial:kvAdbSerial(),action})});toast('Comando enviado ao aparelho','success');
     }catch(e){toast(e.message||'Falha ao executar ação.','error')}
   };
 
@@ -1738,10 +1740,17 @@ window.kvMdmInjectAPK=async function(id){
       if(!window.__kvWebUsbSession?.adb)throw new Error('Conecte um aparelho ADB autorizado primeiro.');
       toast('Analisando aplicativos instalados via ADB…','info');
       const raw=await shell('pm list packages -3 -i',20000);
-      const lines=String(raw||'').split(/\r?\n/).filter(Boolean);
-      const packages_scanned=lines.length;
-      window.__kvAdbScan={ok:true,packages_scanned,packages:lines.map(x=>({package:x.replace(/^package:/,''),raw:x})),engine:'WebUSB / ADB'};
-      kvAdbTab('antivirus');toast('Análise concluída • '+packages_scanned+' apps verificados','success');
+      const lines=String(raw||'').split(/\r?\n/).filter(x=>/^package:/i.test(x));
+      const rules=[
+        [/joker|jocker|hiddad|hidden.?ad|anatsa|teabot|flubot|spynote|spymax|androrat|craxsrat|sms.?stealer|otp.?grabber/i,'Assinatura conhecida associada a malware',10],
+        [/mspy|flexispy|hoverwatch|thetruthspy|kidsguard|stalker/i,'Possível aplicativo de monitoramento invasivo; revisar com o cliente',8],
+        [/cleaner|phone.?boost|battery.?saver|antivirus|security.?master/i,'Nome compatível com falso otimizador/antivírus; precisa de verificação manual',5],
+        [/bet365|estrelabet|betano|blaze|casino|cassino|sportsbook/i,'Aplicativo de aposta detectado (não é diagnóstico de malware)',2]
+      ];
+      const packages=lines.map(line=>{const pkg=(line.match(/^package:([^\s]+)/i)||[])[1]||line;const installer=(line.match(/installer=([^\s]+)/i)||[])[1]||'';const hit=rules.find(r=>r[0].test(pkg));return {package:pkg,raw:line,installer,permissions:[],score:hit?hit[2]:0,reason:hit?hit[1]:'Nenhuma assinatura simples detectada'};});
+      const findings=packages.filter(x=>x.score>0).map(x=>({...x,score:x.score}));
+      window.__kvAdbScan={ok:true,packages_scanned:packages.length,packages,findings,engine:'WebUSB / ADB',notice:'Triagem heurística por nome do pacote; não substitui análise forense nem confirma infecção.'};
+      kvAdbTab('antivirus');toast('Análise concluída • '+packages.length+' apps verificados','success');
     }catch(e){toast(e.message||'Falha na análise.','error')}
   };
 
@@ -1774,3 +1783,45 @@ pages.adb=async function(){
   const c=$('#content');
   if(c) c.innerHTML=c.innerHTML.replaceAll('PONTE LOCAL + ADB','WEBUSB / ADB DIRETO').replaceAll('PONTE LOCAL','WEBUSB');
 };
+
+
+/* KV CELL V1100.1 — real WebUSB adapter + additional bench tabs */
+(function(){
+  const basePage=pages.adb;
+  const baseTab=window.kvAdbTab;
+  const escText=(v)=>typeof esc==='function'?esc(String(v??'')):String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  function setActive(tab){document.querySelectorAll('.adb600-tabs button').forEach(b=>b.classList.toggle('active',b.dataset.kvExtraTab===tab));}
+  function addTabs(){const row=document.querySelector('.adb600-tabs');if(!row)return;for(const [id,label] of [['debloat','Debloat'],['applepanic','Apple / Panic Full']]){if(row.querySelector(`[data-kv-extra-tab="${id}"]`))continue;const b=document.createElement('button');b.textContent=label;b.dataset.kvExtraTab=id;b.onclick=()=>window.kvAdbTab(id);row.appendChild(b);}}
+  pages.adb=async function(){await basePage();addTabs();};
+  window.kvAdbTab=function(tab){
+    if(tab!=='debloat'&&tab!=='applepanic')return baseTab(tab);
+    window.__kvAdbTab=tab;const body=document.querySelector('#adb600Body');if(!body)return;
+    setActive(tab);
+    if(tab==='debloat'&&!window.__kvWebUsbSession?.adb){body.innerHTML='<section class="adb600-panel"><h2>Conecte o Android via ADB WebUSB</h2><p>É necessária uma sessão ADB autenticada; selecionar apenas o USB não basta.</p><button class="btn adb600-primary" onclick="kvAdbConnect()">Conectar ADB</button></section>';return;}
+    if(tab==='debloat'){
+      body.innerHTML='<section class="adb600-panel"><h2>Debloat — aplicativos de terceiros</h2><p>Lista real de pacotes instalados pelo usuário. A remoção afeta apenas o usuário atual e pode ser revertida quando o Android permitir. Confira o nome do pacote antes de agir.</p><div class="adb600-usbrow"><button class="btn adb600-primary" onclick="kvAdbLoadDebloat()">Carregar aplicativos</button><input id="kvDebloatFilter" class="input" placeholder="Filtrar pacote" oninput="kvAdbRenderDebloat()"></div><div id="kvDebloatList" class="adb502-findings"><p>Carregue os aplicativos para começar.</p></div><div class="adb502-note">O filtro de origem é `pm list packages -3`; pacotes do sistema não entram nesta lista. A triagem não remove nada automaticamente.</div></section>';
+      window.kvAdbLoadDebloat();return;
+    }
+    body.innerHTML='<section class="adb600-panel"><h2>Apple — analisador Panic Full (.ips / .txt)</h2><p>Carregue o arquivo <b>panic-full</b> completo exportado pelo iPhone. O relatório identifica assinaturas conhecidas e traduz os indícios; não substitui diagnóstico de bancada nem garante uma causa única.</p><input id="kvPanicFile" type="file" accept=".ips,.txt,.panic,application/json,text/plain" class="input"><button class="btn adb600-primary" onclick="kvAdbAnalyzePanic()">Analisar Panic Full</button><div id="kvPanicResult"></div></section>';
+  };
+  // Real controls exposed through the authenticated ADB shell; each operation asks for confirmation.
+  kvAdbControls=function(){return kvAdbSection('Controles de bancada','Comandos reais enviados pela sessão ADB. A disponibilidade varia por fabricante e versão do Android.',`<div class="adb502-control-grid"><button onclick="kvAdbAction('normal')"><b>↻ Reiniciar</b><small>Reinicialização normal</small></button><button onclick="kvAdbAction('recovery')"><b>♻ Recovery</b><small>Modo de recuperação</small></button><button onclick="kvAdbAction('bootloader')"><b>◉ Bootloader</b><small>Fastboot / bootloader</small></button><button onclick="kvAdbAction('poweroff')"><b>⏻ Desligar aparelho</b><small>Desligamento via ADB, quando permitido</small></button><button onclick="kvAdbToggle('wifi','enable')"><b>Wi‑Fi LIGAR</b><small>Ativa o Wi‑Fi</small></button><button onclick="kvAdbToggle('wifi','disable')"><b>Wi‑Fi DESLIGAR</b><small>Desativa o Wi‑Fi</small></button><button onclick="kvAdbToggle('bluetooth','enable')"><b>Bluetooth LIGAR</b><small>Ativa o Bluetooth</small></button><button onclick="kvAdbToggle('bluetooth','disable')"><b>Bluetooth DESLIGAR</b><small>Desativa o Bluetooth</small></button></div><div class="adb502-note">Wi‑Fi/Bluetooth podem ser bloqueados pelo fabricante, política corporativa ou versão do Android. A interface informa falhas em vez de simular sucesso.</div>`)};
+  window.kvAdbToggle=async function(feature,mode){if(!['wifi','bluetooth'].includes(feature)||!['enable','disable'].includes(mode))return toast('Ação inválida','error');if(!window.__kvWebUsbSession?.adb)return toast('Conecte o Android por ADB WebUSB primeiro.','error');if(!confirm(`${mode==='enable'?'Ligar':'Desligar'} ${feature==='wifi'?'Wi‑Fi':'Bluetooth'}?`))return;try{const out=await window.kvWebUsbShell(`svc ${feature} ${mode}`,12000);if(/unknown|not found|permission denied|error/i.test(String(out||'')))throw new Error(String(out));toast(`Comando para ${feature} enviado. Confira o estado no aparelho.`, 'success')}catch(e){toast(e.message||`Não foi possível alterar ${feature}.`,'error')}};
+  window.__kvDebloatPackages=[];
+  window.kvAdbLoadDebloat=async function(){try{const out=await window.kvWebUsbShell('pm list packages -3 -i',20000);window.__kvDebloatPackages=String(out||'').split(/\r?\n/).filter(x=>/^package:/i.test(x)).map(x=>{const m=x.match(/^package:([^\s]+)/i);return {pkg:m?m[1]:x,raw:x};}).filter(x=>/^[a-zA-Z][a-zA-Z0-9_.]+$/.test(x.pkg));window.kvAdbRenderDebloat();}catch(e){toast(e.message||'Falha ao listar aplicativos','error')}};
+  window.kvAdbRenderDebloat=function(){const box=document.querySelector('#kvDebloatList');if(!box)return;const q=(document.querySelector('#kvDebloatFilter')?.value||'').toLowerCase();const list=(window.__kvDebloatPackages||[]).filter(x=>x.pkg.toLowerCase().includes(q));box.innerHTML=list.map(x=>`<article><div><b>${escText(x.pkg)}</b><small>${escText(x.raw)}</small></div><button class="btn ghost" onclick="kvAdbRemovePackage('${escText(x.pkg)}')">Remover do usuário</button></article>`).join('')||'<p>Nenhum pacote corresponde ao filtro.</p>';};
+  window.kvAdbRemovePackage=async function(pkg){if(!/^[a-zA-Z][a-zA-Z0-9_.]+$/.test(pkg)||!(window.__kvDebloatPackages||[]).some(x=>x.pkg===pkg))return toast('Pacote inválido ou fora da lista de terceiros.','error');if(!confirm('Remover '+pkg+' do usuário Android atual? Esta ação pode interromper o funcionamento do app.'))return;try{const out=await window.kvWebUsbShell('pm uninstall --user 0 '+pkg,30000);if(/success/i.test(String(out))){toast('Pacote removido do usuário: '+pkg,'success');await window.kvAdbLoadDebloat()}else throw new Error(String(out||'O Android não confirmou a remoção.'));}catch(e){toast(e.message||'Falha ao remover pacote','error')}};
+  window.kvAdbAnalyzePanic=async function(){const file=document.querySelector('#kvPanicFile')?.files?.[0];const box=document.querySelector('#kvPanicResult');if(!file)return toast('Selecione um arquivo panic-full .ips ou .txt.','error');try{const raw=await file.text();if(raw.length<80)throw new Error('O arquivo está vazio ou incompleto.');const text=raw.toLowerCase();const rules=[
+    [/missing sensor|thermalmonitord|thermal monitor|sensor.*missing/i,'Falha provável de sensor térmico ou comunicação com sensor','Hardware / sensores'],
+    [/watchdog timeout|watchdog.*expired|userspace watchdog/i,'Timeout de processo ou serviço crítico','Software / watchdog'],
+    [/baseband|bb.*crash|modem.*panic/i,'Indício relacionado a baseband/modem','Hardware / modem ou firmware'],
+    [/nand|ans2|apfs.*panic|nvme/i,'Indício de armazenamento ou sistema de arquivos','Hardware / armazenamento'],
+    [/i2c|spi.*error|bus.*error/i,'Falha de comunicação em barramento ou periférico','Hardware / comunicação'],
+    [/sep panic|secure enclave|sep.*crash/i,'Indício relacionado ao Secure Enclave','Hardware / firmware de segurança'],
+    [/panic\(cpu|kernel panic|panicstring/i,'O arquivo contém assinatura de kernel panic','Kernel / precisa correlacionar com o restante do log'],
+    [/reset counter|resetcounter|previous shutdown cause/i,'O log contém informação de causa de reinicialização','Contexto de inicialização']
+  ];const found=rules.filter(r=>r[0].test(text)).map(r=>({title:r[1],kind:r[2]}));const panic=(raw.match(/panicString[^\n]{0,500}|panic\([^\n]{0,500}/i)||[])[0]||'Não foi possível extrair uma linha panicString isolada.';box.innerHTML=`<div class="adb502-findings"><article><div><b>Arquivo</b><small>${escText(file.name)} • ${(file.size/1024).toFixed(1)} KB • ${raw.split(/\r?\n/).length} linhas</small></div></article><article><div><b>Trecho principal</b><small>${escText(panic)}</small></div></article>${found.map(x=>`<article><div><b>${escText(x.title)}</b><small>${escText(x.kind)}</small></div></article>`).join('')||'<article><div><b>Nenhuma assinatura simples reconhecida</b><small>Isso não significa que o aparelho esteja sem defeito. Confira o arquivo panic-full completo e a data do evento.</small></div></article>'}</div><div class="adb502-note"><b>Resultado orientativo:</b> ${found.length} assinatura(s) identificada(s). A causa provável depende do modelo, versão do iOS e repetição dos logs.</div><button class="btn ghost" onclick="kvAdbDownloadPanicReport()">Baixar relatório .txt</button>`;window.__kvPanicReport=`KV CELL — RELATÓRIO PANIC FULL\nArquivo: ${file.name}\nLinhas: ${raw.split(/\r?\n/).length}\n\nTrecho: ${panic}\n\n${found.map(x=>'- '+x.title+' ('+x.kind+')').join('\n')||'Nenhuma assinatura simples reconhecida.'}\n\nResultado orientativo; requer validação técnica.`;toast('Análise do Panic Full concluída','success')}catch(e){toast(e.message||'Não foi possível analisar o arquivo','error')}};
+  window.kvAdbDownloadPanicReport=function(){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([window.__kvPanicReport||''],{type:'text/plain;charset=utf-8'}));a.download='kv-cell-panic-full-relatorio.txt';a.click()};
+  // Keep newly added controls visible after the existing ADB page renders.
+  const observer=new MutationObserver(()=>{if(document.querySelector('.adb600-tabs'))addTabs()});observer.observe(document.body,{childList:true,subtree:true});
+})();
