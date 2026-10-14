@@ -37,7 +37,6 @@ jobs:
       - name: Garantir configuracoes do AndroidX e Jetifier em todos os locais
         shell: bash
         run: |
-          # Cria ou atualiza o gradle.properties tanto na raiz quanto na pasta do projeto Android
           for DIR in "." "android-kvcell-finance-mdm"; do
             PROPS_FILE="$DIR/gradle.properties"
             mkdir -p "$DIR"
