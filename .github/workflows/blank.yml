@@ -21,27 +21,21 @@ jobs:
           java-version: '17'
           cache: 'gradle'
 
-      - name: Localizar pasta do projeto Android
-        id: find-android
+      - name: Localizar pasta do projeto Android e Compilar
         shell: bash
         run: |
-          # Procura onde está o arquivo build.gradle ou settings.gradle
-          ANDROID_DIR=$(find . -name "settings.gradle" -o -name "build.gradle" | grep -v "build/" | head -n 1 | xargs dirname)
+          # Procura a pasta que contém o settings.gradle ou build.gradle
+          PROJECT_DIR=$(find . -name "settings.gradle" -o -name "build.gradle" | grep -v "/build/" | head -n 1 | xargs dirname)
           
-          if [ -z "$ANDROID_DIR" ]; then
-            echo "Erro: Projeto Android não encontrado!"
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "Erro: Projeto Android não encontrado no repositório!"
             exit 1
           fi
           
-          echo "Projeto encontrado em: $ANDROID_DIR"
-          echo "android_dir=$ANDROID_DIR" >> $GITHUB_ENV
-
-      - name: Gerar Gradle Wrapper e Configurar Properties
-        shell: bash
-        run: |
-          cd ${{ env.ANDROID_DIR }}
+          echo "Projeto encontrado em: $PROJECT_DIR"
+          cd "$PROJECT_DIR"
           
-          # Gera o gradlew caso não exista
+          # Gera o gradle wrapper se não existir
           if [ ! -f "./gradlew" ]; then
             echo "Gerando Gradle Wrapper..."
             gradle wrapper
@@ -49,21 +43,21 @@ jobs:
           
           chmod +x ./gradlew
           
-          # Configura o gradle.properties com AndroidX e Jetifier
+          # Configura gradle.properties com AndroidX e Jetifier
           PROPS_FILE="gradle.properties"
           [ -f "$PROPS_FILE" ] && sed -i '/android.useAndroidX/d' "$PROPS_FILE"
           [ -f "$PROPS_FILE" ] && sed -i '/android.enableJetifier/d' "$PROPS_FILE"
-          
           echo "android.useAndroidX=true" >> "$PROPS_FILE"
           echo "android.enableJetifier=true" >> "$PROPS_FILE"
-
-      - name: Compilar APK (Debug)
-        run: |
-          cd ${{ env.ANDROID_DIR }}
+          
+          # Compila o APK de Debug
           ./gradlew assembleDebug
+          
+          # Salva o caminho para o artefato
+          echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
 
       - name: Salvar artefato do APK
         uses: actions/upload-artifact@v4
         with:
           name: app-debug
-          path: ${{ env.ANDROID_DIR }}/app/build/outputs/apk/debug/*.apk
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
