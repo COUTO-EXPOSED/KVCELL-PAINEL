@@ -21,33 +21,41 @@ jobs:
           java-version: '17'
           cache: 'gradle'
 
-      - name: Garantir configuracoes do AndroidX e Jetifier
+      - name: Encontrar diretório do projeto Android e configurar Gradle
         shell: bash
         run: |
-          PROPS_FILE="android-kvcell-finance-mdm/gradle.properties"
-          mkdir -p "android-kvcell-finance-mdm"
+          # Busca onde está o arquivo gradlew no repositório
+          GRADLEW_PATH=$(find . -name "gradlew" -type f | head -n 1)
           
-          # Remove entradas antigas se existirem para evitar duplicidade
+          if [ -z "$GRADLEW_PATH" ]; then
+            echo "Erro: Arquivo gradlew não encontrado no repositório!"
+            exit 1
+          fi
+          
+          ANDROID_DIR=$(dirname "$GRADLEW_PATH")
+          echo "Projeto Android encontrado em: $ANDROID_DIR"
+          
+          # Configurar gradle.properties com AndroidX e Jetifier
+          PROPS_FILE="$ANDROID_DIR/gradle.properties"
           [ -f "$PROPS_FILE" ] && sed -i '/android.useAndroidX/d' "$PROPS_FILE"
           [ -f "$PROPS_FILE" ] && sed -i '/android.enableJetifier/d' "$PROPS_FILE"
           
-          # Adiciona as configurações do AndroidX e Jetifier
           echo "android.useAndroidX=true" >> "$PROPS_FILE"
           echo "android.enableJetifier=true" >> "$PROPS_FILE"
-
-          echo "--- Conteúdo do gradle.properties ---"
-          cat "$PROPS_FILE"
+          
+          # Salvar o caminho para as próximas etapas
+          echo "ANDROID_DIR=$ANDROID_DIR" >> $GITHUB_ENV
 
       - name: Dar permissão de execução ao Gradle Wrapper
-        run: chmod +x ./android-kvcell-finance-mdm/gradlew
+        run: chmod +x ${{ env.ANDROID_DIR }}/gradlew
 
       - name: Compilar APK (Debug)
         run: |
-          cd android-kvcell-finance-mdm
-          ./gradlew :app:assembleDebug
+          cd ${{ env.ANDROID_DIR }}
+          ./gradlew assembleDebug
 
       - name: Salvar artefato do APK
         uses: actions/upload-artifact@v4
         with:
           name: app-debug
-          path: android-kvcell-finance-mdm/app/build/outputs/apk/debug/*.apk
+          path: ${{ env.ANDROID_DIR }}/app/build/outputs/apk/debug/*.apk
