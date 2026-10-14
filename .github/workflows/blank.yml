@@ -34,21 +34,24 @@ jobs:
         with:
           gradle-version: '8.11.1'
 
-      - name: Garantir configuracoes do AndroidX e Jetifier
+      - name: Garantir configuracoes do AndroidX e Jetifier em todos os locais
         shell: bash
         run: |
-          PROPS_FILE="android-kvcell-finance-mdm/gradle.properties"
-          mkdir -p "$(dirname "$PROPS_FILE")"
-          
-          # Adiciona ou atualiza as propriedades do AndroidX no gradle.properties
-          if [ -f "$PROPS_FILE" ]; then
-            sed -i '/android.useAndroidX/d' "$PROPS_FILE"
-            sed -i '/android.enableJetifier/d' "$PROPS_FILE"
-          fi
-          
-          echo "android.useAndroidX=true" >> "$PROPS_FILE"
-          echo "android.enableJetifier=true" >> "$PROPS_FILE"
-          cat "$PROPS_FILE"
+          # Cria ou atualiza o gradle.properties tanto na raiz quanto na pasta do projeto Android
+          for DIR in "." "android-kvcell-finance-mdm"; do
+            PROPS_FILE="$DIR/gradle.properties"
+            mkdir -p "$DIR"
+            
+            if [ -f "$PROPS_FILE" ]; then
+              sed -i '/android.useAndroidX/d' "$PROPS_FILE"
+              sed -i '/android.enableJetifier/d' "$PROPS_FILE"
+            fi
+            
+            echo "android.useAndroidX=true" >> "$PROPS_FILE"
+            echo "android.enableJetifier=true" >> "$PROPS_FILE"
+            echo "--- Conteúdo de $PROPS_FILE ---"
+            cat "$PROPS_FILE"
+          done
 
       - name: Compilar Debug
         run: |
