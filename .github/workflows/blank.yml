@@ -21,33 +21,41 @@ jobs:
           java-version: '17'
           cache: 'gradle'
 
-      - name: Encontrar diretório do projeto Android e configurar Gradle
+      - name: Localizar pasta do projeto Android
+        id: find-android
         shell: bash
         run: |
-          # Busca onde está o arquivo gradlew no repositório
-          GRADLEW_PATH=$(find . -name "gradlew" -type f | head -n 1)
+          # Procura onde está o arquivo build.gradle ou settings.gradle
+          ANDROID_DIR=$(find . -name "settings.gradle" -o -name "build.gradle" | grep -v "build/" | head -n 1 | xargs dirname)
           
-          if [ -z "$GRADLEW_PATH" ]; then
-            echo "Erro: Arquivo gradlew não encontrado no repositório!"
+          if [ -z "$ANDROID_DIR" ]; then
+            echo "Erro: Projeto Android não encontrado!"
             exit 1
           fi
           
-          ANDROID_DIR=$(dirname "$GRADLEW_PATH")
-          echo "Projeto Android encontrado em: $ANDROID_DIR"
+          echo "Projeto encontrado em: $ANDROID_DIR"
+          echo "android_dir=$ANDROID_DIR" >> $GITHUB_ENV
+
+      - name: Gerar Gradle Wrapper e Configurar Properties
+        shell: bash
+        run: |
+          cd ${{ env.ANDROID_DIR }}
           
-          # Configurar gradle.properties com AndroidX e Jetifier
-          PROPS_FILE="$ANDROID_DIR/gradle.properties"
+          # Gera o gradlew caso não exista
+          if [ ! -f "./gradlew" ]; then
+            echo "Gerando Gradle Wrapper..."
+            gradle wrapper
+          fi
+          
+          chmod +x ./gradlew
+          
+          # Configura o gradle.properties com AndroidX e Jetifier
+          PROPS_FILE="gradle.properties"
           [ -f "$PROPS_FILE" ] && sed -i '/android.useAndroidX/d' "$PROPS_FILE"
           [ -f "$PROPS_FILE" ] && sed -i '/android.enableJetifier/d' "$PROPS_FILE"
           
           echo "android.useAndroidX=true" >> "$PROPS_FILE"
           echo "android.enableJetifier=true" >> "$PROPS_FILE"
-          
-          # Salvar o caminho para as próximas etapas
-          echo "ANDROID_DIR=$ANDROID_DIR" >> $GITHUB_ENV
-
-      - name: Dar permissão de execução ao Gradle Wrapper
-        run: chmod +x ${{ env.ANDROID_DIR }}/gradlew
 
       - name: Compilar APK (Debug)
         run: |
