@@ -1,0 +1,101 @@
+
+name: Build KV CELL MDM APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'android-kvcell-finance-mdm/**'
+      - '.github/workflows/build-mdm-apk.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v4
+
+      - name: Configurar Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Configurar Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: |
+            platform-tools
+            platforms;android-33
+            build-tools;33.0.2
+
+      - name: Verificar Android SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "ANDROID_HOME=${ANDROID_HOME:-não definido}"
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-não definido}"
+
+          sdkmanager --list_installed
+
+      - name: Configurar Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Verificar projeto Android
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ ! -d "android-kvcell-finance-mdm" ]; then
+            echo "::error::Pasta android-kvcell-finance-mdm não encontrada."
+            exit 1
+          fi
+
+          if [ ! -f "android-kvcell-finance-mdm/app/build.gradle" ] && \
+             [ ! -f "android-kvcell-finance-mdm/app/build.gradle.kts" ]; then
+            echo "::error::Arquivo Gradle do módulo app não encontrado."
+            exit 1
+          fi
+
+      - name: Compilar APK
+        run: |
+          gradle --no-daemon \
+            -p android-kvcell-finance-mdm \
+            :app:assembleDebug
+
+      - name: Verificar e preparar APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="android-kvcell-finance-mdm/app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "::error::O Gradle terminou sem gerar o APK esperado."
+            find android-kvcell-finance-mdm/app/build/outputs -type f || true
+            exit 1
+          fi
+
+          mkdir -p output
+          cp "$APK" output/KV_CELL_MDM.apk
+
+          echo "APK gerado:"
+          ls -lh output/KV_CELL_MDM.apk
+
+          echo "SHA-256:"
+          sha256sum output/KV_CELL_MDM.apk
+
+      - name: Disponibilizar APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: KV_CELL_MDM
+          path: output/KV_CELL_MDM.apk
+          if-no-files-found: error
+          retention-days: 30
