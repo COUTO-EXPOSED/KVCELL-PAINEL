@@ -36,6 +36,31 @@ jobs:
         with:
           gradle-version: '8.11.1'
 
+
+      - name: Habilitar AndroidX
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="android-kvcell-finance-mdm/gradle.properties"
+
+          touch "$FILE"
+
+          if ! grep -qE '^[[:space:]]*android\.useAndroidX=' "$FILE"; then
+            echo 'android.useAndroidX=true' >> "$FILE"
+          else
+            sed -i 's/^[[:space:]]*android\.useAndroidX=.*/android.useAndroidX=true/' "$FILE"
+          fi
+
+          if ! grep -qE '^[[:space:]]*android\.enableJetifier=' "$FILE"; then
+            echo 'android.enableJetifier=true' >> "$FILE"
+          else
+            sed -i 's/^[[:space:]]*android\.enableJetifier=.*/android.enableJetifier=true/' "$FILE"
+          fi
+
+          cat "$FILE"
+
+
       - name: Compilar Debug
         run: |
           gradle --no-daemon --stacktrace \
