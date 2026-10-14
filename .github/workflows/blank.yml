@@ -21,49 +21,33 @@ jobs:
           java-version: '17'
           cache: 'gradle'
 
-      - name: Garantir configuracoes do AndroidX e Jetifier em todos os locais
+      - name: Garantir configuracoes do AndroidX e Jetifier
         shell: bash
         run: |
-          # Cria ou atualiza o gradle.properties tanto na raiz quanto na pasta do projeto Android
-          for DIR in "." "android-kvcell-finance-mdm"; do
-            PROPS_FILE="$DIR/gradle.properties"
-            mkdir -p "$DIR"
-            
-            # Remove entradas antigas se existirem para evitar duplicidade
-            [ -f "$PROPS_FILE" ] && sed -i '/android.useAndroidX/d' "$PROPS_FILE"
-            [ -f "$PROPS_FILE" ] && sed -i '/android.enableJetifier/d' "$PROPS_FILE"
-            
-            # Adiciona as configurações do AndroidX e Jetifier
-            echo "android.useAndroidX=true" >> "$PROPS_FILE"
-            echo "android.enableJetifier=true" >> "$PROPS_FILE"
-          done
+          PROPS_FILE="android-kvcell-finance-mdm/gradle.properties"
+          mkdir -p "android-kvcell-finance-mdm"
+          
+          # Remove entradas antigas se existirem para evitar duplicidade
+          [ -f "$PROPS_FILE" ] && sed -i '/android.useAndroidX/d' "$PROPS_FILE"
+          [ -f "$PROPS_FILE" ] && sed -i '/android.enableJetifier/d' "$PROPS_FILE"
+          
+          # Adiciona as configurações do AndroidX e Jetifier
+          echo "android.useAndroidX=true" >> "$PROPS_FILE"
+          echo "android.enableJetifier=true" >> "$PROPS_FILE"
 
-          # Verificação para confirmar a criação correta
-          echo "--- Conteúdo do gradle.properties na raiz ---"
-          cat ./gradle.properties
-          echo "--- Conteúdo do gradle.properties no projeto ---"
-          cat ./android-kvcell-finance-mdm/gradle.properties
+          echo "--- Conteúdo do gradle.properties ---"
+          cat "$PROPS_FILE"
 
       - name: Dar permissão de execução ao Gradle Wrapper
-        run: |
-          if [ -f "./gradlew" ]; then
-            chmod +x ./gradlew
-          elif [ -f "./android-kvcell-finance-mdm/gradlew" ]; then
-            chmod +x ./android-kvcell-finance-mdm/gradlew
-          fi
+        run: chmod +x ./android-kvcell-finance-mdm/gradlew
 
       - name: Compilar APK (Debug)
         run: |
-          if [ -f "./gradlew" ]; then
-            ./gradlew assembleDebug
-          else
-            cd android-kvcell-finance-mdm
-            ./gradlew assembleDebug
-          fi
+          cd android-kvcell-finance-mdm
+          ./gradlew :app:assembleDebug
 
       - name: Salvar artefato do APK
         uses: actions/upload-artifact@v4
         with:
           name: app-debug
-          path: |
-            **/build/outputs/apk/debug/*.apk
+          path: android-kvcell-finance-mdm/app/build/outputs/apk/debug/*.apk
