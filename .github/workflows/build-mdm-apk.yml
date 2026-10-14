@@ -14,6 +14,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Baixar o código
         uses: actions/checkout@v4
@@ -25,7 +26,24 @@ jobs:
           java-version: '17'
 
       - name: Configurar Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
+
+      - name: Instalar SDK necessário
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT}}"
+
+          if [ ! -d "android-kvcell-finance-mdm" ]; then
+            echo "::error::Diretório android-kvcell-finance-mdm não encontrado."
+            exit 1
+          fi
+
+          echo "Android SDK: $SDK"
+          sdkmanager --list_installed
 
       - name: Configurar Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -33,12 +51,28 @@ jobs:
           gradle-version: '8.9'
 
       - name: Compilar APK
-        run: gradle -p android-kvcell-finance-mdm :app:assembleDebug
-
-      - name: Preparar APK
         run: |
+          gradle --no-daemon \
+            -p android-kvcell-finance-mdm \
+            :app:assembleDebug
+
+      - name: Verificar e preparar APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="android-kvcell-finance-mdm/app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "::error::APK não foi gerado. Verifique os logs do Gradle."
+            exit 1
+          fi
+
           mkdir -p output
-          cp android-kvcell-finance-mdm/app/build/outputs/apk/debug/app-debug.apk output/KV_CELL_MDM.apk
+          cp "$APK" output/KV_CELL_MDM.apk
+
+          ls -lh output/KV_CELL_MDM.apk
+          sha256sum output/KV_CELL_MDM.apk
 
       - name: Disponibilizar APK
         uses: actions/upload-artifact@v4
