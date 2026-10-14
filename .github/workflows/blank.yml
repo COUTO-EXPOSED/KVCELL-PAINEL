@@ -6,7 +6,7 @@ on:
   push:
     paths:
       - 'android-kvcell-finance-mdm/**'
-      - '.github/workflows/build-mdm-apk.yml'
+      - '.github/workflows/blank.yml'
 
 permissions:
   contents: read
@@ -20,123 +20,63 @@ jobs:
       - name: Baixar o código
         uses: actions/checkout@v4
 
-      - name: Configurar Java 17
+      - name: Configurar Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-         - name: Configurar Android SDK
+      - name: Configurar Android SDK
         uses: android-actions/setup-android@v4
         with:
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
-
-      - name: Verificar ambiente
-        shell: bash
-        run: |
-          set -euxo pipefail
-          java -version
-          echo "ANDROID_HOME=${ANDROID_HOME:-}"
-          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-}"
-          sdkmanager --list_installed
-
-      - name: Verificar arquivos do projeto
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          PROJECT="android-kvcell-finance-mdm"
-
-          test -d "$PROJECT" || {
-            echo "::error::Pasta do projeto não encontrada: $PROJECT"
-            exit 1
-          }
-
-          test -f "$PROJECT/settings.gradle" -o \
-               -f "$PROJECT/settings.gradle.kts" || {
-            echo "::error::settings.gradle não encontrado."
-            exit 1
-          }
-
-          test -f "$PROJECT/app/build.gradle" -o \
-               -f "$PROJECT/app/build.gradle.kts" || {
-            echo "::error::Configuração Gradle do módulo app não encontrada."
-            exit 1
-          }
-
-          find "$PROJECT" -maxdepth 2 \
-            \( -name 'build.gradle' \
-            -o -name 'build.gradle.kts' \
-            -o -name 'gradle-wrapper.properties' \) -print
 
       - name: Configurar Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
 
-      - name: Compilar APK Debug
-        shell: bash
+      - name: Compilar Debug
         run: |
-          set -o pipefail
-          gradle --no-daemon --stacktrace --info \
+          gradle --no-daemon --stacktrace \
             -p android-kvcell-finance-mdm \
-            :app:assembleDebug \
-            2>&1 | tee build-debug.log
+            :app:assembleDebug
 
-      - name: Compilar APK Release
-        shell: bash
+      - name: Compilar Release
         run: |
-          set -o pipefail
-          gradle --no-daemon --stacktrace --info \
+          gradle --no-daemon --stacktrace \
             -p android-kvcell-finance-mdm \
-            :app:assembleRelease \
-            2>&1 | tee build-release.log
+            :app:assembleRelease
 
       - name: Preparar APKs
         shell: bash
         run: |
           set -euo pipefail
 
-          PROJECT="android-kvcell-finance-mdm/app/build/outputs/apk"
-
           mkdir -p output
 
-          DEBUG_APK="$PROJECT/debug/app-debug.apk"
+          DEBUG="android-kvcell-finance-mdm/app/build/outputs/apk/debug/app-debug.apk"
+          RELEASE="android-kvcell-finance-mdm/app/build/outputs/apk/release/app-release.apk"
+          UNSIGNED="android-kvcell-finance-mdm/app/build/outputs/apk/release/app-release-unsigned.apk"
 
-          if [ ! -f "$DEBUG_APK" ]; then
-            echo "::error::APK Debug não foi gerado."
-            find "$PROJECT" -type f -name '*.apk' || true
+          test -f "$DEBUG" || {
+            echo "::error::APK Debug não encontrado."
             exit 1
-          fi
+          }
 
-          cp "$DEBUG_APK" output/KV_CELL_MDM_DEBUG.apk
+          cp "$DEBUG" output/KV_CELL_MDM_DEBUG.apk
 
-          RELEASE_APK="$PROJECT/release/app-release.apk"
-          RELEASE_UNSIGNED="$PROJECT/release/app-release-unsigned.apk"
-
-          if [ -f "$RELEASE_APK" ]; then
-            cp "$RELEASE_APK" output/KV_CELL_MDM_RELEASE.apk
-          elif [ -f "$RELEASE_UNSIGNED" ]; then
-            cp "$RELEASE_UNSIGNED" output/KV_CELL_MDM_RELEASE_UNSIGNED.apk
+          if [ -f "$RELEASE" ]; then
+            cp "$RELEASE" output/KV_CELL_MDM_RELEASE.apk
+          elif [ -f "$UNSIGNED" ]; then
+            cp "$UNSIGNED" output/KV_CELL_MDM_RELEASE_UNSIGNED.apk
           else
             echo "::error::APK Release não encontrado."
-            find "$PROJECT" -type f -name '*.apk' || true
+            find android-kvcell-finance-mdm/app/build/outputs -type f -name '*.apk' || true
             exit 1
           fi
 
           ls -lh output/
-          sha256sum output/*.apk
-
-      - name: Salvar logs de compilação
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: KV_CELL_MDM_BUILD_LOGS
-          path: |
-            build-debug.log
-            build-release.log
-          if-no-files-found: ignore
-          retention-days: 7
 
       - name: Disponibilizar APKs
         uses: actions/upload-artifact@v4
