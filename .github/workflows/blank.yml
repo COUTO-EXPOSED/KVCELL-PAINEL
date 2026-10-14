@@ -1,4 +1,3 @@
-
 name: Build KV CELL MDM APK
 
 on:
@@ -15,7 +14,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 45
-
     steps:
       - name: Baixar o código
         uses: actions/checkout@v4
@@ -36,30 +34,21 @@ jobs:
         with:
           gradle-version: '8.11.1'
 
-
-      - name: Habilitar AndroidX
+      - name: Garantir configuracoes do AndroidX e Jetifier
         shell: bash
         run: |
-          set -euo pipefail
-
-          FILE="android-kvcell-finance-mdm/gradle.properties"
-
-          touch "$FILE"
-
-          if ! grep -qE '^[[:space:]]*android\.useAndroidX=' "$FILE"; then
-            echo 'android.useAndroidX=true' >> "$FILE"
-          else
-            sed -i 's/^[[:space:]]*android\.useAndroidX=.*/android.useAndroidX=true/' "$FILE"
+          PROPS_FILE="android-kvcell-finance-mdm/gradle.properties"
+          mkdir -p "$(dirname "$PROPS_FILE")"
+          
+          # Adiciona ou atualiza as propriedades do AndroidX no gradle.properties
+          if [ -f "$PROPS_FILE" ]; then
+            sed -i '/android.useAndroidX/d' "$PROPS_FILE"
+            sed -i '/android.enableJetifier/d' "$PROPS_FILE"
           fi
-
-          if ! grep -qE '^[[:space:]]*android\.enableJetifier=' "$FILE"; then
-            echo 'android.enableJetifier=true' >> "$FILE"
-          else
-            sed -i 's/^[[:space:]]*android\.enableJetifier=.*/android.enableJetifier=true/' "$FILE"
-          fi
-
-          cat "$FILE"
-
+          
+          echo "android.useAndroidX=true" >> "$PROPS_FILE"
+          echo "android.enableJetifier=true" >> "$PROPS_FILE"
+          cat "$PROPS_FILE"
 
       - name: Compilar Debug
         run: |
@@ -77,20 +66,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           mkdir -p output
-
           DEBUG="android-kvcell-finance-mdm/app/build/outputs/apk/debug/app-debug.apk"
           RELEASE="android-kvcell-finance-mdm/app/build/outputs/apk/release/app-release.apk"
           UNSIGNED="android-kvcell-finance-mdm/app/build/outputs/apk/release/app-release-unsigned.apk"
-
+          
           test -f "$DEBUG" || {
             echo "::error::APK Debug não encontrado."
             exit 1
           }
-
           cp "$DEBUG" output/KV_CELL_MDM_DEBUG.apk
-
+          
           if [ -f "$RELEASE" ]; then
             cp "$RELEASE" output/KV_CELL_MDM_RELEASE.apk
           elif [ -f "$UNSIGNED" ]; then
@@ -100,7 +86,6 @@ jobs:
             find android-kvcell-finance-mdm/app/build/outputs -type f -name '*.apk' || true
             exit 1
           fi
-
           ls -lh output/
 
       - name: Disponibilizar APKs
