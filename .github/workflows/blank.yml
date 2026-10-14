@@ -1,99 +1,69 @@
-name: Build KV CELL MDM APK
+name: Build Android APK
 
 on:
-  workflow_dispatch:
   push:
-    paths:
-      - 'android-kvcell-finance-mdm/**'
-      - '.github/workflows/blank.yml'
-
-permissions:
-  contents: read
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+
     steps:
-      - name: Baixar o código
+      - name: Checkout do código
         uses: actions/checkout@v4
 
-      - name: Configurar Java
+      - name: Configurar JDK 17
         uses: actions/setup-java@v4
         with:
-          distribution: temurin
+          distribution: 'temurin'
           java-version: '17'
-
-      - name: Configurar Android SDK
-        uses: android-actions/setup-android@v4
-        with:
-          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
-
-      - name: Configurar Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.11.1'
+          cache: 'gradle'
 
       - name: Garantir configuracoes do AndroidX e Jetifier em todos os locais
         shell: bash
         run: |
+          # Cria ou atualiza o gradle.properties tanto na raiz quanto na pasta do projeto Android
           for DIR in "." "android-kvcell-finance-mdm"; do
             PROPS_FILE="$DIR/gradle.properties"
             mkdir -p "$DIR"
             
-            if [ -f "$PROPS_FILE" ]; then
-              sed -i '/android.useAndroidX/d' "$PROPS_FILE"
-              sed -i '/android.enableJetifier/d' "$PROPS_FILE"
-            fi
+            # Remove entradas antigas se existirem para evitar duplicidade
+            [ -f "$PROPS_FILE" ] && sed -i '/android.useAndroidX/d' "$PROPS_FILE"
+            [ -f "$PROPS_FILE" ] && sed -i '/android.enableJetifier/d' "$PROPS_FILE"
             
+            # Adiciona as configurações do AndroidX e Jetifier
             echo "android.useAndroidX=true" >> "$PROPS_FILE"
             echo "android.enableJetifier=true" >> "$PROPS_FILE"
-            echo "--- Conteúdo de $PROPS_FILE ---"
-            cat "$PROPS_FILE"
           done
 
-      - name: Compilar Debug
-        run: |
-          gradle --no-daemon --stacktrace \
-            -p android-kvcell-finance-mdm \
-            :app:assembleDebug
+          # Verificação para confirmar a criação correta
+          echo "--- Conteúdo do gradle.properties na raiz ---"
+          cat ./gradle.properties
+          echo "--- Conteúdo do gradle.properties no projeto ---"
+          cat ./android-kvcell-finance-mdm/gradle.properties
 
-      - name: Compilar Release
+      - name: Dar permissão de execução ao Gradle Wrapper
         run: |
-          gradle --no-daemon --stacktrace \
-            -p android-kvcell-finance-mdm \
-            :app:assembleRelease
-
-      - name: Preparar APKs
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p output
-          DEBUG="android-kvcell-finance-mdm/app/build/outputs/apk/debug/app-debug.apk"
-          RELEASE="android-kvcell-finance-mdm/app/build/outputs/apk/release/app-release.apk"
-          UNSIGNED="android-kvcell-finance-mdm/app/build/outputs/apk/release/app-release-unsigned.apk"
-          
-          test -f "$DEBUG" || {
-            echo "::error::APK Debug não encontrado."
-            exit 1
-          }
-          cp "$DEBUG" output/KV_CELL_MDM_DEBUG.apk
-          
-          if [ -f "$RELEASE" ]; then
-            cp "$RELEASE" output/KV_CELL_MDM_RELEASE.apk
-          elif [ -f "$UNSIGNED" ]; then
-            cp "$UNSIGNED" output/KV_CELL_MDM_RELEASE_UNSIGNED.apk
-          else
-            echo "::error::APK Release não encontrado."
-            find android-kvcell-finance-mdm/app/build/outputs -type f -name '*.apk' || true
-            exit 1
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+          elif [ -f "./android-kvcell-finance-mdm/gradlew" ]; then
+            chmod +x ./android-kvcell-finance-mdm/gradlew
           fi
-          ls -lh output/
 
-      - name: Disponibilizar APKs
+      - name: Compilar APK (Debug)
+        run: |
+          if [ -f "./gradlew" ]; then
+            ./gradlew assembleDebug
+          else
+            cd android-kvcell-finance-mdm
+            ./gradlew assembleDebug
+          fi
+
+      - name: Salvar artefato do APK
         uses: actions/upload-artifact@v4
         with:
-          name: KV_CELL_MDM_APKS
-          path: output/*.apk
-          if-no-files-found: error
-          retention-days: 30
+          name: app-debug
+          path: |
+            **/build/outputs/apk/debug/*.apk
