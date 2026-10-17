@@ -12,8 +12,6 @@ except Exception: DATA_DIR=BASE
 DB=os.path.join(DATA_DIR,'kvcell.db')
 PORT=int(os.environ.get('PORT','80'))
 SESSIONS={}
-SESSION_LAST_ACTIVITY={}
-SESSION_IDLE_SECONDS=30*60
 DB_SYNC_LOCK=threading.Lock()
 DB_SYNC_TIMER=None
 BLOB_KEY=os.environ.get('SQUARE_BLOB_API_KEY','').strip()
@@ -369,21 +367,12 @@ class Handler(BaseHTTPRequestHandler):
             if p.strip().startswith('sid='): sid=p.strip()[4:]
         return SESSIONS.get(sid)
     def require(self):
-        c=self.headers.get('Cookie',''); sid=''
-        for part in c.split(';'):
-            if part.strip().startswith('sid='): sid=part.strip()[4:]
-        u=SESSIONS.get(sid)
-        if not u:
-            self.json({'error':'Não autenticado'},401); return None
-        last=SESSION_LAST_ACTIVITY.get(sid,0)
-        if not last or time.time()-last>=SESSION_IDLE_SECONDS:
-            SESSIONS.pop(sid,None); SESSION_LAST_ACTIVITY.pop(sid,None)
-            self.json({'error':'Sessão expirada após 30 minutos sem atividade'},401,headers={'Set-Cookie':'sid=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax'}); return None
-        SESSION_LAST_ACTIVITY[sid]=time.time()
+        u=self.user()
+        if not u: self.json({'error':'Não autenticado'},401); return None
         return u
     def do_GET(self):
         p=urlparse(self.path); path=p.path; qs=parse_qs(p.query)
-        if path=='/api/health': return self.json({'ok':True,'app':'KV CELL OS PREMIUM','version':'1101.2','port':PORT,'time':now()})
+        if path=='/api/health': return self.json({'ok':True,'app':'KV CELL OS PREMIUM','version':'1100.0','port':PORT,'time':now()})
         if path.startswith('/public/'):
             return self.public(path)
         if path=='/': return self.send(200,INDEX,'text/html')
@@ -423,7 +412,6 @@ class Handler(BaseHTTPRequestHandler):
         if path=='/api/customer-search': return self.customer_search(qs.get('q',[''])[0])
         if path=='/api/customer-stats': return self.customer_stats(int(qs.get('id',['0'])[0] or 0))
         if path=='/api/films/search': return self.film_search(qs.get('q',[''])[0])
-        if path=='/api/films/external': return self.film_external_search(qs.get('q',[''])[0])
         if path=='/api/ai/status': return self.ai_status()
         if path=='/api/activity': return self.activity_api(qs)
         if path=='/api/undo': return self.undo_list()
@@ -485,13 +473,9 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith('/api/'): return self.update_api(path[5:],data,u)
         self.send(404,b'Not found','text/plain')
     def login(self,d):
-        cutoff=time.time()-SESSION_IDLE_SECONDS
-        for old_sid,last_seen in list(SESSION_LAST_ACTIVITY.items()):
-            if last_seen<cutoff:
-                SESSIONS.pop(old_sid,None); SESSION_LAST_ACTIVITY.pop(old_sid,None)
         r=one('SELECT id,name,email,role,unit,permissions FROM users WHERE email=? AND password_hash=? AND active=1',(d.get('email','').strip().lower(),ph(d.get('password',''))))
         if not r:return self.json({'error':'E-mail ou senha inválidos'},401)
-        sid=secrets.token_urlsafe(32); SESSIONS[sid]=r; SESSION_LAST_ACTIVITY[sid]=time.time(); audit(r['id'],'login','users',r['id'])
+        sid=secrets.token_urlsafe(32); SESSIONS[sid]=r; audit(r['id'],'login','users',r['id'])
         return self.json({'ok':True,'user':r},headers={'Set-Cookie':f'sid={sid}; Path=/; HttpOnly; SameSite=Lax'})
     def logout(self):
         u=self.user();
@@ -499,7 +483,7 @@ class Handler(BaseHTTPRequestHandler):
         c=self.headers.get('Cookie',''); sid=''
         for p in c.split(';'):
             if p.strip().startswith('sid='): sid=p.strip()[4:]
-        SESSIONS.pop(sid,None); SESSION_LAST_ACTIVITY.pop(sid,None); return self.json({'ok':True},headers={'Set-Cookie':'sid=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax'})
+        SESSIONS.pop(sid,None); return self.json({'ok':True},headers={'Set-Cookie':'sid=; Path=/; Max-Age=0'})
     def list_api(self,resource,qs):
         maps={'customers':'customers','devices':'devices','services':'services','unlocks':'unlocks','purchases':'purchases','inventory':'inventory','models':'models','quotes':'quotes','sales':'sales','finance':'finance','forgotten':'forgotten','contracts':'contracts','users':'users','chat':'chat','audit':'audit','appointments':'appointments','technicians':'technicians','suppliers':'suppliers','guarantees':'guarantees','community':'community_posts','referrals':'referrals','catalog-products':'catalog_products'}
         if resource not in maps:return self.json({'error':'Recurso inválido'},404)
@@ -966,31 +950,6 @@ class Handler(BaseHTTPRequestHandler):
         if not q: return self.json(rows('SELECT * FROM film_compat ORDER BY brand,model LIMIT 300'))
         like='%'+q+'%'
         return self.json(rows('SELECT * FROM film_compat WHERE brand LIKE ? OR model LIKE ? OR aliases LIKE ? OR master_code LIKE ? OR group_name LIKE ? ORDER BY brand,model LIMIT 300',(like,like,like,like,like)))
-    def film_external_search(self,q):
-        q=str(q or '').strip()[:100]
-        if len(q)<2:return self.json({'success':False,'error':'Digite pelo menos 2 caracteres.','data':[]},400)
-        # Public API documented by Tabela Películas; only a fixed trusted host is queried.
-        query=urllib.parse.urlencode({'route':'api/sistemas','modelo':q})
-        url='https://tabelapeliculas.com.br/index?'+query
-        req=urllib.request.Request(url,headers={'User-Agent':'KV-CELL-OS/1101.2 (+compatibilidade de peliculas)','Accept':'application/json'})
-        try:
-            with urllib.request.urlopen(req,timeout=12) as resp:
-                obj=json.loads(resp.read().decode('utf-8','replace') or '{}')
-            data=obj.get('data') or []
-            if not isinstance(data,list): data=[]
-            clean=[]
-            for item in data[:200]:
-                if not isinstance(item,dict): continue
-                model=str(item.get('modelo') or item.get('model') or '').strip()[:160]
-                brand=str(item.get('marca') or item.get('brand') or '').strip()[:80]
-                compatibles=item.get('compativeis') or item.get('compatíveis') or item.get('compatibles') or []
-                if isinstance(compatibles,str): compatibles=[x.strip() for x in re.split(r'[,;|]',compatibles) if x.strip()]
-                if not isinstance(compatibles,list): compatibles=[]
-                compatibles=[str(x).strip()[:120] for x in compatibles[:80] if str(x).strip()]
-                clean.append({'model':model,'brand':brand,'compatibles':compatibles,'source':'Tabela Películas API','source_url':'https://tabelapeliculas.com.br/'})
-            return self.json({'success':bool(obj.get('success',True)),'query':q,'total':obj.get('total',len(clean)),'data':clean,'source':'Tabela Películas API','source_url':'https://tabelapeliculas.com.br/'})
-        except Exception as e:
-            return self.json({'success':False,'query':q,'data':[],'error':'A consulta online falhou. Confira a conexão do servidor e tente novamente.','source_url':'https://tabelapeliculas.com.br/'},502)
     def ai_status(self):
         or_key=(os.environ.get('OPENROUTER_API_KEY') or '').strip()
         gkey=(os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY') or '').strip()
@@ -1336,21 +1295,6 @@ def public_os(s,c,store=None):
     imei=details.get('imei') or ''
     serial=details.get('serial') or ''
     video=details.get('repair_video_url') or details.get('video_url') or ''
-    # Only customer-facing item details are exposed; internal cost fields are never rendered here.
-    used_parts=details.get('parts') or []
-    used_products=details.get('products') or []
-    customer_items=[]
-    for item in used_parts:
-        nm=safe(item.get('name') or 'Peça utilizada'); quality=safe(item.get('quality') or 'Não informada'); qty=max(1,int(item.get('qty') or 1)); unit=float(item.get('price') or 0)
-        unit_br=(f'{unit:,.2f}'.replace(',', 'X').replace('.', ',').replace('X','.'))
-        total_br=(f'{unit*qty:,.2f}'.replace(',', 'X').replace('.', ',').replace('X','.'))
-        customer_items.append(f'<tr><td><b>{nm}</b><small>Qualidade: {quality}</small></td><td>{qty}</td><td>{(f"R$ {unit_br}" if unit>0 else 'Incluso no serviço')}</td><td><strong>{(f"R$ {total_br}" if unit>0 else 'Incluso no serviço')}</strong></td></tr>')
-    for item in used_products:
-        nm=safe(item.get('name') or 'Produto / acessório'); qty=max(1,int(item.get('qty') or 1)); unit=float(item.get('price') or 0)
-        unit_br=(f'{unit:,.2f}'.replace(',', 'X').replace('.', ',').replace('X','.'))
-        total_br=(f'{unit*qty:,.2f}'.replace(',', 'X').replace('.', ',').replace('X','.'))
-        customer_items.append(f'<tr><td><b>{nm}</b><small>Produto / acessório</small></td><td>{qty}</td><td>{(f"R$ {unit_br}" if unit>0 else '—')}</td><td><strong>{(f"R$ {total_br}" if unit>0 else '—')}</strong></td></tr>')
-    customer_items_html=('''<div class="box"><span class="eyebrow">PEÇAS E PRODUTOS</span><h2>O que foi substituído / utilizado</h2><div class="table-scroll"><table><thead><tr><th>Item e qualidade</th><th>Qtd.</th><th>Unitário</th><th>Total</th></tr></thead><tbody>'''+''.join(customer_items)+'''</tbody></table></div><p class="muted">Os valores dos itens são os registrados pela assistência nesta OS.</p></div>''') if customer_items else ''
     video_html=(f'<div class="box video-box"><span class="eyebrow">REGISTRO DO REPARO</span><h2>Vídeo do atendimento</h2><video controls preload="metadata" src="{safe(video)}"></video></div>') if video else '<div class="box video-box empty"><div class="video-icon">▶</div><b>Vídeo do reparo ainda não disponível</b><span>Quando a equipe publicar, ele aparecerá aqui.</span></div>'
     photo_box=f'<div class="box"><span class="eyebrow">EVIDÊNCIAS</span><h2>Fotos do aparelho</h2><div class="photo-grid">{thumbs or "<span class=\'muted\'>Nenhuma foto cadastrada.</span>"}</div></div>'
     customer=safe(c['name'] if c else 'Cliente')
@@ -1362,13 +1306,12 @@ def public_os(s,c,store=None):
     <div class="box"><span class="eyebrow">PROGRESSO DO SERVIÇO</span><h2>Linha do tempo</h2><div class="timeline">{timeline_html}</div></div>
     <div class="box"><span class="eyebrow">APARELHO</span><h2>Informações do dispositivo</h2><div class="info-grid"><div class="info"><small>Modelo</small><b>{safe(model or '—')}</b></div><div class="info"><small>IMEI</small><b>{safe(imei or '—')}</b></div><div class="info"><small>Nº de série</small><b>{safe(serial or '—')}</b></div><div class="info"><small>Técnico responsável</small><b>{safe(s.get('technician') or 'Não atribuído')}</b></div></div></div>
     <div class="box"><span class="eyebrow">SERVIÇO</span><h2>O que está sendo feito</h2><p>{safe(s.get('description') or 'Serviço não detalhado.')}</p><p>{safe(s.get('diagnosis') or '')}</p>{'<div class="info-grid"><div class="info"><small>Observações</small><b>'+safe(s.get('notes') or '')+'</b></div></div>' if s.get('notes') else ''}</div>
-    {customer_items_html}
     <div class="value-grid"><div class="value-card"><small>VALOR DO SERVIÇO</small><strong>R$ {float(s.get('price') or 0):,.2f}</strong><span>Valor registrado na OS</span></div><div class="value-card"><small>GARANTIA</small><strong>{safe(s.get('warranty') or '—')}</strong><span>Conforme condições da KV CELL</span></div><div class="value-card"><small>STATUS</small><strong>{safe(label)}</strong><span>Atualização pelo painel</span></div></div>
     {video_html}{photo_box}{approval}{contact}<div class="box"><span class="eyebrow">GARANTIA DIGITAL</span><h2>Verificação da OS</h2><p>Este link identifica a Ordem de Serviço #{s['id']} da KV CELL. Guarde o endereço para futuras consultas e conferência do atendimento.</p></div><p class="legal">{safe(store.get('company_name') or 'KV CELL')} • {safe(store.get('units') or 'LAGOS + MAGÉ')} • {safe(store.get('phone') or '')}</p><footer>KV CELL • Portal oficial do cliente</footer></main><div id="lightbox" class="lightbox" onclick="closePhoto()"><button onclick="event.stopPropagation();closePhoto()">Fechar</button><img id="lightboxImg" src="" alt="Foto ampliada" onclick="event.stopPropagation()"></div><script>async function respond(a){{const msg=prompt(a==='aprovado'?'Mensagem opcional para a KV CELL:':'Motivo da recusa (opcional):','');try{{const r=await fetch(location.pathname,{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{action:a,message:msg||''}})}});const d=await r.json();document.getElementById('msg').textContent=d.ok?'Resposta registrada com sucesso. Obrigado!':'Não foi possível registrar sua resposta.';if(d.ok)setTimeout(()=>location.reload(),700)}}catch{{document.getElementById('msg').textContent='Falha de conexão. Tente novamente.'}}}}async function copyLink(btn){{try{{await navigator.clipboard.writeText(location.href);if(btn){{const old=btn.textContent;btn.textContent='✓ Copiado';setTimeout(()=>btn.textContent=old,1400)}}}}catch{{prompt('Copie o link abaixo:',location.href)}}}}async function shareLink(){{try{{if(navigator.share)await navigator.share({{title:'OS #{s["id"]} • KV CELL',text:'Acompanhe sua Ordem de Serviço',url:location.href}});else{{await navigator.clipboard.writeText(location.href);alert('Link copiado!')}}}}catch{{}}}}function openPhoto(src){{document.getElementById('lightboxImg').src=src;document.getElementById('lightbox').classList.add('open')}}function closePhoto(){{document.getElementById('lightbox').classList.remove('open')}}document.addEventListener('keydown',e=>{{if(e.key==='Escape')closePhoto()}})</script></body></html>'''
 
 def public_unlock(x,c):
-    details=json.loads(x['details_json'] or '{}') if x.get('details_json') else {}; photos=json.loads(x['photos'] or '[]'); thumbs=''.join(f'<img src="{p}" />' for p in photos[:8])
-    return f"""<!doctype html><html lang="pt-BR"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Desbloqueio #{x['id']} • KV CELL</title><style>{PUBLIC_CSS}.photos img{{width:100px;height:100px;object-fit:cover;border-radius:10px;margin:5px}}</style><main><header><b>KV CELL</b><span>UNLOCKER PRO</span></header><section class="hero"><small>OS DE DESBLOQUEIO</small><h1>#{x['id']}</h1><p>{safe(c['name'] if c else 'Cliente')} • {safe(x['unit'])}</p><div class="status">{safe(x['status'])}</div></section><div class="grid"><div class="box"><h2>Aparelho</h2><p>{safe(x['brand'])} {safe(x['model'])}</p><p>IMEI: {safe(x['imei'])}</p><p>Nº de série: {safe(details.get('serial',''))}</p></div><div class="box"><h2>Serviço</h2><p>{safe(x['kind'])}</p><h2>R$ {float(x['price'] or 0):,.2f}</h2></div></div><div class="box"><h2>Prazo</h2><p>{safe(details.get('expected_date','Não informado'))} · {safe(details.get('estimated_time',''))}</p><p>Prioridade: {safe(details.get('priority','Normal'))}</p></div><div class="box"><b>Fotos</b><div class="photos">{thumbs or '<span>Sem fotos.</span>'}</div></div><div class="box"><b>Política de Garantia</b><p>Esta OS de desbloqueio é finalizada SEM GARANTIA. Serviços de software podem ser revertidos por atualizações.</p></div><footer>KV CELL • Link de acompanhamento</footer></main></html>"""
+    details=json.loads(x['details_json'] or '{}') if x.get('details_json') else {}; photos=json.loads(x['photos'] or '[]'); thumbs=''.join(f'<img src="{p}" />' for p in photos[:8]); devices=details.get('devices') or []; device_block=''.join(f"<div class='device-item'><b>Aparelho {i+1}</b><p>{safe(d.get('brand',''))} {safe(d.get('model',''))}</p><p>IMEI/Serial: {safe(d.get('imei',''))}</p><p>Cor: {safe(d.get('color',''))}</p></div>" for i,d in enumerate(devices))
+    return f"""<!doctype html><html lang="pt-BR"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Desbloqueio #{x['id']} • KV CELL</title><style>{PUBLIC_CSS}.photos img{{width:100px;height:100px;object-fit:cover;border-radius:10px;margin:5px}}</style><main><header><b>KV CELL</b><span>UNLOCKER PRO</span></header><section class="hero"><small>OS DE DESBLOQUEIO</small><h1>#{x['id']}</h1><p>{safe(c['name'] if c else 'Cliente')} • {safe(x['unit'])}</p><div class="status">{safe(x['status'])}</div></section><div class="grid"><div class="box"><h2>{'Aparelhos da ordem' if devices else 'Aparelho'}</h2>{device_block or f"<p>{safe(x['brand'])} {safe(x['model'])}</p><p>IMEI: {safe(x['imei'])}</p>"}<p>Nº de série: {safe(details.get('serial',''))}</p></div><div class="box"><h2>Serviço</h2><p>{safe(x['kind'])}</p><h2>R$ {float(x['price'] or 0):,.2f}</h2></div></div><div class="box"><h2>Prazo</h2><p>{safe(details.get('expected_date','Não informado'))} · {safe(details.get('estimated_time',''))}</p><p>Prioridade: {safe(details.get('priority','Normal'))}</p></div><div class="box"><b>Fotos</b><div class="photos">{thumbs or '<span>Sem fotos.</span>'}</div></div><div class="box"><b>Política de Garantia</b><p>Esta OS de desbloqueio é finalizada SEM GARANTIA. Serviços de software podem ser revertidos por atualizações.</p></div><footer>KV CELL • Link de acompanhamento</footer></main></html>"""
 
 PUBLIC_CSS='''@font-face{font-family:Poppins;src:url('/static/fonts/pxiEyp8kv8JHgFVrJJfecg.woff2')}@font-face{font-family:Poppins;src:url('/static/fonts/pxiByp8kv8JHgFVrLEj6Z1xlFQ.woff2');font-weight:600}@font-face{font-family:Poppins;src:url('/static/fonts/pxiByp8kv8JHgFVrLGT9Z1xlFQ.woff2');font-weight:700}*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:radial-gradient(circle at 50% -18%,#292400 0,#0a0a0a 35%,#050505 75%);color:#f7f7f7;font-family:Poppins,Inter,Arial,sans-serif}main{max-width:1040px;margin:0 auto;padding:22px}header{display:flex;justify-content:space-between;align-items:center;padding:12px 0 16px;border-bottom:1px solid #292929}header b{font-size:25px;letter-spacing:-.5px;color:#ffd400}header span{font-size:10px;color:#9a9a9a;font-weight:700;letter-spacing:1.2px}.hero{position:relative;overflow:hidden;margin:24px 0;padding:30px;border:1px solid #3c3700;border-radius:24px;background:linear-gradient(135deg,#1b1800 0,#121212 48%,#0c0c0c 100%);box-shadow:0 20px 55px #0008}.hero:after{content:"";position:absolute;width:220px;height:220px;right:-90px;top:-100px;border-radius:50%;background:#ffd40012;filter:blur(5px)}.hero small{position:relative;z-index:1;color:#ffd400;font-size:10px;font-weight:800;letter-spacing:1.5px}.hero h1{position:relative;z-index:1;font-size:42px;line-height:1.1;margin:7px 0;color:#ffd400}.hero p{position:relative;z-index:1;color:#bdbdbd}.grid{display:grid;grid-template-columns:2fr 1fr;gap:16px}.box{background:linear-gradient(145deg,#151515,#0e0e0e);border:1px solid #292929;border-radius:19px;padding:20px;margin:14px 0;box-shadow:0 15px 40px #0006}.box h2,.box h3{margin:0 0 12px;font-size:17px}.box strong{color:#ffd400}table{width:100%;border-collapse:separate;border-spacing:0;margin-top:14px;overflow:hidden;border:1px solid #292929;border-radius:14px}td,th{padding:12px 13px;border-bottom:1px solid #262626;text-align:left}th{background:#1a1a1a;color:#a9a9a9;font-size:11px;text-transform:uppercase;letter-spacing:.6px}tr:last-child td{border-bottom:0}.status{display:inline-flex;align-items:center;gap:7px;padding:8px 12px;border-radius:999px;background:#332f00;color:#ffd400;border:1px solid #655900;font-weight:800;margin:10px 0}.status:before{content:"";width:7px;height:7px;border-radius:50%;background:#ffd400;box-shadow:0 0 10px #ffd400}.actions{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0}.actions button,.actions a,button.pay{border:1px solid #343434;border-radius:13px;padding:13px 18px;font-weight:800;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center}.ok,.pay{background:#ffd400!important;color:#070707!important;border-color:#ffd400!important}.no{background:#222!important;color:#fff!important}.whatsapp{background:#151515;color:#ffd400;border-color:#4d4500!important}.timeline{display:grid;gap:10px}.step{position:relative;padding:14px 16px 14px 42px;background:#101010;border:1px solid #292929;border-radius:14px;color:#8f8f8f}.step:before{content:"";position:absolute;left:17px;top:18px;width:11px;height:11px;border:2px solid #555;border-radius:50%}.step.done{color:#f4f4f4;border-color:#4b4300;background:linear-gradient(90deg,#171500,#101010)}.step.done:before{background:#ffd400;border-color:#ffd400;box-shadow:0 0 12px #ffd40066}.step b{display:block}.step small{display:block;margin-top:4px;color:#777}.notice{padding:14px;border:1px solid #514900;background:#171500;border-radius:13px;color:#d9d9d9}.pix textarea{width:100%;min-height:82px;margin-top:8px;background:#090909;color:#ddd;border:1px solid #333;border-radius:12px;padding:10px}.pix button{margin-top:8px;background:#222;color:#fff;border:1px solid #333;border-radius:10px;padding:10px 14px;font-weight:700}.metric-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.metric{background:#101010;border:1px solid #292929;border-radius:16px;padding:15px}.metric small{display:block;color:#8e8e8e;font-size:10px;font-weight:700}.metric b{display:block;font-size:22px;margin-top:5px}.pill{display:inline-block;padding:5px 9px;border-radius:999px;background:#252525}.pill.ok{background:#123d24;color:#76f0a1}.pill.late{background:#4a1717;color:#ff9b9b}footer{color:#737373;text-align:center;padding:30px 10px;font-size:11px}@media(max-width:700px){.grid{grid-template-columns:1fr}.metric-grid{grid-template-columns:repeat(2,1fr)}main{padding:14px}.hero h1{font-size:30px}header{gap:10px}header span{font-size:8px}}@media(max-width:430px){.metric-grid{grid-template-columns:1fr 1fr}.actions>*{width:100%}}'''
 
@@ -1378,7 +1321,7 @@ INDEX='''<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta nam
 if __name__ == '__main__':
     host = os.environ.get('HOST', '0.0.0.0')
     server = ThreadingHTTPServer((host, PORT), Handler)
-    print(f'KV CELL OS PREMIUM V1101.2 listening on {host}:{PORT}', flush=True)
+    print(f'KV CELL OS PREMIUM V1100.0 listening on {host}:{PORT}', flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
