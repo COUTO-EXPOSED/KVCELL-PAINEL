@@ -170,3 +170,10 @@ body{background:radial-gradient(900px 450px at 70% -10%,rgba(255,212,0,.08),tran
 
 /* V1101.2: numbered click-pattern and expanded parts editor */
 .pattern-dot span{position:absolute;inset:0;display:grid;place-items:center;font-size:12px;font-weight:900;color:#111;z-index:2;pointer-events:none}.pattern-dot:not(.selected) span{color:#ffd400}.pattern-dot.pattern-start{outline:3px solid #6ff0a5;outline-offset:3px}.pattern-dot.pattern-start:after{content:'INÍCIO';position:absolute;left:50%;top:-20px;transform:translateX(-50%);font-size:8px;color:#6ff0a5;font-weight:900;white-space:nowrap}.pattern-dot.pattern-end{border-color:#ffbd59}.pattern-mode-actions{display:flex;justify-content:center;gap:8px;flex-wrap:wrap}.item-row{grid-template-columns:minmax(120px,1fr) minmax(100px,130px) 60px minmax(100px,130px) minmax(120px,150px) 40px!important}.film-external-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px;border-bottom:1px solid #292929}.film-external-row p{margin:5px 0 0;color:#aaa;font-size:12px}@media(max-width:800px){.item-row{grid-template-columns:1fr 1fr!important}.film-external-row{align-items:flex-start;flex-direction:column}}
+
+/* V2000.1: responsive multi-device OS editor and stronger KV CELL focus */
+.multi-device-panel{padding:14px;border:1px solid #3b3400;border-radius:14px;background:linear-gradient(135deg,rgba(255,212,0,.06),rgba(0,0,0,.2))}
+.multi-device-panel>label{font-weight:900;color:#ffd400}
+.os-device-row{display:grid;grid-template-columns:1fr 1.2fr 1.2fr 1.2fr auto;gap:8px;margin:10px 0;align-items:center}
+.os-device-row .input{min-width:0}
+@media(max-width:760px){.os-device-row{grid-template-columns:1fr 1fr}.os-device-row .iconbtn{grid-column:1/-1;justify-self:end}.multi-device-panel .btn{width:100%}}
