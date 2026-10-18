@@ -383,7 +383,7 @@ class Handler(BaseHTTPRequestHandler):
         return u
     def do_GET(self):
         p=urlparse(self.path); path=p.path; qs=parse_qs(p.query)
-        if path=='/api/health': return self.json({'ok':True,'app':'KV CELL OS PREMIUM','version':'1101.2','port':PORT,'time':now()})
+        if path=='/api/health': return self.json({'ok':True,'app':'KV CELL OS PREMIUM','version':'1111.1','port':PORT,'time':now()})
         if path.startswith('/public/'):
             return self.public(path)
         if path=='/': return self.send(200,INDEX,'text/html')
@@ -1132,6 +1132,7 @@ class Handler(BaseHTTPRequestHandler):
         write('UPDATE undo_stack SET undone=1,undone_at=? WHERE id=?',(now(),uid)); activity(u,'LOG','Desfez ação',table,rid,r['action']); return self.json({'ok':True})
     def public_os_action(self,token,d):
         s=one('SELECT * FROM services WHERE public_token=?',(token,))
+        if not s and str(token).isdigit(): s=one('SELECT * FROM services WHERE id=?',(int(token),))
         if not s:return self.json({'error':'OS não encontrada'},404)
         action=d.get('action')
         if action not in ('aprovado','recusado'):return self.json({'error':'Ação inválida'},400)
@@ -1195,8 +1196,16 @@ class Handler(BaseHTTPRequestHandler):
             store={r['k']:r['v'] for r in rows('SELECT k,v FROM settings')}
             return self.send(200,public_quote(q,cust,store),'text/html')
         if path.startswith('/public/os/'):
-            t=path.split('/')[-1]; s=one('SELECT * FROM services WHERE public_token=?',(t,));
-            if not s:return self.send(404,'OS não encontrada','text/html')
+            t=urllib.parse.unquote(path.split('/')[-1]).strip()
+            # Compatibilidade: token atual, token legado com espaços/codificação e links antigos usando ID numérico.
+            s=one('SELECT * FROM services WHERE public_token=?',(t,))
+            if not s and t.isdigit(): s=one('SELECT * FROM services WHERE id=?',(int(t),))
+            if not s and t: s=one('SELECT * FROM services WHERE lower(public_token)=lower(?)',(t,))
+            if not s:return self.send(404,'OS não encontrada. Confira o link ou solicite à KV CELL um novo acompanhamento.','text/html')
+            if not str(s.get('public_token') or '').strip():
+                new_token=secrets.token_urlsafe(18).replace('-','').replace('_','')
+                write('UPDATE services SET public_token=? WHERE id=?',(new_token,s['id']))
+                s=one('SELECT * FROM services WHERE id=?',(s['id'],))
             cust=one('SELECT * FROM customers WHERE id=?',(s['customer_id'],)) if s['customer_id'] else None
             store={r['k']:r['v'] for r in rows('SELECT k,v FROM settings')}
             return self.send(200,public_os(s,cust,store),'text/html')
@@ -1333,8 +1342,6 @@ def public_os(s,c,store=None):
     contact=(f'<div class="action-row"><a class="btn whatsapp" href="{safe(wa)}" target="_blank" rel="noopener">💬 Falar com a KV CELL</a><button class="btn secondary" onclick="shareLink()">↗ Compartilhar acompanhamento</button><button class="btn secondary" onclick="copyLink(this)">🔗 Copiar link</button><button class="btn secondary" onclick="window.print()">🖨 Imprimir / PDF</button></div>' if wa else '<div class="action-row"><button class="btn secondary" onclick="shareLink()">↗ Compartilhar acompanhamento</button><button class="btn secondary" onclick="copyLink(this)">🔗 Copiar link</button><button class="btn secondary" onclick="window.print()">🖨 Imprimir / PDF</button></div>')
     thumbs=''.join(f'<img src="{safe(x)}" alt="Foto do aparelho" loading="lazy" onclick="openPhoto(this.src)">' for x in photos[:12])
     model=details.get('model') or details.get('device_model') or ''
-    linked_devices=details.get('devices') or []
-    linked_devices_html=''.join(f'<div class="info"><small>Aparelho adicional {i+1}</small><b>{safe(x.get("brand",""))} {safe(x.get("model",""))}</b><small>IMEI: {safe(x.get("imei") or "—")} · Série: {safe(x.get("serial") or "—")}</small></div>' for i,x in enumerate(linked_devices) if isinstance(x,dict))
     imei=details.get('imei') or ''
     serial=details.get('serial') or ''
     video=details.get('repair_video_url') or details.get('video_url') or ''
@@ -1362,7 +1369,7 @@ def public_os(s,c,store=None):
     </style></head><body><main><div class="topbar"><div class="brand"><div class="logo">KV</div><div><b>{safe(store.get('company_name') or 'KV CELL')}</b><small>ACOMPANHAMENTO DIGITAL • ORDEM DE SERVIÇO</small></div></div><div class="top-actions"><button class="mini" onclick="copyLink(this)">🔗 Copiar</button><button class="mini" onclick="shareLink()">↗ Compartilhar</button></div></div>
     <section class="hero"><div class="status-wrap"><span class="eyebrow">ORDEM DE SERVIÇO #{s['id']}</span><span class="status {('done' if current>=3 else 'bad' if current==0 else 'warn' if current==2 else 'pending')}"><span class="status-dot"></span>{safe(label.upper())}</span></div><h1>Acompanhe seu aparelho</h1><p class="hero-message">{safe(message)}</p><div class="hero-meta"><div><span>Cliente</span><strong>{customer}</strong></div><div><span>Aparelho</span><strong>{safe(model or s.get('description') or 'Não informado')}</strong></div><div><span>Entrada</span><strong>{safe(s.get('created_at') or '—')}</strong></div><div><span>Previsão</span><strong>{safe(details.get('expected_date') or details.get('estimated_date') or 'A confirmar')}</strong></div></div></section>
     <div class="box"><span class="eyebrow">PROGRESSO DO SERVIÇO</span><h2>Linha do tempo</h2><div class="timeline">{timeline_html}</div></div>
-    <div class="box"><span class="eyebrow">APARELHO</span><h2>Informações do dispositivo</h2><div class="info-grid"><div class="info"><small>Modelo</small><b>{safe(model or '—')}</b></div><div class="info"><small>IMEI</small><b>{safe(imei or '—')}</b></div><div class="info"><small>Nº de série</small><b>{safe(serial or '—')}</b></div><div class="info"><small>Técnico responsável</small><b>{safe(s.get('technician') or 'Não atribuído')}</b></div>{linked_devices_html}</div></div>
+    <div class="box"><span class="eyebrow">APARELHO</span><h2>Informações do dispositivo</h2><div class="info-grid"><div class="info"><small>Modelo</small><b>{safe(model or '—')}</b></div><div class="info"><small>IMEI</small><b>{safe(imei or '—')}</b></div><div class="info"><small>Nº de série</small><b>{safe(serial or '—')}</b></div><div class="info"><small>Técnico responsável</small><b>{safe(s.get('technician') or 'Não atribuído')}</b></div></div></div>
     <div class="box"><span class="eyebrow">SERVIÇO</span><h2>O que está sendo feito</h2><p>{safe(s.get('description') or 'Serviço não detalhado.')}</p><p>{safe(s.get('diagnosis') or '')}</p>{'<div class="info-grid"><div class="info"><small>Observações</small><b>'+safe(s.get('notes') or '')+'</b></div></div>' if s.get('notes') else ''}</div>
     {customer_items_html}
     <div class="value-grid"><div class="value-card"><small>VALOR DO SERVIÇO</small><strong>R$ {float(s.get('price') or 0):,.2f}</strong><span>Valor registrado na OS</span></div><div class="value-card"><small>GARANTIA</small><strong>{safe(s.get('warranty') or '—')}</strong><span>Conforme condições da KV CELL</span></div><div class="value-card"><small>STATUS</small><strong>{safe(label)}</strong><span>Atualização pelo painel</span></div></div>
