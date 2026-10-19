@@ -351,7 +351,7 @@ def dashboard(unit):
     return {'customers':customers,'open_services':services,'vitrine':vitrine,'low_stock':low,'income':float(income or 0),'expense':float(expense or 0),'sales':sales}
 
 class Handler(BaseHTTPRequestHandler):
-    server_version='KV-CELL-PREMIUM/10.0'
+    server_version='KV-CELL-PREMIUM/3002.0'
     def log_message(self,*a): pass
     def send(self,status,body,ctype='application/json',headers=None):
         if isinstance(body,str): body=body.encode()
@@ -383,7 +383,7 @@ class Handler(BaseHTTPRequestHandler):
         return u
     def do_GET(self):
         p=urlparse(self.path); path=p.path; qs=parse_qs(p.query)
-        if path=='/api/health': return self.json({'ok':True,'app':'KV CELL OS PREMIUM','version':'1111.1','port':PORT,'time':now()})
+        if path=='/api/health': return self.json({'ok':True,'app':'KV CELL OS PREMIUM','version':'3002.0','port':PORT,'time':now()})
         if path.startswith('/public/'):
             return self.public(path)
         if path=='/': return self.send(200,INDEX,'text/html')
@@ -1200,7 +1200,14 @@ class Handler(BaseHTTPRequestHandler):
             # Compatibilidade: token atual, token legado com espaços/codificação e links antigos usando ID numérico.
             s=one('SELECT * FROM services WHERE public_token=?',(t,))
             if not s and t.isdigit(): s=one('SELECT * FROM services WHERE id=?',(int(t),))
-            if not s and t: s=one('SELECT * FROM services WHERE lower(public_token)=lower(?)',(t,))
+            if not s and t: s=one('SELECT * FROM services WHERE lower(trim(COALESCE(public_token,'')))=lower(?)',(t,))
+            # Older releases sometimes shared unlock tokens through /public/os/. Resolve those links too.
+            if not s:
+                x=one('SELECT * FROM unlocks WHERE public_token=?',(t,))
+                if not x and t.isdigit(): x=one('SELECT * FROM unlocks WHERE id=?',(int(t),))
+                if x:
+                    cust=one('SELECT * FROM customers WHERE id=?',(x['customer_id'],)) if x['customer_id'] else None
+                    return self.send(200,public_unlock(x,cust),'text/html')
             if not s:return self.send(404,'OS não encontrada. Confira o link ou solicite à KV CELL um novo acompanhamento.','text/html')
             if not str(s.get('public_token') or '').strip():
                 new_token=secrets.token_urlsafe(18).replace('-','').replace('_','')
