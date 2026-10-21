@@ -1,4 +1,4 @@
-import os, json, sqlite3, hashlib, secrets, base64, zipfile, io, csv, html, urllib.request, urllib.parse, urllib.error, time, re, threading, shutil
+import os, json, sqlite3, hashlib, secrets, base64, zipfile, io, csv, html, urllib.request, urllib.parse, urllib.error, time, re, threading, shutil, queue, math
 from datetime import datetime, date, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import qrcode
@@ -23,6 +23,55 @@ BLOB_PREFIX=os.environ.get('SQUARE_BLOB_PREFIX','kvcell').strip(' /') or 'kvcell
 BLOB_PUBLIC_URL=os.environ.get('SQUARE_BLOB_PUBLIC_URL','').strip()
 BLOB_ENABLED=bool(BLOB_KEY and (BLOB_PUBLIC_URL or BLOB_ACCOUNT))
 FERNET_KEY=os.environ.get('KVCELL_DB_ENCRYPTION_KEY','').strip()
+TELEGRAM_QUEUE=queue.Queue(maxsize=500)
+TELEGRAM_WORKER_LOCK=threading.Lock()
+TELEGRAM_WORKER_STARTED=False
+TELEGRAM_FAILED_LOGIN_LAST={}
+
+def _telegram_send(text,timeout=8):
+    bot_token=os.environ.get('TELEGRAM_BOT_TOKEN','').strip()
+    chat_id=os.environ.get('TELEGRAM_CHAT_ID','').strip()
+    if not bot_token or not chat_id:return False
+    url=f'https://api.telegram.org/bot{bot_token}/sendMessage'
+    payload=json.dumps({'chat_id':chat_id,'text':str(text)[:4000],'disable_web_page_preview':True},ensure_ascii=False).encode()
+    request=urllib.request.Request(url,data=payload,headers={'Content-Type':'application/json'},method='POST')
+    try:
+        with urllib.request.urlopen(request,timeout=timeout) as response:
+            result=json.loads(response.read(65536).decode('utf-8'))
+        if response.status!=200 or not result.get('ok'):
+            raise RuntimeError('Telegram rejeitou o envio.')
+    except json.JSONDecodeError:
+        raise RuntimeError('Telegram retornou uma resposta inválida.') from None
+    except urllib.error.HTTPError as error:
+        raise RuntimeError(f'Telegram respondeu HTTP {error.code}.') from None
+    except (urllib.error.URLError,TimeoutError) as error:
+        raise RuntimeError(f'Falha de conexão com Telegram ({type(error).__name__}).') from None
+    return True
+
+def _telegram_worker():
+    while True:
+        text=TELEGRAM_QUEUE.get()
+        try:
+            _telegram_send(text)
+        except Exception as error:
+            print('KV CELL TELEGRAM AUDIT DELIVERY FAILED:',type(error).__name__,flush=True)
+        finally:
+            TELEGRAM_QUEUE.task_done()
+
+def telegram_notify(text):
+    global TELEGRAM_WORKER_STARTED
+    if not os.environ.get('TELEGRAM_BOT_TOKEN','').strip() or not os.environ.get('TELEGRAM_CHAT_ID','').strip():
+        return False
+    with TELEGRAM_WORKER_LOCK:
+        if not TELEGRAM_WORKER_STARTED:
+            threading.Thread(target=_telegram_worker,name='kv-telegram-audit',daemon=True).start()
+            TELEGRAM_WORKER_STARTED=True
+    try:
+        TELEGRAM_QUEUE.put_nowait(str(text)[:4000])
+        return True
+    except queue.Full:
+        print('KV CELL TELEGRAM AUDIT QUEUE FULL',flush=True)
+        return False
 
 def _blob_url():
     if BLOB_PUBLIC_URL: return BLOB_PUBLIC_URL.rstrip('/')
@@ -85,9 +134,13 @@ def schedule_blob_sync():
 
 SCHEMA='''
 CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT,email TEXT UNIQUE,password_hash TEXT,role TEXT,unit TEXT,permissions TEXT,active INTEGER DEFAULT 1,created_at TEXT);
-CREATE TABLE IF NOT EXISTS customers(id INTEGER PRIMARY KEY AUTOINCREMENT,type TEXT,name TEXT,document_type TEXT,document TEXT,phone_type TEXT,phone TEXT,email TEXT,address TEXT,city TEXT,birth_date TEXT,balance REAL DEFAULT 0,observations TEXT,created_at TEXT);
+CREATE TABLE IF NOT EXISTS customers(id INTEGER PRIMARY KEY AUTOINCREMENT,type TEXT,name TEXT,document_type TEXT,document TEXT,phone_type TEXT,phone TEXT,email TEXT,address TEXT,city TEXT,birth_date TEXT,balance REAL DEFAULT 0,observations TEXT,latitude REAL,longitude REAL,created_at TEXT);
 CREATE TABLE IF NOT EXISTS devices(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,customer_id INTEGER,brand TEXT,model TEXT,imei TEXT,serial TEXT,color TEXT,storage TEXT,status TEXT,photos TEXT DEFAULT '[]',notes TEXT,created_at TEXT);
 CREATE TABLE IF NOT EXISTS services(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,customer_id INTEGER,device_id INTEGER,kind TEXT,description TEXT,checklist TEXT,diagnosis TEXT,status TEXT,technician TEXT,price REAL,warranty TEXT,photos TEXT DEFAULT '[]',notes TEXT,public_token TEXT,created_at TEXT,updated_at TEXT,cost_material REAL DEFAULT 0,cost_labor REAL DEFAULT 0,cost_extra REAL DEFAULT 0,cost_total REAL DEFAULT 0,profit REAL DEFAULT 0,warranty_of_id INTEGER DEFAULT NULL,details_json TEXT DEFAULT '{}',technician_id INTEGER DEFAULT NULL);
+CREATE TABLE IF NOT EXISTS service_devices(service_id INTEGER NOT NULL,device_id INTEGER NOT NULL,created_at TEXT,PRIMARY KEY(service_id,device_id));
+CREATE INDEX IF NOT EXISTS idx_service_devices_device ON service_devices(device_id,service_id);
+CREATE TABLE IF NOT EXISTS service_status_history(id INTEGER PRIMARY KEY AUTOINCREMENT,service_id INTEGER NOT NULL,status TEXT NOT NULL,changed_at TEXT NOT NULL,user_id INTEGER,source TEXT);
+CREATE INDEX IF NOT EXISTS idx_service_status_history_service ON service_status_history(service_id,id);
 CREATE TABLE IF NOT EXISTS unlocks(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,customer_id INTEGER,device_id INTEGER,brand TEXT,model TEXT,imei TEXT,kind TEXT,checklist TEXT,status TEXT,operator TEXT,price REAL,photos TEXT DEFAULT '[]',notes TEXT,public_token TEXT,created_at TEXT,cost_material REAL DEFAULT 0,cost_labor REAL DEFAULT 0,cost_extra REAL DEFAULT 0,cost_total REAL DEFAULT 0,profit REAL DEFAULT 0,warranty_of_id INTEGER DEFAULT NULL,details_json TEXT DEFAULT '{}',technician_id INTEGER DEFAULT NULL);
 CREATE TABLE IF NOT EXISTS purchases(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,customer_id INTEGER,brand TEXT,model TEXT,imei TEXT,purchase_date TEXT,amount REAL,expenses REAL,freight REAL,total_cost REAL,suggested_price REAL,expected_profit REAL,photos TEXT DEFAULT '[]',checklist TEXT,observations TEXT,status TEXT,created_at TEXT);
 CREATE TABLE IF NOT EXISTS inventory(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,code TEXT,name TEXT,type TEXT,category TEXT,qty REAL,min_qty REAL,cost REAL,price REAL,supplier TEXT,compatibility TEXT,notes TEXT,created_at TEXT);
@@ -101,13 +154,16 @@ CREATE TABLE IF NOT EXISTS chat(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,u
 CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER,action TEXT,entity TEXT,entity_id INTEGER,details TEXT,created_at TEXT);
 CREATE TABLE IF NOT EXISTS settings(k TEXT PRIMARY KEY,v TEXT);
 CREATE TABLE IF NOT EXISTS notifications(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,title TEXT,message TEXT,read INTEGER DEFAULT 0,created_at TEXT);
-CREATE TABLE IF NOT EXISTS film_compat(id INTEGER PRIMARY KEY AUTOINCREMENT,brand TEXT,model TEXT,aliases TEXT,master_code TEXT,group_name TEXT,screen_size TEXT,fit_notes TEXT,source_note TEXT,confidence TEXT DEFAULT 'manual',created_at TEXT);
+CREATE TABLE IF NOT EXISTS film_compat(id INTEGER PRIMARY KEY AUTOINCREMENT,brand TEXT,model TEXT,aliases TEXT,master_code TEXT,group_name TEXT,screen_size TEXT,fit_notes TEXT,source_note TEXT,confidence TEXT DEFAULT 'manual',kind TEXT DEFAULT 'pelicula',created_at TEXT);
+CREATE TABLE IF NOT EXISTS diagnostics(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT NOT NULL,customer_id INTEGER,device_id INTEGER,brand TEXT NOT NULL,model TEXT NOT NULL,imei TEXT,symptoms TEXT NOT NULL,tests TEXT NOT NULL DEFAULT '[]',findings TEXT,recommendation TEXT,status TEXT NOT NULL DEFAULT 'aberto',estimate REAL NOT NULL DEFAULT 0,notes TEXT,created_by INTEGER,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_diagnostics_unit_status ON diagnostics(unit,status,id);
+CREATE INDEX IF NOT EXISTS idx_diagnostics_customer ON diagnostics(customer_id,id);
 CREATE TABLE IF NOT EXISTS ai_chat(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,user_id INTEGER,user_name TEXT,role TEXT,message TEXT,reply TEXT,created_at TEXT);
 CREATE TABLE IF NOT EXISTS activity_log(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,tag TEXT,user_id INTEGER,user_name TEXT,action TEXT,entity TEXT,entity_id INTEGER,details TEXT,created_at TEXT);
 CREATE TABLE IF NOT EXISTS undo_stack(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,user_id INTEGER,action TEXT,table_name TEXT,row_id INTEGER,before_json TEXT,after_json TEXT,undone INTEGER DEFAULT 0,created_at TEXT,undone_at TEXT);
 CREATE TABLE IF NOT EXISTS appointments(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,customer_id INTEGER,title TEXT,service_type TEXT,start_at TEXT,end_at TEXT,status TEXT,technician TEXT,notes TEXT,created_at TEXT);
 CREATE TABLE IF NOT EXISTS technicians(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,name TEXT,phone TEXT,email TEXT,specialties TEXT,active INTEGER DEFAULT 1,created_at TEXT);
-CREATE TABLE IF NOT EXISTS suppliers(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,name TEXT,document TEXT,phone TEXT,email TEXT,city TEXT,notes TEXT,created_at TEXT);
+CREATE TABLE IF NOT EXISTS suppliers(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,name TEXT,document TEXT,phone TEXT,email TEXT,address TEXT,neighborhood TEXT,postal_code TEXT,city TEXT,latitude REAL,longitude REAL,notes TEXT,created_at TEXT);
 CREATE TABLE IF NOT EXISTS guarantees(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,customer_id INTEGER,source_type TEXT,source_id INTEGER,device TEXT,description TEXT,start_date TEXT,end_date TEXT,status TEXT,notes TEXT,created_at TEXT);
 CREATE TABLE IF NOT EXISTS community_posts(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,user_name TEXT,title TEXT,message TEXT,type TEXT,status TEXT,created_at TEXT);
 CREATE TABLE IF NOT EXISTS referrals(id INTEGER PRIMARY KEY AUTOINCREMENT,unit TEXT,customer_id INTEGER,service_name TEXT,commission REAL DEFAULT 0,referrer TEXT,link TEXT,status TEXT,created_at TEXT);
@@ -175,12 +231,31 @@ def migrate_v10():
     c.execute('CREATE INDEX IF NOT EXISTS idx_mdm_installments_device ON mdm_installments(device_id,number)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_mdm_token ON mdm_devices(enrollment_token)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_mdm_customer ON mdm_devices(customer_id)')
+    c.execute('INSERT OR IGNORE INTO service_devices(service_id,device_id,created_at) SELECT id,device_id,COALESCE(created_at,?) FROM services WHERE device_id IS NOT NULL',(now(),))
+    c.execute("""INSERT INTO service_status_history(service_id,status,changed_at,source)
+                 SELECT s.id,s.status,COALESCE(NULLIF(s.updated_at,''),s.created_at,?),'migration'
+                 FROM services s
+                 WHERE COALESCE(s.status,'')<>''
+                   AND NOT EXISTS(SELECT 1 FROM service_status_history h WHERE h.service_id=s.id)""",(now(),))
     c.commit();c.close()
 migrate_v10()
 
 def activity(u,tag,action,entity='',entity_id=None,details=''):
-    try: write('INSERT INTO activity_log(unit,tag,user_id,user_name,action,entity,entity_id,details,created_at) VALUES(?,?,?,?,?,?,?,?,?)',(u.get('unit','TODOS'),tag,u.get('id'),u.get('name'),action,entity,entity_id,details,now()))
-    except Exception: pass
+    stamp=now()
+    try:
+        write('INSERT INTO activity_log(unit,tag,user_id,user_name,action,entity,entity_id,details,created_at) VALUES(?,?,?,?,?,?,?,?,?)',(u.get('unit','TODOS'),tag,u.get('id'),u.get('name'),action,entity,entity_id,details,stamp))
+    except Exception as error:
+        print('KV CELL ACTIVITY LOG FAILED:',type(error).__name__,flush=True)
+    parts=[
+        'KV CELL • EVENTO DO PAINEL',
+        f'Data: {stamp}',
+        f'Unidade: {str(u.get("unit") or "TODOS")[:40]}',
+        f'Usuário: {str(u.get("name") or "Sistema")[:80]}',
+        f'Ação: {str(action)[:120]}',
+    ]
+    if entity:parts.append(f'Módulo: {str(entity)[:60]}')
+    if entity_id is not None:parts.append(f'Registro: #{str(entity_id)[:30]}')
+    telegram_notify('\n'.join(parts))
 
 def push_undo(u,action,table,row_id,before,after):
     try: write('INSERT INTO undo_stack(unit,user_id,action,table_name,row_id,before_json,after_json,created_at) VALUES(?,?,?,?,?,?,?,?)',(u.get('unit','TODOS'),u.get('id'),action,table,row_id,js(before or {}),js(after or {}),now()))
@@ -195,8 +270,14 @@ def seed():
         c.execute('INSERT INTO users(name,email,password_hash,role,unit,permissions,created_at) VALUES(?,?,?,?,?,?,?)',('Administrador',admin_email,ph(admin_password),'admin','TODOS',json.dumps({'all':True}),'2026-10-04 00:00:00'))
         print('KV CELL INITIAL ADMIN:',admin_email,flush=True)
         if not os.environ.get('ADMIN_PASSWORD'): print('KV CELL INITIAL ADMIN PASSWORD:',admin_password,flush=True)
-    defaults={'company_name':'KV CELL','tagline':'OS PREMIUM • Laboratório avançado • Desde 2023','phone':'(21) 98042-1531','instagram':'@KV._CELL','units':'LAGOS,MAGÉ','currency':'BRL','theme':'yellow-black'}
+    defaults={'company_name':'KV CELL OS PRO','tagline':'OS PREMIUM • Laboratório avançado • Desde 2023','phone':'(21) 98042-1531','instagram':'@KV._CELL','units':'LAGOS,MAGÉ','currency':'BRL','theme':'black-yellow','catalog_slug':'kvcell','catalog_title':'KV CELL OS PRO','catalog_message':'Produtos, acessórios e serviços atualizados.','catalog_whatsapp':'(21) 98042-1531'}
     for k,v in defaults.items(): c.execute('INSERT OR IGNORE INTO settings(k,v) VALUES(?,?)',(k,v))
+    legacy_name=c.execute("SELECT v FROM settings WHERE k='company_name'").fetchone()
+    if legacy_name and str(legacy_name[0]).strip().upper() in ('KV CELL','KV CELL OS PREMIUM'):
+        c.execute("UPDATE settings SET v='KV CELL OS PRO' WHERE k='company_name'")
+    legacy_theme=c.execute("SELECT v FROM settings WHERE k='theme'").fetchone()
+    if legacy_theme and str(legacy_theme[0]).strip().lower() in ('yellow-black','amoled-neon'):
+        c.execute("UPDATE settings SET v='black-yellow' WHERE k='theme'")
     film_count=c.execute('SELECT COUNT(*) FROM film_compat').fetchone()[0]
     if film_count==0:
         groups={
@@ -237,7 +318,10 @@ def migrate():
     c=db()
     migrations={
         'quotes':['warranty_days INTEGER DEFAULT 0','travel_enabled INTEGER DEFAULT 0','travel_fee REAL DEFAULT 0',"quote_type TEXT DEFAULT 'servico'"],
-        'forgotten':["checklist TEXT DEFAULT '{}'"]
+        'forgotten':["checklist TEXT DEFAULT '{}'"],
+        'film_compat':["kind TEXT DEFAULT 'pelicula'"],
+        'customers':['latitude REAL','longitude REAL'],
+        'suppliers':['address TEXT','neighborhood TEXT','postal_code TEXT','latitude REAL','longitude REAL']
     }
     for table,cols in migrations.items():
         existing={r['name'] for r in c.execute(f'PRAGMA table_info({table})').fetchall()}
@@ -315,13 +399,105 @@ def seed_films_v502():
 
 seed_films_v502()
 
+def seed_films_reference_catalog():
+    """Populate the internal compatibility catalog from the scanned reference text."""
+    entries=[
+      ('capa','Xiaomi','Redmi 9A / Redmi 9I','Redmi 9A, Redmi 9I','','XIA-CAPA-01','Capa compartilhada entre os modelos listados.'),
+      ('capa','Xiaomi','Redmi 10C / POCO C40','Redmi 10C, POCO C40','','XIA-CAPA-02','Capa compartilhada entre os modelos listados.'),
+      ('capa','Xiaomi','Redmi Note 14 Pro / POCO X7 / Redmi Note 15','Redmi Note 14 Pro, POCO X7, Redmi Note 15','','XIA-CAPA-03','A mesma capa e indicada para os modelos listados.'),
+      ('capa','Motorola','Moto G6 Play / Moto E5','Moto G6 Play, Moto E5','','MOT-CAPA-01','Capa compartilhada entre os modelos listados.'),
+      ('capa','LG','K22 / K22+','K22, K22+','','LG-CAPA-01','Capa compartilhada entre os modelos listados.'),
+      ('capa','Xiaomi','POCO C61 / Redmi A3','POCO C61, Redmi A3','','XIA-CAPA-04','Capa compartilhada entre os modelos listados.'),
+      ('capa','Motorola','Moto E15 / Moto G05','Moto E15, Moto G05','','MOT-CAPA-02','Capa compartilhada entre os modelos listados.'),
+      ('capa','Motorola','Moto G52 / Moto G82','Moto G52, Moto G82','','MOT-CAPA-03','Capa compartilhada entre os modelos listados.'),
+      ('capa','Xiaomi','Redmi Note 11 Pro / Note 11 5G','Redmi Note 11 Pro, Redmi Note 11 5G','','XIA-CAPA-05','Confirmar protecao das cameras antes da venda.'),
+      ('capa','Xiaomi','POCO M6 Pro / Redmi 12 4G','POCO M6 Pro, Redmi 12 4G','','XIA-CAPA-06','A referencia indica uso da capa do Redmi 12 4G apenas.'),
+      ('capa','Realme','C21Y / C25Y / C25','Realme C21Y, Realme C25Y, Realme C25','','REALME-CAPA-01','A referencia recomenda a capa C25 normal.'),
+      ('capa','Samsung','A03s / A02s','Samsung A03s, Samsung A02s','','SAM-CAPA-01','Atencao: a biometria diferencia os modelos; confirmar fisicamente.'),
+      ('capa','Samsung','J7 Prime / J7 Prime 2','J7 Prime, J7 Prime 2','','SAM-CAPA-02','Capa compartilhada entre os modelos listados.'),
+      ('tela','Motorola','Moto G52 / G72 / G82 / G71s / Edge 30 / Edge 2022','Moto G52, Moto G72, Moto G82, Moto G71s, Edge 30, Edge 2022','','MOT-TELA-01','Referencia de tela sem aro; montagem interna pode variar.'),
+      ('tela','Motorola','Moto G10 / G20 / G30','Moto G10, Moto G20, Moto G30','','MOT-TELA-02','Referencia de tela sem aro; confirmar recorte e conector.'),
+      ('tela','Motorola','Moto G13 / G23','Moto G13, Moto G23','','MOT-TELA-03','Referencia de compatibilidade; confirmar lote.'),
+      ('tela','Motorola','Moto G22 / Moto E32','Moto G22, Moto E32','','MOT-TELA-04','Referencia de compatibilidade; confirmar lote.'),
+      ('tela','Motorola','Moto G31 / G41 / G71','Moto G31, Moto G41, Moto G71','','MOT-TELA-05','Referencia de compatibilidade; confirmar lote.'),
+      ('tela','Motorola','Moto E7 / E7 Power','Moto E7, Moto E7 Power','','MOT-TELA-06','Referencia de compatibilidade; confirmar lote.'),
+      ('tela','Motorola','Moto G9 Play / Moto E7 Plus','Moto G9 Play, Moto E7 Plus','','MOT-TELA-07','Referencia de compatibilidade; confirmar lote.'),
+      ('tela','Motorola','Moto G60 / G60s / G51 5G / G40 Fusion','Moto G60, Moto G60s, Moto G51 5G, Moto G40 Fusion','','MOT-TELA-08','Referencia de compatibilidade; confirmar lote.'),
+      ('tela','Samsung','A12 / A02 / A32 / M12','Samsung A12, A02, A32, M12','','SAM-TELA-01','Referencia de compatibilidade; confirmar aro.'),
+      ('tela','Samsung','A02s / A03 / A03s / A04e','Samsung A02s, A03, A03s, A04e','','SAM-TELA-02','Referencia de compatibilidade; confirmar aro.'),
+      ('tela','Samsung','A13 / M13','Samsung A13, M13','','SAM-TELA-03','Referencia de compatibilidade; confirmar aro.'),
+      ('tela','Samsung','M21 / M21s / M30 / M30s / M31','Samsung M21, M21s, M30, M30s, M31','','SAM-TELA-04','Referencia de compatibilidade; confirmar aro.'),
+      ('tela','Xiaomi','Redmi Note 11 4G / 11S 4G / 12S 4G / POCO M4 Pro','Redmi Note 11 4G, Redmi Note 11S 4G, Redmi Note 12S 4G, POCO M4 Pro','','XIA-TELA-01','Referencia de compatibilidade; confirmar aro e flex.'),
+      ('tela','Xiaomi','Redmi Note 12 4G / 12 5G / POCO X5 4G / X5 5G','Redmi Note 12 4G, Redmi Note 12 5G, POCO X5 4G, POCO X5 5G','','XIA-TELA-02','Referencia de compatibilidade; confirmar aro e flex.'),
+      ('tela','Xiaomi','Redmi 9A / 9C / 9i / 10A / POCO C3 / C31','Redmi 9A, 9C, 9i, 10A, POCO C3, POCO C31','','XIA-TELA-03','Referencia de compatibilidade; confirmar aro e flex.'),
+      ('tela','Xiaomi','Redmi 12C / 11A / POCO C55','Redmi 12C, Redmi 11A, POCO C55','','XIA-TELA-04','Referencia de compatibilidade; confirmar aro e flex.'),
+      ('tela','Xiaomi','Redmi Note 13 Pro 5G / POCO X6 Pro','Redmi Note 13 Pro 5G, POCO X6 Pro','','XIA-TELA-05','Referencia de compatibilidade; confirmar aro e flex.'),
+      ('tela','LG','K12 / K12+ / K40','LG K12, K12+, K40','','LG-TELA-01','Referencia de compatibilidade; confirmar aro.'),
+      ('tela','LG','K12 Prime / K12 Max / Q60 / K50','LG K12 Prime, K12 Max, Q60, K50','','LG-TELA-02','Referencia de compatibilidade; confirmar aro.'),
+      ('tela','LG','K41S / K51 / K51S / K6','LG K41S, K51, K51S, K6','','LG-TELA-03','Referencia de compatibilidade; confirmar aro.'),
+      ('bateria','Samsung','A10 / M10 / A7 2018','A10, M10, A7 2018','EB-BA750ABU','BAT-SAM-01','Codigo e modelos comerciais da tabela de baterias.'),
+      ('bateria','Samsung','A20 / A30 / A50','A20, A30, A50','EB-BA5054BN','BAT-SAM-02','Codigo e modelos comerciais da tabela de baterias.'),
+      ('bateria','Samsung','A10s / A20s','A10s, A20s','SCUD-WT-N6','BAT-SAM-03','Codigo e modelos comerciais da tabela de baterias.'),
+      ('bateria','Samsung','A6 / A6 Plus / J6 / J8','A6, A6 Plus, J6, J8/J8 Plus','EB-BJ805ABE','BAT-SAM-04','Codigo e modelos comerciais da tabela de baterias.'),
+      ('bateria','Samsung','Grand Prime / J2 Prime / J2 Pro / J2 Core / J3 / J5','Grand Prime, J2 Prime, J2 Pro, J2 Core, J3, J5','EB-BG530BBE','BAT-SAM-05','Codigo e modelos comerciais da tabela de baterias.'),
+      ('bateria','Motorola','Moto E4 / Moto C / G4 Play / G5','Moto E4, Moto C, G4 Play, G5','GK40','BAT-MOT-01','Codigo e modelos comerciais da tabela de baterias.'),
+      ('bateria','Motorola','Moto G4 / G4 Plus','Moto G4, Moto G4 Plus','GA40','BAT-MOT-02','Codigo e modelos comerciais da tabela de baterias.'),
+      ('bateria','Motorola','Moto E4 Plus / Moto E5 Plus','Moto E4 Plus, Moto E5 Plus','HE50','BAT-MOT-03','Codigo e modelos comerciais da tabela de baterias.'),
+      ('bateria','Xiaomi','Redmi S2 / Mi A1','Redmi S2, Mi A1','BN31','BAT-XIA-01','Codigo e modelos comerciais da tabela de baterias.'),
+      ('bateria','Xiaomi','Redmi Note 5 / Note 5 Pro','Redmi Note 5, Redmi Note 5 Pro','BN45','BAT-XIA-02','Codigo e modelos comerciais da tabela de baterias.'),
+      ('conector','Xiaomi/Samsung/LG','Redmi 12C / A1 / A2 / 9A / 9C / 9i / 10A / 8A / POCO C3 / Samsung A01 / A03 / LG K12 / K40 / K22','Redmi 12C, A1, A2, A1 Plus, A2 Plus, 9A, 9C, 9i, 10A, 8A, POCO C3, Samsung A01, A03, LG K12, K40, K22','','CON-V8-01','Grupo de conectores V8; confirmar pinagem antes da troca.'),
+      ('conector','Motorola','Moto E6i / E6 / E4 / E4 Plus / E5 / E5 Plus / G4 Play / G8 Power Lite','Moto E6i, E6, E4, E4 Plus, E5, E5 Plus, G4 Play, G8 Power Lite','','CON-V8-02','Grupo de conectores V8; confirmar pinagem antes da troca.'),
+      ('conector','Samsung','A02 / A01 / J8 / J6 / J4 / J7 / J5 / J1 / J2 / J3 / A10 / A10s','Samsung A02, A01, J8, J6, J4, J7, J5, J1, J2, J3, A10, A10s','','CON-V8-03','Grupo de conectores V8; confirmar pinagem antes da troca.'),
+      ('conector','LG','K10 / K8 / K5 / K4 / D377 / H815 / H502 / K350ds / Nexus 4 / Nexus 5','LG K10, K8, K5, K4, D377, H815, H502, K350ds, Nexus 4, Nexus 5','','CON-V8-04','Grupo de conectores V8; confirmar pinagem antes da troca.'),
+      ('conector','Samsung','S3 / I9300 / I9308 / I939 / T999 / I747 / I535 / L710','S3, I9300, I9308, I939, T999, I747, I535, L710','','CON-V8-05','Grupo de conectores V8; confirmar pinagem antes da troca.'),
+      ('conector-type-c','Samsung','A20 / A21s / A30 / A40 / A50 / A60 / A70 / M20 / M30 / A31 / A51 / A71 / A22 / A13','Modelos Samsung Type-C listados na referencia','','CON-TC-01','Compatibilidade de conector Type-C; confirmar subplaca e pinagem.'),
+      ('conector-type-c','LG/Motorola','A20s / A21 / LG K41s / K61s / K61 / Moto E7 / E7 Power / E20 / E30 / E22 / E32 / E40 / G50 5G','Modelos LG e Motorola Type-C listados na referencia','','CON-TC-02','Compatibilidade de conector Type-C; confirmar subplaca e pinagem.'),
+      ('conector-type-c','Samsung','A52 / A72 / A52s / A82 / A33 / A73 / A54 / A34','Modelos Samsung Type-C listados na referencia','','CON-TC-03','Compatibilidade de conector Type-C; confirmar subplaca e pinagem.'),
+      ('conector-type-c','Xiaomi','Redmi Note 11 4G / Note 11S / Note 11E / Redmi 10C / Note 12 5G / Note 12 Pro 5G / POCO X5 / X5 Pro','Modelos Xiaomi Type-C listados na referencia','','CON-TC-04','Compatibilidade de conector Type-C; confirmar subplaca e pinagem.')
+    ]
+    c=db()
+    try:
+        for kind,brand,model,aliases,master,group,notes in entries:
+            if c.execute('SELECT 1 FROM film_compat WHERE kind=? AND brand=? AND model=? LIMIT 1',(kind,brand,model)).fetchone(): continue
+            c.execute('INSERT INTO film_compat(brand,model,aliases,master_code,group_name,screen_size,fit_notes,source_note,confidence,kind,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',(brand,model,aliases,master,group,'',notes,'OfCell123: varredura textual de tabelas de compatibilidade; confirmar fisicamente antes da venda.','referencia-textual',kind,now()))
+        c.commit()
+    finally: c.close()
+
+seed_films_reference_catalog()
+
 def rowdict(r): return dict(r) if r else None
 def rows(sql,args=()):
     c=db(); r=[dict(x) for x in c.execute(sql,args).fetchall()]; c.close(); return r
 def one(sql,args=()):
     c=db(); r=c.execute(sql,args).fetchone(); c.close(); return dict(r) if r else None
 def write(sql,args=()):
-    c=db(); cur=c.execute(sql,args); c.commit(); rid=cur.lastrowid; c.close(); schedule_blob_sync(); return rid
+    c=db()
+    try:
+        cur=c.execute(sql,args); c.commit(); rid=cur.lastrowid
+    except Exception:
+        c.rollback()
+        raise
+    finally:
+        c.close()
+    schedule_blob_sync()
+    return rid
+
+def sync_reference_finance(c,ref_type,ref_id,unit,entry_type,category,description,amount):
+    amount=float(amount or 0)
+    existing=c.execute(
+        'SELECT id FROM finance WHERE ref_type=? AND ref_id=? ORDER BY id LIMIT 1',
+        (ref_type,ref_id),
+    ).fetchone()
+    if existing:
+        c.execute(
+            'UPDATE finance SET unit=?,type=?,category=?,description=?,amount=? WHERE id=?',
+            (unit,entry_type,category,description,amount,existing['id']),
+        )
+    elif amount>0:
+        c.execute(
+            'INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',
+            (unit,entry_type,category,description,amount,ref_type,ref_id,now()),
+        )
 
 def audit(uid,action,entity,eid,details=''):
     try: write('INSERT INTO audit(user_id,action,entity,entity_id,details,created_at) VALUES(?,?,?,?,?,?)',(uid,action,entity,eid,details,now()))
@@ -332,13 +508,73 @@ def js(v):
     try:return json.dumps(v,ensure_ascii=False)
     except:return '{}'
 def safe(s): return html.escape(str(s or ''))
+def telegram_field(value):
+    return re.sub(r'\s+',' ',re.sub(r'[\x00-\x1f\x7f]',' ',str(value or ''))).strip()
+def money_br(value):
+    return ('R$ '+f'{float(value or 0):,.2f}').replace(',','X').replace('.',',').replace('X','.')
+
+def normalize_service_device_ids(value,primary=None):
+    if value is None:
+        values=[] if primary in (None,'') else [primary]
+    elif isinstance(value,(list,tuple,set)):
+        values=list(value)
+    else:
+        values=[value]
+    ids=[]
+    for item in values:
+        if item in (None,''): continue
+        try: device_id=int(item)
+        except (TypeError,ValueError): raise ValueError('Identificador de aparelho inválido.')
+        if device_id<=0: raise ValueError('Identificador de aparelho inválido.')
+        if device_id not in ids: ids.append(device_id)
+    return ids
+
+def replace_service_devices(connection,service_id,device_ids,unit,customer_id):
+    if device_ids:
+        marks=','.join('?' for _ in device_ids)
+        devices=connection.execute('SELECT id,unit,customer_id FROM devices WHERE id IN ('+marks+')',device_ids).fetchall()
+        found={int(row['id']):row for row in devices}
+        if len(found)!=len(device_ids): raise ValueError('Um ou mais aparelhos selecionados não existem.')
+        for device_id in device_ids:
+            device=found[device_id]
+            if unit not in ('',None,'TODOS') and device['unit'] not in (None,'','TODOS',unit):
+                raise ValueError('O aparelho selecionado pertence a outra unidade.')
+            if customer_id and device['customer_id'] and int(device['customer_id'])!=int(customer_id):
+                raise ValueError('O aparelho selecionado pertence a outro cliente.')
+    connection.execute('DELETE FROM service_devices WHERE service_id=?',(service_id,))
+    stamp=now()
+    connection.executemany(
+        'INSERT INTO service_devices(service_id,device_id,created_at) VALUES(?,?,?)',
+        [(service_id,device_id,stamp) for device_id in device_ids]
+    )
+
+def service_devices_for(service_id,primary_device_id=None):
+    linked=rows('SELECT d.id,d.brand,d.model,d.color,d.storage FROM service_devices sd JOIN devices d ON d.id=sd.device_id WHERE sd.service_id=? ORDER BY sd.device_id',(service_id,))
+    if linked: return linked
+    if primary_device_id:
+        device=one('SELECT id,brand,model,color,storage FROM devices WHERE id=?',(primary_device_id,))
+        if device: return [device]
+    return []
+
+def public_url(handler,path):
+    base=(os.environ.get('PUBLIC_BASE_URL') or 'https://kvcell.squareweb.app').strip().rstrip('/')
+    if base:
+        parsed=urlparse(base)
+        if parsed.scheme in ('http','https') and parsed.netloc and not parsed.username and not parsed.password:
+            return base+path
+        raise ValueError('PUBLIC_BASE_URL deve ser uma URL HTTP(S) válida.')
+    host=(handler.headers.get('X-Forwarded-Host') or handler.headers.get('Host') or '').split(',')[0].strip()
+    if not re.fullmatch(r'[A-Za-z0-9.-]+(?::[0-9]{1,5})?',host):
+        host='localhost:'+str(PORT)
+    proto=(handler.headers.get('X-Forwarded-Proto') or '').split(',')[0].strip().lower()
+    if proto not in ('http','https'):
+        proto='http' if host.startswith('localhost') or host.startswith('127.0.0.1') else 'https'
+    return proto+'://'+host+path
 
 def unit_filter(table,unit):
     return ('',[]) if not unit or unit=='TODOS' else (f' WHERE unit=?',[unit])
 
 def dashboard(unit):
-    cond,args=unit_filter('services',unit)
-    def count(q,a=args): return one(q,a)['n']
     svccond,sargs=unit_filter('services',unit); purcond,pargs=unit_filter('purchases',unit); invcond,iargs=unit_filter('inventory',unit); fincond,fargs=unit_filter('finance',unit)
     income=one('SELECT COALESCE(SUM(amount),0) n FROM finance'+fincond+' AND type="entrada"' if fincond else 'SELECT COALESCE(SUM(amount),0) n FROM finance WHERE type="entrada"',fargs)['n']
     expense=one('SELECT COALESCE(SUM(amount),0) n FROM finance'+fincond+' AND type="saida"' if fincond else 'SELECT COALESCE(SUM(amount),0) n FROM finance WHERE type="saida"',fargs)['n']
@@ -348,10 +584,28 @@ def dashboard(unit):
     vitrine=q('SELECT COUNT(*) n FROM purchases'+purcond+(' AND status="vitrine"' if purcond else ' WHERE status="vitrine"'),pargs)
     low=q('SELECT COUNT(*) n FROM inventory'+invcond+(' AND qty<=min_qty' if invcond else ' WHERE qty<=min_qty'),iargs)
     sales=q('SELECT COUNT(*) n FROM sales'+unit_filter('sales',unit)[0],unit_filter('sales',unit)[1])
-    return {'customers':customers,'open_services':services,'vitrine':vitrine,'low_stock':low,'income':float(income or 0),'expense':float(expense or 0),'sales':sales}
+    status_counts={str(x['status'] or '').strip().lower():int(x['n']) for x in rows('SELECT status,COUNT(*) n FROM services'+svccond+' GROUP BY lower(trim(COALESCE(status,"")))',sargs)}
+    service_total=sum(status_counts.values())
+    quotecond,qargs=unit_filter('quotes',unit)
+    pending_quotes=q('SELECT COUNT(*) n FROM quotes'+quotecond+(' AND lower(COALESCE(status,"")) NOT IN ("aprovado","recusado","expirado")' if quotecond else ' WHERE lower(COALESCE(status,"")) NOT IN ("aprovado","recusado","expirado")'),qargs)
+    appcond,aargs=unit_filter('appointments',unit)
+    appointments_today=q('SELECT COUNT(*) n FROM appointments'+appcond+(' AND substr(COALESCE(start_at,""),1,10)=?' if appcond else ' WHERE substr(COALESCE(start_at,""),1,10)=?'),aargs+[date.today().isoformat()])
+    fiadocond,fiadoargs=unit_filter('fiado_accounts',unit)
+    credit_outstanding=q('SELECT COALESCE(SUM(MAX(0,COALESCE(balance,0))),0) n FROM fiado_accounts'+fiadocond,fiadoargs)
+    salescond,salesargs=unit_filter('sales',unit)
+    recent_sales=rows('SELECT s.id,s.unit,s.items,s.total,s.created_at,c.name customer_name FROM sales s LEFT JOIN customers c ON c.id=s.customer_id'+(' WHERE s.unit=?' if unit and unit!='TODOS' else '')+' ORDER BY s.id DESC LIMIT 5',salesargs)
+    recent_services=rows('SELECT s.id,s.unit,s.description,s.status,s.created_at,c.name customer_name FROM services s LEFT JOIN customers c ON c.id=s.customer_id'+(' WHERE s.unit=?' if unit and unit!='TODOS' else '')+' ORDER BY s.id DESC LIMIT 5',sargs)
+    activity_rows=rows('SELECT tag,user_name,action,entity,entity_id,created_at FROM activity_log'+(' WHERE unit=?' if unit and unit!='TODOS' else '')+' ORDER BY id DESC LIMIT 8',unit_filter('activity_log',unit)[1])
+    return {'customers':customers,'open_services':services,'vitrine':vitrine,'low_stock':low,'income':float(income or 0),'expense':float(expense or 0),'sales':sales,
+            'service_total':service_total,'services_in_progress':status_counts.get('em andamento',0),
+            'services_waiting_approval':status_counts.get('aguardando aprovação',0)+status_counts.get('aguardando aprovacao',0)+status_counts.get('pendente aprovação',0)+status_counts.get('pendente aprovacao',0),
+            'services_waiting_parts':status_counts.get('aguardando peça',0)+status_counts.get('aguardando peças',0)+status_counts.get('aguardando pecas',0),
+            'services_ready':status_counts.get('pronto',0),'services_completed':status_counts.get('finalizado',0)+status_counts.get('concluído',0)+status_counts.get('concluido',0),
+            'services_delivered':status_counts.get('entregue',0),'pending_quotes':pending_quotes,'appointments_today':appointments_today,
+            'credit_outstanding':float(credit_outstanding or 0),'recent_sales':recent_sales,'recent_services':recent_services,'recent_activity':activity_rows}
 
 class Handler(BaseHTTPRequestHandler):
-    server_version='KV-CELL-PREMIUM/3002.0'
+    server_version='KV-CELL-PREMIUM/4000.0'
     def log_message(self,*a): pass
     def send(self,status,body,ctype='application/json',headers=None):
         if isinstance(body,str): body=body.encode()
@@ -379,13 +633,70 @@ class Handler(BaseHTTPRequestHandler):
         if not last or time.time()-last>=SESSION_IDLE_SECONDS:
             SESSIONS.pop(sid,None); SESSION_LAST_ACTIVITY.pop(sid,None)
             self.json({'error':'Sessão expirada após 30 minutos sem atividade'},401,headers={'Set-Cookie':'sid=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax'}); return None
+        fresh=one('SELECT id,name,email,role,unit,permissions,active FROM users WHERE id=?',(u.get('id'),))
+        if not fresh or not fresh.get('active'):
+            SESSIONS.pop(sid,None); SESSION_LAST_ACTIVITY.pop(sid,None)
+            self.json({'error':'Usuário inativo ou removido'},401,headers={'Set-Cookie':'sid=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax'}); return None
+        u=fresh; SESSIONS[sid]=u
         SESSION_LAST_ACTIVITY[sid]=time.time()
         return u
+    def authorize_module(self,u,path):
+        if u.get('role')=='admin': return True
+        route=path[5:].strip('/').split('/',1)[0] if path.startswith('/api/') else ''
+        direct={
+            'me':None,'dashboard':'dashboard','chart':'finance','profit':'finance',
+            'settings':'settings','notifications':'dashboard','mark-notifications':'dashboard',
+            'export':'admin','search':'search','customer-search':'customers',
+            'customer-stats':'customers','films':'films','activity':'logs','audit':'logs',
+            'undo':'admin','ai':'admin','fiado':'fiado','fiado-payments':'fiado',
+            'appointments':'agenda','technicians':'technicians','technician-stats':'technicians',
+            'suppliers':'suppliers','guarantees':'guarantees','community':'community',
+            'referrals':'referrals','catalog-products':'catalog','catalog':'catalog',
+            'services':'services','unlocks':'unlock','quotes':'quotes','sales':'pdv',
+            'diagnostics':'diagnostics',
+            'pdv':'pdv','finance':'finance','inventory':'inventory','purchases':'purchases',
+            'customers':'customers','devices':'devices','forgotten':'forgotten',
+            'contracts':'contracts','users':'users','chat':'chat_units','models':'pricing',
+            'film_compat':'films','film-compat':'films',
+            'upload':'uploads','adb':'adb','radar':'customers',
+        }
+        if route=='telegram':
+            action=path[5:].strip('/').split('/')
+            module={'service':'services','quote':'quotes'}.get(action[1] if len(action)>1 else '','admin')
+        else:
+            module=direct.get(route,'admin')
+        if path=='/api/export/inventory.csv':module='inventory'
+        if module is None:return True
+        if module in ('users','admin','settings') and u.get('role')!='admin':
+            self.json({'error':'Somente administrador pode acessar este módulo.'},403)
+            return False
+        if module=='finance' and u.get('role') not in ('admin','gerente'):
+            self.json({'error':'Somente administrador ou gerente pode acessar o financeiro.'},403)
+            return False
+        try:
+            permissions=u.get('permissions') or '{}'
+            if isinstance(permissions,str):permissions=json.loads(permissions)
+        except (TypeError,json.JSONDecodeError):
+            permissions={}
+        if not isinstance(permissions,dict):permissions={}
+        if module=='search':
+            return permissions.get('all') is True or any(permissions.get(key) is True for key in ('customers','devices','services','purchases'))
+        if permissions.get('all') is True or permissions.get(module) is True:return True
+        if module=='uploads':
+            return any(permissions.get(key) is True for key in ('services','purchases','devices','forgotten','contracts','customers'))
+        self.json({'error':f'Sem permissão para acessar o módulo {module}.'},403)
+        return False
     def do_GET(self):
         p=urlparse(self.path); path=p.path; qs=parse_qs(p.query)
-        if path=='/api/health': return self.json({'ok':True,'app':'KV CELL OS PREMIUM','version':'3002.0','port':PORT,'time':now()})
+        if path=='/api/health': return self.json({'ok':True,'app':'KV CELL OS PRO','version':'4000.0','port':PORT,'time':now()})
+        if path.startswith('/api/ai/') or path=='/api/mdm' or path.startswith('/api/mdm/'):
+            return self.json({'error':'Este módulo foi removido da versão ativa.'},404)
+        if path.startswith('/public/mdm/'):
+            return self.json({'error':'Este módulo foi removido da versão ativa.'},404)
         if path.startswith('/public/'):
-            return self.public(path)
+            return self.public(path,qs)
+        if path.startswith('/catalog/'):
+            return self.public('/public'+path,qs)
         if path=='/': return self.send(200,INDEX,'text/html')
         if path.startswith('/static/'):
             rel=urllib.parse.unquote(path[len('/static/'):]).lstrip('/')
@@ -411,15 +722,21 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(404,b'Not found','text/plain')
         u=self.require()
         if not u:return
+        if not self.authorize_module(u,path):return
+        if u.get('role')!='admin' and u.get('unit') not in (None,'','TODOS'):
+            qs['unit']=[u['unit']]
         if path=='/api/me': return self.json({'user':u})
         if path=='/api/dashboard': return self.json(dashboard(qs.get('unit',['TODOS'])[0]))
         if path=='/api/chart': return self.chart(qs.get('unit',['TODOS'])[0])
         if path=='/api/profit': return self.profit_api(qs.get('unit',['TODOS'])[0])
         if path=='/api/settings': return self.json({r['k']:r['v'] for r in rows('SELECT k,v FROM settings')})
         if path=='/api/notifications': return self.json(rows('SELECT * FROM notifications ORDER BY id DESC LIMIT 30'))
-        if path=='/api/export/backup': return self.backup()
-        if path=='/api/export/inventory.csv': return self.inventory_csv()
-        if path=='/api/search': return self.search(qs.get('q',[''])[0])
+        if path=='/api/invoices': return self.json([])
+        if path=='/api/export/backup':
+            if u.get('role')!='admin': return self.json({'error':'Somente administrador pode exportar o backup.'},403)
+            return self.backup()
+        if path=='/api/export/inventory.csv': return self.inventory_csv(qs.get('unit',['TODOS'])[0])
+        if path=='/api/search': return self.search(qs.get('q',[''])[0],u)
         if path=='/api/customer-search': return self.customer_search(qs.get('q',[''])[0])
         if path=='/api/customer-stats': return self.customer_stats(int(qs.get('id',['0'])[0] or 0))
         if path=='/api/films/search': return self.film_search(qs.get('q',[''])[0])
@@ -429,7 +746,11 @@ class Handler(BaseHTTPRequestHandler):
         if path=='/api/undo': return self.undo_list()
         if path=='/api/ai/chat': return self.ai_chat_list()
         if path=='/api/fiado': return self.fiado_api(qs)
-        if path=='/api/fiado-payments': return self.json(rows('SELECT * FROM fiado_payments WHERE account_id=? ORDER BY id DESC',(int(qs.get('id',['0'])[0] or 0),)))
+        if path=='/api/fiado-payments':
+            account=one('SELECT unit FROM fiado_accounts WHERE id=?',(int(qs.get('id',['0'])[0] or 0),))
+            if account and u.get('role')!='admin' and u.get('unit') not in (None,'','TODOS') and account.get('unit')!=u['unit']:
+                return self.json({'error':'Este fiado pertence a outra unidade.'},403)
+            return self.json(rows('SELECT * FROM fiado_payments WHERE account_id=? ORDER BY id DESC',(int(qs.get('id',['0'])[0] or 0),)))
         if path=='/api/appointments': return self.json(self.resource_with_customer('appointments',qs))
         if path=='/api/technicians': return self.json(rows('SELECT * FROM technicians ORDER BY id DESC LIMIT 500'))
         if path=='/api/technician-stats': return self.technician_stats(qs.get('unit',['TODOS'])[0])
@@ -447,6 +768,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send(404,b'Not found','text/plain')
     def do_POST(self):
         p=urlparse(self.path); path=p.path; data=self.body()
+        if path.startswith('/api/ai/') or path=='/api/mdm' or path.startswith('/api/mdm/'):
+            return self.json({'error':'Este módulo foi removido da versão ativa.'},404)
+        if path.startswith('/public/mdm/'):
+            return self.json({'error':'Este módulo foi removido da versão ativa.'},404)
         if path=='/api/login': return self.login(data)
         if path=='/api/logout': return self.logout()
         if path.startswith('/public/quote/'):
@@ -462,8 +787,14 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith('/public/'): return self.send(405,b'','text/plain')
         u=self.require()
         if not u:return
+        if not self.authorize_module(u,path):return
+        if u.get('role')!='admin' and u.get('unit') not in (None,'','TODOS'):
+            data['unit']=u['unit']
+        telegram_match=re.fullmatch(r'/api/telegram/(service|quote)/([0-9]+)',path)
+        if telegram_match:return self.telegram_client_message(telegram_match.group(1),telegram_match.group(2),u)
         if path=='/api/upload': return self.upload(data,u)
         if path=='/api/settings': return self.save_settings(data,u)
+        if path=='/api/pdv/checkout': return self.pdv_checkout(data,u)
         if path=='/api/mark-notifications': return self.json({'ok':True})
         if path=='/api/ai/evaluate': return self.ai_evaluate(data,u)
         if path=='/api/ai/price': return self.ai_price(data,u)
@@ -481,8 +812,13 @@ class Handler(BaseHTTPRequestHandler):
     def do_PUT(self):
         p=urlparse(self.path); u=self.require()
         if not u:return
+        if not self.authorize_module(u,p.path):return
+        if p.path.startswith('/api/ai/') or p.path=='/api/mdm' or p.path.startswith('/api/mdm/'):
+            return self.json({'error':'Este módulo foi removido da versão ativa.'},404)
         data=self.body(); path=p.path
-        if path.startswith('/api/'): return self.update_api(path[5:],data,u)
+        if path.startswith('/api/'):
+            try:return self.update_api(path[5:],data,u)
+            except sqlite3.IntegrityError as e:return self.json({'error':'Registro inválido ou duplicado: '+str(e)},400)
         self.send(404,b'Not found','text/plain')
     def login(self,d):
         cutoff=time.time()-SESSION_IDLE_SECONDS
@@ -490,26 +826,123 @@ class Handler(BaseHTTPRequestHandler):
             if last_seen<cutoff:
                 SESSIONS.pop(old_sid,None); SESSION_LAST_ACTIVITY.pop(old_sid,None)
         r=one('SELECT id,name,email,role,unit,permissions FROM users WHERE email=? AND password_hash=? AND active=1',(d.get('email','').strip().lower(),ph(d.get('password',''))))
-        if not r:return self.json({'error':'E-mail ou senha inválidos'},401)
+        if not r:
+            remote=self.client_address[0] if self.client_address else 'unknown'
+            last=TELEGRAM_FAILED_LOGIN_LAST.get(remote,0)
+            if time.time()-last>=60:
+                TELEGRAM_FAILED_LOGIN_LAST[remote]=time.time()
+                telegram_notify('KV CELL • TENTATIVA DE LOGIN NÃO VALIDADA\nNenhuma credencial ou dado pessoal foi incluído.')
+            return self.json({'error':'E-mail ou senha inválidos'},401)
         sid=secrets.token_urlsafe(32); SESSIONS[sid]=r; SESSION_LAST_ACTIVITY[sid]=time.time(); audit(r['id'],'login','users',r['id'])
+        activity(r,'LOGIN','Login realizado','users',r['id'])
         return self.json({'ok':True,'user':r},headers={'Set-Cookie':f'sid={sid}; Path=/; HttpOnly; SameSite=Lax'})
     def logout(self):
         u=self.user();
-        if u:audit(u['id'],'logout','users',u['id'])
+        if u:
+            audit(u['id'],'logout','users',u['id'])
+            activity(u,'LOGIN','Logout realizado','users',u['id'])
         c=self.headers.get('Cookie',''); sid=''
         for p in c.split(';'):
             if p.strip().startswith('sid='): sid=p.strip()[4:]
         SESSIONS.pop(sid,None); SESSION_LAST_ACTIVITY.pop(sid,None); return self.json({'ok':True},headers={'Set-Cookie':'sid=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax'})
+    def telegram_client_message(self,kind,rid,u):
+        try: rid=int(rid)
+        except (TypeError,ValueError): return self.json({'error':'Identificador inválido.'},400)
+        table='services' if kind=='service' else 'quotes' if kind=='quote' else None
+        if not table:return self.json({'error':'Tipo de mensagem inválido.'},404)
+        record=one('SELECT * FROM '+table+' WHERE id=?',(rid,))
+        if not record:return self.json({'error':'Registro não encontrado.'},404)
+        if u.get('role')!='admin' and u.get('unit') not in (None,'','TODOS') and record.get('unit') not in (None,u['unit']):
+            return self.json({'error':'Este registro pertence a outra unidade.'},403)
+        customer=one('SELECT name,phone FROM customers WHERE id=?',(record.get('customer_id'),)) if record.get('customer_id') else None
+        customer=customer or {}
+        name=telegram_field(customer.get('name') or 'Cliente')
+        phone=telegram_field(customer.get('phone') or '—')
+        if kind=='service':
+            device_names=[]
+            for device in service_devices_for(rid,record.get('device_id')):
+                device_name=telegram_field(' '.join(str(device.get(field) or '').strip() for field in ('brand','model')))
+                if device_name:device_names.append(device_name)
+            model=telegram_field(', '.join(dict.fromkeys(device_names)) or 'Não informado')
+            description=telegram_field(record.get('description') or 'Não informada')
+            try:
+                details=json.loads(record.get('details_json') or '{}')
+            except (TypeError,json.JSONDecodeError):
+                details={}
+            items=details.get('items',[]) if isinstance(details,dict) else []
+            item_lines=[]
+            if isinstance(items,list):
+                for item in items:
+                    if not isinstance(item,dict):continue
+                    label=telegram_field(item.get('description') or item.get('name') or item.get('label') or '')
+                    if not label:continue
+                    try:value=float(item.get('total',item.get('price',0)) or 0)
+                    except (TypeError,ValueError):value=0
+                    try:qty=float(item.get('qty',1) or 1)
+                    except (TypeError,ValueError):qty=1
+                    item_lines.append(f'• {label} ({qty:g}x): {money_br(value*qty)}')
+            service=telegram_field(details.get('service') or (', '.join(
+                telegram_field(item.get('description') or item.get('name') or '')
+                for item in items if isinstance(item,dict) and (item.get('description') or item.get('name'))
+            ) if isinstance(items,list) else '') or record.get('kind') or 'Conserto')
+            if not item_lines:item_lines=[f'• {description}: {money_br(record.get("price"))}']
+            text='\n'.join([
+                f'OS#{rid}',f'MODELO: {model}',f'SERVIÇO: {service}',
+                f'CLIENTE: {name} / {phone}',f'DESCRIÇÃO: {description}',
+                'VALOR COMPLETO COM DESCRIÇÃO DE CADA ITEM E VALOR:',
+                *item_lines,f'TOTAL: {money_br(record.get("price"))}',
+                'Agradecemos pela confiança na KV CELL! Estamos à disposição.',
+            ])
+        else:
+            try:items=json.loads(record.get('items') or '[]')
+            except (TypeError,json.JSONDecodeError):items=[]
+            device=one('SELECT brand,model FROM devices WHERE id=?',(record.get('device_id'),)) if record.get('device_id') else None
+            model=telegram_field(' '.join(str((device or {}).get(field) or '').strip() for field in ('brand','model')) or 'Não informado')
+            descriptions=[telegram_field(x.get('description') or x.get('name') or '') for x in items if isinstance(x,dict)]
+            service=telegram_field(', '.join(filter(None,descriptions)) or record.get('quote_type') or 'Serviço técnico')
+            item_lines=[]
+            for item in items if isinstance(items,list) else []:
+                if not isinstance(item,dict):continue
+                label=telegram_field(item.get('description') or item.get('name') or 'Peça / serviço')
+                quality=telegram_field(item.get('quality') or '')
+                try:unit_price=float(item.get('total',item.get('price',0)) or 0)
+                except (TypeError,ValueError):unit_price=0
+                try:qty=float(item.get('qty',1) or 1)
+                except (TypeError,ValueError):qty=1
+                item_lines.append(f'• {label}'+(f' — Qualidade: {quality}' if quality else '')+f' — {money_br(unit_price)}'+(f' (quantidade: {qty:g})' if qty!=1 else ''))
+            if not item_lines:item_lines=['• Nenhuma peça ou serviço detalhado.']
+            description=str(record.get('observations') or record.get('conditions') or 'Conforme avaliação técnica.').strip()
+            text='\n'.join([
+                f'ORÇAMENTO#{record.get("number") or rid}',f'MODELO: {model}',f'SERVIÇO: {service}',
+                f'CLIENTE: {name} / {phone}',f'DESCRIÇÃO: {description}',
+                'QUALIDADES DISPONÍVEIS:',
+                *item_lines,f'TOTAL: {money_br(record.get("total"))}',
+                'GARANTIA: telas com aro têm 90 dias; telas sem aro têm 30 dias. Na troca de tela, película de brinde.',
+                'Agradecemos por escolher a KV CELL! Ficamos à disposição.',
+            ])
+        message=text[:3800]
+        if not os.environ.get('TELEGRAM_BOT_TOKEN','').strip() or not os.environ.get('TELEGRAM_CHAT_ID','').strip():
+            return self.json({'ok':True,'sent':False,'configured':False,'message':message})
+        try:
+            _telegram_send(message)
+        except RuntimeError as error:
+            return self.json({'error':str(error),'sent':False,'configured':True,'message':message},502)
+        activity(u,'TELEGRAM','Compartilhou mensagem de cliente no Telegram',table,rid)
+        return self.json({'ok':True,'sent':True,'configured':True,'message':message})
     def list_api(self,resource,qs):
-        maps={'customers':'customers','devices':'devices','services':'services','unlocks':'unlocks','purchases':'purchases','inventory':'inventory','models':'models','quotes':'quotes','sales':'sales','finance':'finance','forgotten':'forgotten','contracts':'contracts','users':'users','chat':'chat','audit':'audit','appointments':'appointments','technicians':'technicians','suppliers':'suppliers','guarantees':'guarantees','community':'community_posts','referrals':'referrals','catalog-products':'catalog_products'}
+        maps={'customers':'customers','devices':'devices','services':'services','unlocks':'unlocks','diagnostics':'diagnostics','purchases':'purchases','inventory':'inventory','models':'models','quotes':'quotes','sales':'sales','finance':'finance','forgotten':'forgotten','contracts':'contracts','users':'users','chat':'chat','audit':'audit','appointments':'appointments','technicians':'technicians','suppliers':'suppliers','guarantees':'guarantees','community':'community_posts','referrals':'referrals','catalog-products':'catalog_products'}
         if resource not in maps:return self.json({'error':'Recurso inválido'},404)
+        current=self.user() or {}
+        if resource=='users' and current.get('role')!='admin': return self.json({'error':'Somente administrador pode consultar usuários.'},403)
+        if resource=='finance' and current.get('role') not in ('admin','gerente'): return self.json({'error':'Sem permissão para consultar o financeiro.'},403)
         table=maps[resource]; unit=qs.get('unit',['TODOS'])[0]
         wh=[]; args=[]
-        if unit!='TODOS' and table not in ('customers','users','models','audit'): wh.append('unit=?');args.append(unit)
+        if unit!='TODOS' and table not in ('customers','users','models'): wh.append('unit=?');args.append(unit)
         if resource=='services' and qs.get('kind',[''])[0]:wh.append('kind=?');args.append(qs['kind'][0])
-        if qs.get('customer_id',[''])[0] and table in ('customers','devices','services','unlocks','purchases','quotes','sales','contracts'):
+        if qs.get('customer_id',[''])[0] and table in ('customers','devices','services','unlocks','diagnostics','purchases','quotes','sales','contracts'):
             wh.append('customer_id=?');args.append(int(qs['customer_id'][0]))
-        sql='SELECT * FROM '+table+(' WHERE '+' AND '.join(wh) if wh else '')+' ORDER BY id DESC LIMIT 500'
+        columns='id,name,email,role,unit,permissions,active,created_at' if resource=='users' else '*'
+        sql='SELECT '+columns+' FROM '+table+(' WHERE '+' AND '.join(wh) if wh else '')+' ORDER BY id DESC LIMIT 500'
         data=rows(sql,args)
         if resource in ('services','unlocks','quotes'):
             for x in data:
@@ -518,12 +951,28 @@ class Handler(BaseHTTPRequestHandler):
                     try:
                         write(f"UPDATE {table} SET public_token=? WHERE id=?",(t,x['id']))
                         x['public_token']=t
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print('KV CELL PUBLIC TOKEN MIGRATION:',repr(e),flush=True)
+                        return self.json({'error':'Não foi possível preparar o link público deste registro.'},500)
+        if resource=='services':
+            for x in data:
+                devices=service_devices_for(x['id'],x.get('device_id'))
+                x['device_ids']=[d['id'] for d in devices]
+                x['devices']=devices
+                x['public_url']=public_url(self,'/public/os/'+urllib.parse.quote(str(x.get('public_token') or ''),safe=''))
         if resource in ('services','unlocks'):
             for x in data:
                 if x.get('customer_id'):
                     c=one('SELECT name,phone FROM customers WHERE id=?',(x['customer_id'],)); x['customer_name']=c['name'] if c else ''; x['customer_phone']=c['phone'] if c else ''
+        if resource=='diagnostics':
+            for x in data:
+                if x.get('customer_id'):
+                    c=one('SELECT name,phone FROM customers WHERE id=?',(x['customer_id'],))
+                    x['customer_name']=c['name'] if c else ''
+                    x['customer_phone']=c['phone'] if c else ''
+                if x.get('device_id'):
+                    device=one('SELECT brand,model,imei FROM devices WHERE id=?',(x['device_id'],))
+                    x['device_label']=' '.join(str(device.get(k) or '') for k in ('brand','model')).strip() if device else ''
         return self.json(data)
     def resource_with_customer(self,table,qs):
         unit=qs.get('unit',['TODOS'])[0]
@@ -554,6 +1003,8 @@ class Handler(BaseHTTPRequestHandler):
     def fiado_payment(self,d,u):
         aid=int(d.get('account_id') or 0); acc=one('SELECT * FROM fiado_accounts WHERE id=?',(aid,))
         if not acc:return self.json({'error':'Fiado não encontrado.'},404)
+        if u.get('role')!='admin' and u.get('unit') not in (None,'','TODOS') and acc.get('unit')!=u['unit']:
+            return self.json({'error':'Este fiado pertence a outra unidade.'},403)
         amount=float(d.get('amount') or 0)
         if amount<=0:return self.json({'error':'Informe um valor de pagamento maior que zero.'},400)
         paid=float(one('SELECT COALESCE(SUM(amount),0) n FROM fiado_payments WHERE account_id=?',(aid,))['n'] or 0)
@@ -567,16 +1018,140 @@ class Handler(BaseHTTPRequestHandler):
         activity(u,'LOG','Recebeu parcela do fiado','fiado',aid,js({'amount':amount,'payment':d.get('payment','PIX')}))
         return self.json({'ok':True,'id':rid,'balance':newbal,'status':status})
 
+    def pdv_checkout(self,d,u):
+        items=d.get('items')
+        if not isinstance(items,list) or not items:
+            return self.json({'error':'O carrinho está vazio.'},400)
+        try:
+            purchase_ids=[int(item.get('purchase_id') or 0) for item in items]
+            discount=float(d.get('discount') or 0)
+            customer_id=int(d.get('customer_id') or 0) or None
+        except (TypeError,ValueError):
+            return self.json({'error':'Carrinho ou desconto inválido.'},400)
+        if any(not pid for pid in purchase_ids) or len(set(purchase_ids))!=len(purchase_ids):
+            return self.json({'error':'Cada aparelho deve aparecer uma única vez no carrinho.'},400)
+        payment=str(d.get('payment') or 'PIX').strip()
+        is_credit=payment.casefold() in ('fiado','fiado/crediário','fiado/crediario','crediário','crediario')
+        unit=str(d.get('unit') or u.get('unit') or 'TODOS').strip().upper()
+        if unit not in ('LAGOS','MAGÉ','TODOS'):
+            return self.json({'error':'Unidade inválida para o PDV.'},400)
+        if customer_id and not one('SELECT id FROM customers WHERE id=?',(customer_id,)):
+            return self.json({'error':'Cliente selecionado não existe.'},400)
+
+        c=db(); sale_ids=[]; fiado_ids=[]
+        try:
+            c.execute('BEGIN IMMEDIATE')
+            purchases=[]
+            for pid in purchase_ids:
+                row=c.execute('SELECT * FROM purchases WHERE id=?',(pid,)).fetchone()
+                if not row:
+                    c.rollback()
+                    return self.json({'error':f'Aparelho da compra #{pid} não encontrado.'},404)
+                purchase=dict(row)
+                if purchase.get('sold') or purchase.get('status')!='vitrine':
+                    c.rollback()
+                    return self.json({'error':f'O aparelho {purchase.get("brand","")} {purchase.get("model","")} não está mais disponível na vitrine.'},409)
+                if unit!='TODOS' and purchase.get('unit')!=unit:
+                    c.rollback()
+                    return self.json({'error':'O carrinho contém aparelho de outra unidade.'},403)
+                if c.execute('SELECT 1 FROM sales WHERE purchase_id=? LIMIT 1',(pid,)).fetchone():
+                    c.rollback()
+                    return self.json({'error':'Este aparelho já possui uma venda registrada.'},409)
+                price=float(purchase.get('suggested_price') or 0)
+                if price<=0:
+                    c.rollback()
+                    return self.json({'error':'O aparelho precisa ter preço de venda maior que zero.'},400)
+                purchases.append((purchase,price))
+
+            subtotal=sum(price for _,price in purchases)
+            if not 0<=discount<=subtotal:
+                c.rollback()
+                return self.json({'error':'O desconto deve estar entre zero e o subtotal do carrinho.'},400)
+            target_total=round(subtotal-discount,2)
+            remaining=target_total
+            stamp=now()
+            for index,(purchase,price) in enumerate(purchases):
+                amount=round(target_total*price/subtotal,2) if index<len(purchases)-1 else remaining
+                remaining=round(remaining-amount,2)
+                if amount<=0:
+                    c.rollback()
+                    return self.json({'error':'O desconto não pode zerar o valor de um aparelho.'},400)
+                description=f"{purchase.get('brand') or ''} {purchase.get('model') or ''}".strip()
+                cur=c.execute(
+                    'INSERT INTO sales(unit,customer_id,purchase_id,items,total,payment,created_at,payment_fee,net_total,payment_details) VALUES(?,?,?,?,?,?,?,?,?,?)',
+                    (purchase['unit'],customer_id,purchase['id'],description,amount,payment,stamp,0,amount,d.get('payment_details')),
+                )
+                sale_id=cur.lastrowid
+                sale_ids.append(sale_id)
+                c.execute(
+                    "UPDATE purchases SET sold=1,status='vendido',sale_date=?,sale_place='PDV',sale_price=?,sale_payment=?,sale_fee=0 WHERE id=?",
+                    (date.today().isoformat(),amount,payment,purchase['id']),
+                )
+                inv=c.execute("SELECT id FROM inventory WHERE source_type='purchase' AND source_id=?",(purchase['id'],)).fetchone()
+                if inv:
+                    c.execute("UPDATE inventory SET qty=0,notes=CASE WHEN instr(COALESCE(notes,''),' • VENDIDO NO PDV')>0 THEN notes ELSE COALESCE(notes,'')||' • VENDIDO NO PDV' END WHERE id=?",(inv['id'],))
+                else:
+                    c.execute(
+                        'INSERT INTO inventory(unit,code,name,type,category,qty,min_qty,cost,price,supplier,compatibility,notes,created_at,source_type,source_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                        (purchase['unit'],purchase.get('imei') or 'PUR-'+str(purchase['id']),description,'Aparelho','Vitrine',0,0,float(purchase.get('total_cost') or 0),price,None,'IMEI: '+str(purchase.get('imei') or ''),'Compra e Venda #'+str(purchase['id'])+' • VENDIDO NO PDV',stamp,'purchase',purchase['id']),
+                    )
+                if purchase.get('device_id'):
+                    c.execute("UPDATE devices SET status='Vendido' WHERE id=?",(purchase['device_id'],))
+                if not is_credit:
+                    c.execute(
+                        'INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',
+                        (purchase['unit'],'entrada','Venda',description,amount,'sale',sale_id,stamp),
+                    )
+                else:
+                    due=d.get('due_date') or None
+                    cur=c.execute(
+                        'INSERT INTO fiado_accounts(unit,customer_id,source_type,source_id,description,total,down_payment,balance,due_date,status,notes,installments,installment_value,frequency,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                        (purchase['unit'],customer_id,'sale',sale_id,description,amount,0,amount,due,'aberto',d.get('payment_details'),1,amount,'Mensal (30 dias)',stamp),
+                    )
+                    fiado_ids.append(cur.lastrowid)
+            c.commit()
+        except Exception:
+            c.rollback()
+            raise
+        finally:
+            c.close()
+        schedule_blob_sync()
+        for sale_id in sale_ids:
+            audit(u['id'],'create','sales',sale_id,js({'pdv_checkout':True,'payment':payment}))
+            activity(u,'LOG','Venda finalizada no PDV','sales',sale_id,js({'payment':payment}))
+        return self.json({'ok':True,'sale_ids':sale_ids,'fiado_ids':fiado_ids,'total':target_total,'payment':payment})
+
     def create_api(self,r,d,u):
+        if u.get('role')!='admin' and u.get('unit') not in (None,'','TODOS') and r in {
+            'devices','services','unlocks','purchases','inventory','quotes','sales',
+            'finance','forgotten','contracts','appointments','technicians','suppliers',
+            'guarantees','community','referrals','catalog-products','fiado','chat','diagnostics',
+        }:
+            d['unit']=u['unit']
         if r=='customers':
             rid=write('INSERT INTO customers(type,name,document_type,document,phone_type,phone,email,address,city,birth_date,balance,observations,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('type','PF'),d.get('name'),d.get('document_type','CPF'),d.get('document'),d.get('phone_type','Celular'),d.get('phone'),d.get('email'),d.get('address'),d.get('city'),d.get('birth_date'),float(d.get('balance') or 0),d.get('observations'),now()))
         elif r=='devices': rid=write('INSERT INTO devices(unit,customer_id,brand,model,imei,serial,color,storage,status,photos,notes,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('brand'),d.get('model'),d.get('imei'),d.get('serial'),d.get('color'),d.get('storage'),d.get('status','Em bancada'),js(d.get('photos',[])),d.get('notes'),now()))
         elif r=='services':
             t=token(); price=float(d.get('price') or 0); cm=float(d.get('cost_material') or 0); cl=float(d.get('cost_labor') or 0); ce=float(d.get('cost_extra') or 0); ct=cm+cl+ce; profit=price-ct
-            rid=write('INSERT INTO services(unit,customer_id,device_id,kind,description,checklist,diagnosis,status,technician,technician_id,price,warranty,photos,notes,public_token,created_at,updated_at,cost_material,cost_labor,cost_extra,cost_total,profit,warranty_of_id,details_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('device_id') or None,d.get('kind','conserto'),d.get('description'),js(d.get('checklist',{})),d.get('diagnosis'),d.get('status','aberto'),d.get('technician'),d.get('technician_id') or None,price,d.get('warranty'),js(d.get('photos',[])),d.get('notes'),t,now(),now(),cm,cl,ce,ct,profit,d.get('warranty_of_id') or None,js(d.get('details',{}))))
-            if d.get('status') in ('entregue',):
-                if price>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),'entrada','Serviço',d.get('description') or 'Conserto',price,'service',rid,now()))
-                if ct>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),'saida','Custo OS',d.get('description') or 'Custo de serviço',ct,'service_cost',rid,now()))
+            device_ids=normalize_service_device_ids(d.get('device_ids'),d.get('device_id'))
+            stamp=now(); unit=d.get('unit','TODOS'); customer_id=d.get('customer_id') or None
+            c=db()
+            try:
+                c.execute('BEGIN IMMEDIATE')
+                cur=c.execute('INSERT INTO services(unit,customer_id,device_id,kind,description,checklist,diagnosis,status,technician,technician_id,price,warranty,photos,notes,public_token,created_at,updated_at,cost_material,cost_labor,cost_extra,cost_total,profit,warranty_of_id,details_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(unit,customer_id,device_ids[0] if device_ids else None,d.get('kind','conserto'),d.get('description'),js(d.get('checklist',{})),d.get('diagnosis'),d.get('status','aberto'),d.get('technician'),d.get('technician_id') or None,price,d.get('warranty'),js(d.get('photos',[])),d.get('notes'),t,stamp,stamp,cm,cl,ce,ct,profit,d.get('warranty_of_id') or None,js(d.get('details',{}))))
+                rid=cur.lastrowid
+                replace_service_devices(c,rid,device_ids,unit,customer_id)
+                c.execute('INSERT INTO service_status_history(service_id,status,changed_at,user_id,source) VALUES(?,?,?,?,?)',(rid,d.get('status','aberto'),stamp,u.get('id'),'staff'))
+                if d.get('status')=='entregue':
+                    if price>0: c.execute('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(unit,'entrada','Serviço',d.get('description') or 'Conserto',price,'service',rid,stamp))
+                    if ct>0: c.execute('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(unit,'saida','Custo OS',d.get('description') or 'Custo de serviço',ct,'service_cost',rid,stamp))
+                c.commit()
+            except Exception:
+                c.rollback()
+                raise
+            finally:
+                c.close()
+            schedule_blob_sync()
         elif r=='unlocks':
             t=token(); price=float(d.get('price') or 0); cm=float(d.get('cost_material') or 0); cl=float(d.get('cost_labor') or 0); ce=float(d.get('cost_extra') or 0); ct=cm+cl+ce; profit=price-ct
             rid=write('INSERT INTO unlocks(unit,customer_id,device_id,brand,model,imei,kind,checklist,status,operator,technician_id,price,photos,notes,public_token,created_at,cost_material,cost_labor,cost_extra,cost_total,profit,warranty_of_id,details_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('device_id') or None,d.get('brand'),d.get('model'),d.get('imei'),d.get('kind'),js(d.get('checklist',{})),d.get('status','aberto'),d.get('operator'),d.get('technician_id') or None,price,js(d.get('photos',[])),d.get('notes'),t,now(),cm,cl,ce,ct,profit,d.get('warranty_of_id') or None,js(d.get('details',{}))))
@@ -584,45 +1159,129 @@ class Handler(BaseHTTPRequestHandler):
             if price>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),'entrada','Desbloqueio',d.get('kind') or 'Desbloqueio',price,'unlock',rid,now()))
             if ct>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),'saida','Custo Desbloqueio',d.get('kind') or 'Custo de desbloqueio',ct,'unlock_cost',rid,now()))
         elif r=='purchases':
-            total=float(d.get('amount') or 0)+float(d.get('expenses') or 0)+float(d.get('freight') or 0); sp=float(d.get('suggested_price') or 0); sold=1 if str(d.get('sold','')).lower() in ('1','true','sim','on') else 0
+            try:
+                amount=float(d.get('amount') or 0); expenses=float(d.get('expenses') or 0)
+                freight=float(d.get('freight') or 0); sp=float(d.get('suggested_price') or 0)
+                sale_price=float(d.get('sale_price') or 0); sale_fee=float(d.get('sale_fee') or 0)
+            except (TypeError,ValueError):
+                return self.json({'error':'Valores financeiros da compra inválidos.'},400)
+            if not all(0<=value<1e12 for value in (amount,expenses,freight,sp,sale_price,sale_fee)):
+                return self.json({'error':'Valores financeiros da compra devem ser positivos e finitos.'},400)
+            total=amount+expenses+freight
+            if sale_fee>sale_price:
+                return self.json({'error':'A taxa de venda não pode superar o valor da venda.'},400)
+            sold=1 if str(d.get('sold','')).lower() in ('1','true','sim','on') else 0
             status='vendido' if sold else d.get('status','vitrine')
-            rid=write('INSERT INTO purchases(unit,customer_id,device_id,brand,model,imei,purchase_date,amount,expenses,freight,total_cost,suggested_price,expected_profit,photos,checklist,observations,status,created_at,sold,sale_date,sale_place,sale_price,sale_payment,sale_installments,sale_fee,sale_notes,details_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('device_id') or None,d.get('brand'),d.get('model'),d.get('imei'),d.get('purchase_date') or date.today().isoformat(),float(d.get('amount') or 0),float(d.get('expenses') or 0),float(d.get('freight') or 0),total,sp,sp-total,js(d.get('photos',[])),js(d.get('checklist',{})),d.get('observations'),status,now(),sold,d.get('sale_date'),d.get('sale_place'),float(d.get('sale_price') or 0),d.get('sale_payment'),int(d.get('sale_installments') or 1),float(d.get('sale_fee') or 0),d.get('sale_notes'),js(d.get('details',{}))))
-            write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),'saida','Compra de aparelho',f"{d.get('brand','')} {d.get('model','')}",total,'purchase',rid,now()))
-            invname=f"{d.get('brand','')} {d.get('model','')}".strip(); code=d.get('imei') or ('PUR-'+str(rid)); write('INSERT INTO inventory(unit,code,name,type,category,qty,min_qty,cost,price,supplier,compatibility,notes,created_at,source_type,source_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),code,invname,'Aparelho','Vitrine',1,0,total,sp,d.get('supplier'),'IMEI: '+str(d.get('imei') or ''),(d.get('observations') or '')+' • Compra e Venda #'+str(rid),now(),'purchase',rid))
-            if sold and float(d.get('sale_price') or 0)>0:
-                net=float(d.get('sale_price') or 0)-float(d.get('sale_fee') or 0)
-                write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),'entrada','Venda de aparelho',f"{d.get('brand','')} {d.get('model','')}",net,'purchase_sale',rid,now()))
+            unit=d.get('unit','TODOS'); description=f"{d.get('brand','')} {d.get('model','')}".strip(); stamp=now()
+            c=db()
+            try:
+                c.execute('BEGIN IMMEDIATE')
+                cur=c.execute(
+                    'INSERT INTO purchases(unit,customer_id,device_id,brand,model,imei,purchase_date,amount,expenses,freight,total_cost,suggested_price,expected_profit,photos,checklist,observations,status,created_at,sold,sale_date,sale_place,sale_price,sale_payment,sale_installments,sale_fee,sale_notes,details_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                    (unit,d.get('customer_id') or None,d.get('device_id') or None,d.get('brand'),d.get('model'),d.get('imei'),d.get('purchase_date') or date.today().isoformat(),amount,expenses,freight,total,sp,sp-total,js(d.get('photos',[])),js(d.get('checklist',{})),d.get('observations'),status,stamp,sold,d.get('sale_date'),d.get('sale_place'),sale_price,d.get('sale_payment'),int(d.get('sale_installments') or 1),sale_fee,d.get('sale_notes'),js(d.get('details',{}))),
+                )
+                rid=cur.lastrowid
+                c.execute('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(unit,'saida','Compra de aparelho',description,total,'purchase',rid,stamp))
+                inventory_name=description or f"Aparelho {rid}"
+                c.execute(
+                    'INSERT INTO inventory(unit,code,name,type,category,qty,min_qty,cost,price,supplier,compatibility,notes,created_at,source_type,source_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                    (unit,d.get('imei') or ('PUR-'+str(rid)),inventory_name,'Aparelho','Vitrine',0 if sold else 1,0,total,sp,d.get('supplier'),'IMEI: '+str(d.get('imei') or ''),(d.get('observations') or '')+' • Compra e Venda #'+str(rid)+(' • VENDIDO NO PDV' if sold else ''),stamp,'purchase',rid),
+                )
+                if sold and sale_price>0:
+                    c.execute('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(unit,'entrada','Venda de aparelho',description,max(0,sale_price-sale_fee),'purchase_sale',rid,stamp))
+                c.commit()
+            except Exception:
+                c.rollback()
+                raise
+            finally:
+                c.close()
+            schedule_blob_sync()
         elif r=='inventory': rid=write('INSERT INTO inventory(unit,code,name,type,category,qty,min_qty,cost,price,supplier,compatibility,notes,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('code'),d.get('name'),d.get('type','Peça'),d.get('category'),float(d.get('qty') or 0),float(d.get('min_qty') or 0),float(d.get('cost') or 0),float(d.get('price') or 0),d.get('supplier'),d.get('compatibility'),d.get('notes'),now()))
         elif r=='models': rid=write('INSERT INTO models(brand,model,service_prices,margin,warranty,notes,created_at) VALUES(?,?,?,?,?,?,?)',(d.get('brand'),d.get('model'),js(d.get('service_prices',{})),float(d.get('margin') or 0),d.get('warranty'),d.get('notes'),now()))
         elif r=='quotes':
             num='ORC-'+datetime.now().strftime('%Y%m')+'-'+str(secrets.randbelow(9000)+1000); t=token(); items=d.get('items',[]); total=float(d.get('total') or 0); auto_total=sum(float(x.get('total',x.get('price',0)) or 0) for x in (items or [])); travel_enabled=1 if str(d.get('travel_enabled','0')).lower() in ('1','true','sim','on') else 0; travel_fee=float(d.get('travel_fee') or 0) if travel_enabled else 0; total=(total if total>0 else auto_total+travel_fee); warranty_days=int(d.get('warranty_days') or 0); rid=write('INSERT INTO quotes(number,unit,customer_id,device_id,items,subtotal,total,warranty_type,warranty_days,travel_enabled,travel_fee,quote_type,conditions,observations,valid_until,status,public_token,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(num,d.get('unit','TODOS'),d.get('customer_id') or None,d.get('device_id') or None,js(items),float(d.get('subtotal') or total),total,d.get('warranty_type','personalizada'),warranty_days,travel_enabled,travel_fee,d.get('quote_type','servico'),d.get('conditions'),d.get('observations'),d.get('valid_until'),d.get('status','aberto'),t,now()))
             return self.json({'ok':True,'id':rid,'number':num,'public_url':f'/public/quote/{t}'})
+        elif r=='sales' and d.get('purchase_id'):
+            try:
+                item_total=float(d.get('total') or 0)
+            except (TypeError,ValueError):
+                return self.json({'error':'Valor da venda inválido.'},400)
+            purchase=one('SELECT suggested_price FROM purchases WHERE id=?',(d.get('purchase_id'),))
+            if not purchase:return self.json({'error':'Aparelho da compra não encontrado.'},404)
+            price=float(purchase.get('suggested_price') or 0)
+            if item_total<=0 or item_total>price:return self.json({'error':'Valor de venda inválido para o preço cadastrado.'},400)
+            return self.pdv_checkout({
+                'unit':d.get('unit'),'customer_id':d.get('customer_id'),
+                'items':[{'purchase_id':d.get('purchase_id')}],
+                'discount':round(price-item_total,2),'payment':d.get('payment'),
+                'payment_details':d.get('payment_details'),'due_date':d.get('due_date'),
+            },u)
         elif r=='sales':
-            total=float(d.get('total') or 0); fee=float(d.get('payment_fee') or 0); net=float(d.get('net_total') or (total-fee))
-            rid=write('INSERT INTO sales(unit,customer_id,purchase_id,items,total,payment,created_at,payment_fee,net_total,payment_details) VALUES(?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('purchase_id') or None,d.get('items'),total,d.get('payment'),now(),fee,net,d.get('payment_details')))
-            write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),'entrada','Venda',d.get('items') or 'Venda',net,'sale',rid,now()))
-            if d.get('purchase_id'):
-                pid=int(d.get('purchase_id')); pp=one('SELECT * FROM purchases WHERE id=?',(pid,))
-                if pp and pp.get('status')!='vendido':
-                    write("UPDATE purchases SET sold=1,status='vendido',sale_date=?,sale_place='PDV',sale_price=?,sale_payment=?,sale_fee=? WHERE id=?",(date.today().isoformat(),total,d.get('payment'),fee,pid))
-                    if pp.get('device_id'): write("UPDATE devices SET status='Vendido' WHERE id=?",(pp['device_id'],))
-                    write("UPDATE inventory SET qty=0,notes=COALESCE(notes,'')||' • VENDIDO NO PDV' WHERE source_type='purchase' AND source_id=?",(pid,))
-            if str(d.get('payment') or '').lower()=='fiado':
-                due=d.get('due_date'); down=float(d.get('down_payment') or 0); balance=max(0,total-down); installments=max(1,int(d.get('installments') or 1)); inst_value=float(d.get('installment_value') or (balance/installments if installments else balance)); frequency=d.get('frequency') or 'Mensal (30 dias)'
-                fid=write('INSERT INTO fiado_accounts(unit,customer_id,source_type,source_id,description,total,down_payment,balance,due_date,status,notes,installments,installment_value,frequency,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,'sale',rid,d.get('items') or 'Venda fiada',total,down,balance,due,'aberto',d.get('payment_details'),installments,inst_value,frequency,now()))
-                if down>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),'entrada','Fiado / Entrada',d.get('items') or 'Venda fiada',down,'fiado',fid,now()))
-        elif r=='finance': rid=write('INSERT INTO finance(unit,type,category,description,amount,due_date,paid,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('type','entrada'),d.get('category'),d.get('description'),float(d.get('amount') or 0),d.get('due_date'),1 if d.get('paid',True) else 0,now()))
+            try:
+                total=float(d.get('total') or 0); fee=float(d.get('payment_fee') or 0)
+                net=float(d.get('net_total')) if d.get('net_total') is not None else total-fee
+                down=float(d.get('down_payment') or 0)
+            except (TypeError,ValueError):
+                return self.json({'error':'Valores financeiros da venda inválidos.'},400)
+            if not all(0<=value<1e12 for value in (total,fee,net,down)) or fee>total or net>total or down>total:
+                return self.json({'error':'Total, taxa, líquido ou entrada da venda são inválidos.'},400)
+            unit=d.get('unit','TODOS'); payment=str(d.get('payment') or '').strip()
+            is_credit=payment.casefold() in ('fiado','fiado/crediário','fiado/crediario','crediário','crediario')
+            stamp=now(); c=db()
+            try:
+                c.execute('BEGIN IMMEDIATE')
+                cur=c.execute(
+                    'INSERT INTO sales(unit,customer_id,purchase_id,items,total,payment,created_at,payment_fee,net_total,payment_details) VALUES(?,?,?,?,?,?,?,?,?,?)',
+                    (unit,d.get('customer_id') or None,None,d.get('items'),total,payment,stamp,fee,net,d.get('payment_details')),
+                )
+                rid=cur.lastrowid
+                if is_credit:
+                    balance=max(0,total-down); installments=max(1,int(d.get('installments') or 1))
+                    inst_value=float(d.get('installment_value') or (balance/installments if installments else balance))
+                    due=d.get('due_date') or None
+                    cur=c.execute(
+                        'INSERT INTO fiado_accounts(unit,customer_id,source_type,source_id,description,total,down_payment,balance,due_date,status,notes,installments,installment_value,frequency,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                        (unit,d.get('customer_id') or None,'sale',rid,d.get('items') or 'Venda fiada',total,down,balance,due,'pago' if balance<=0 else 'aberto',d.get('payment_details'),installments,inst_value,d.get('frequency') or 'Mensal (30 dias)',stamp),
+                    )
+                    if down>0:
+                        c.execute('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(unit,'entrada','Fiado / Entrada',d.get('items') or 'Venda fiada',down,'fiado',cur.lastrowid,stamp))
+                else:
+                    c.execute('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(unit,'entrada','Venda',d.get('items') or 'Venda',net,'sale',rid,stamp))
+                c.commit()
+            except Exception:
+                c.rollback()
+                raise
+            finally:
+                c.close()
+            schedule_blob_sync()
+        elif r=='finance':
+            if u.get('role') not in ('admin','gerente'): return self.json({'error':'Sem permissão para criar lançamentos financeiros.'},403)
+            rid=write('INSERT INTO finance(unit,type,category,description,amount,due_date,paid,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('type','entrada'),d.get('category'),d.get('description'),float(d.get('amount') or 0),d.get('due_date'),1 if d.get('paid',True) else 0,now()))
         elif r=='forgotten': rid=write('INSERT INTO forgotten(unit,customer_id,brand,model,imei,possible_owner,phone,photos,checklist,notes,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('brand'),d.get('model'),d.get('imei'),d.get('possible_owner'),d.get('phone'),js(d.get('photos',[])),js(d.get('checklist',{})),d.get('notes'),d.get('status','aguardando identificação'),now()))
         elif r=='contracts': rid=write('INSERT INTO contracts(unit,type,customer_id,device_id,payload,customer_signature,store_signature,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('type'),d.get('customer_id') or None,d.get('device_id') or None,js(d.get('payload',{})),d.get('customer_signature'),d.get('store_signature'),now()))
         elif r=='users':
             if u['role']!='admin':return self.json({'error':'Somente administrador'},403)
-            rid=write('INSERT INTO users(name,email,password_hash,role,unit,permissions,created_at) VALUES(?,?,?,?,?,?,?)',(d.get('name'),d.get('email'),ph(d.get('password','123456')),d.get('role','atendente'),d.get('unit','TODOS'),js(d.get('permissions',{'dashboard':True})),now()))
+            password=str(d.get('password') or '')
+            if len(password)<8:return self.json({'error':'A senha inicial deve ter pelo menos 8 caracteres.'},400)
+            name=str(d.get('name') or '').strip(); email=str(d.get('email') or '').strip().lower()
+            if not name or not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+',email):
+                return self.json({'error':'Informe um nome e um e-mail válido.'},400)
+            role=str(d.get('role','atendente'))
+            permissions=d.get('permissions',{'dashboard':True})
+            if role not in ('admin','gerente','tecnico','atendente'):
+                return self.json({'error':'Perfil de usuário inválido.'},400)
+            if isinstance(permissions,str):
+                try:permissions=json.loads(permissions)
+                except json.JSONDecodeError:return self.json({'error':'Permissões inválidas.'},400)
+            if not isinstance(permissions,dict) or any(not isinstance(value,bool) for value in permissions.values()):
+                return self.json({'error':'Permissões devem ser uma lista de módulos booleanos.'},400)
+            rid=write('INSERT INTO users(name,email,password_hash,role,unit,permissions,created_at) VALUES(?,?,?,?,?,?,?)',(name,email,ph(password),role,d.get('unit','TODOS'),js(permissions),now()))
         elif r=='appointments':
             rid=write('INSERT INTO appointments(unit,customer_id,title,service_type,start_at,end_at,status,technician,notes,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('title'),d.get('service_type'),d.get('start_at'),d.get('end_at'),d.get('status','agendado'),d.get('technician'),d.get('notes'),now()))
         elif r=='technicians':
             rid=write('INSERT INTO technicians(unit,name,phone,email,specialties,active,created_at) VALUES(?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('name'),d.get('phone'),d.get('email'),d.get('specialties'),1 if d.get('active',True) else 0,now()))
         elif r=='suppliers':
-            rid=write('INSERT INTO suppliers(unit,name,document,phone,email,city,notes,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('name'),d.get('document'),d.get('phone'),d.get('email'),d.get('city'),d.get('notes'),now()))
+            rid=write('INSERT INTO suppliers(unit,name,document,phone,email,address,neighborhood,postal_code,city,latitude,longitude,notes,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('name'),d.get('document'),d.get('phone'),d.get('email'),d.get('address'),d.get('neighborhood'),d.get('postal_code'),d.get('city'),d.get('latitude'),d.get('longitude'),d.get('notes'),now()))
         elif r=='guarantees':
             rid=write('INSERT INTO guarantees(unit,customer_id,source_type,source_id,device,description,start_date,end_date,status,notes,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('source_type'),d.get('source_id') or None,d.get('device'),d.get('description'),d.get('start_date') or date.today().isoformat(),d.get('end_date'),d.get('status','ativa'),d.get('notes'),now()))
         elif r=='community':
@@ -636,26 +1295,231 @@ class Handler(BaseHTTPRequestHandler):
             installments=max(1,int(d.get('installments') or 1)); inst_value=float(d.get('installment_value') or (balance/installments if installments else balance)); frequency=d.get('frequency') or 'Mensal (30 dias)'
             rid=write('INSERT INTO fiado_accounts(unit,customer_id,source_type,source_id,description,total,down_payment,balance,due_date,status,notes,installments,installment_value,frequency,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),d.get('customer_id') or None,d.get('source_type'),d.get('source_id') or None,d.get('description'),total,down,balance,due,status,d.get('notes'),installments,inst_value,frequency,now()))
             if down>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(d.get('unit','TODOS'),'entrada','Fiado / Entrada',d.get('description') or 'Entrada de fiado',down,'fiado',rid,now()))
-        elif r=='film_compat': rid=write('INSERT INTO film_compat(brand,model,aliases,master_code,group_name,screen_size,fit_notes,source_note,confidence,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)',(d.get('brand'),d.get('model'),d.get('aliases'),d.get('master_code'),d.get('group_name'),d.get('screen_size'),d.get('fit_notes'),d.get('source_note','cadastro interno'),d.get('confidence','manual'),now()))
+        elif r=='film_compat': rid=write('INSERT INTO film_compat(brand,model,aliases,master_code,group_name,screen_size,fit_notes,source_note,confidence,kind,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',(d.get('brand'),d.get('model'),d.get('aliases'),d.get('master_code'),d.get('group_name'),d.get('screen_size'),d.get('fit_notes'),d.get('source_note','cadastro interno'),d.get('confidence','manual'),d.get('kind','pelicula'),now()))
+        elif r=='diagnostics':
+            brand=str(d.get('brand') or '').strip()
+            model=str(d.get('model') or '').strip()
+            symptoms=str(d.get('symptoms') or '').strip()
+            status=str(d.get('status') or 'aberto').strip().lower()
+            try:
+                estimate=float(d.get('estimate') or 0)
+                tests=d.get('tests') or []
+                customer_id=int(d.get('customer_id') or 0) or None
+                device_id=int(d.get('device_id') or 0) or None
+            except (TypeError,ValueError):
+                return self.json({'error':'Dados inválidos para o diagnóstico.'},400)
+            if not brand or not model or not symptoms:
+                return self.json({'error':'Marca, modelo e relato do problema são obrigatórios.'},400)
+            if len(brand)>80 or len(model)>120 or len(symptoms)>4000:
+                return self.json({'error':'Revise os limites dos campos do diagnóstico.'},400)
+            if status not in ('aberto','em análise','concluído','convertido'):
+                return self.json({'error':'Status inválido para o diagnóstico.'},400)
+            if not math.isfinite(estimate) or estimate<0 or estimate>=1e12:
+                return self.json({'error':'A estimativa deve ser um valor válido e não negativo.'},400)
+            if not isinstance(tests,list) or len(tests)>40 or any(not isinstance(item,str) or len(item)>120 for item in tests):
+                return self.json({'error':'A lista de testes está inválida.'},400)
+            unit=d.get('unit','TODOS')
+            if customer_id and not one('SELECT id FROM customers WHERE id=?',(customer_id,)):
+                return self.json({'error':'Cliente não encontrado.'},400)
+            if device_id:
+                device=one('SELECT unit,customer_id FROM devices WHERE id=?',(device_id,))
+                if not device:
+                    return self.json({'error':'Aparelho não encontrado.'},400)
+                if device.get('unit') not in (unit,'TODOS'):
+                    return self.json({'error':'O aparelho pertence a outra unidade.'},400)
+                if customer_id and device.get('customer_id') not in (None,customer_id):
+                    return self.json({'error':'O aparelho selecionado não pertence ao cliente informado.'},400)
+            stamp=now()
+            rid=write('INSERT INTO diagnostics(unit,customer_id,device_id,brand,model,imei,symptoms,tests,findings,recommendation,status,estimate,notes,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(unit,customer_id,device_id,brand,model,str(d.get('imei') or '').strip(),symptoms,js(tests),str(d.get('findings') or '').strip(),str(d.get('recommendation') or '').strip(),status,estimate,str(d.get('notes') or '').strip(),u.get('id'),stamp,stamp))
         elif r=='chat': rid=write('INSERT INTO chat(unit,user_name,message,created_at) VALUES(?,?,?,?)',(d.get('unit','TODOS'),u['name'],d.get('message'),now()))
         else:return self.json({'error':'Recurso não suportado'},404)
-        audit(u['id'],'create',r,rid,js(d)); uu=dict(u); uu['unit']=d.get('unit',u.get('unit','TODOS')); activity(uu,'LOG',f'Criou {r}',r,rid,js(d)); push_undo(uu,f'Criou {r}',r,rid,{},d); return self.json({'ok':True,'id':rid})
+        audit(u['id'],'create',r,rid,js(d)); uu=dict(u); uu['unit']=d.get('unit',u.get('unit','TODOS')); activity(uu,'LOG',f'Criou {r}',r,rid,js(d)); push_undo(uu,f'Criou {r}',r,rid,{},d)
+        result={'ok':True,'id':rid}
+        if r=='services':
+            result['public_token']=t
+            result['public_url']=public_url(self,'/public/os/'+urllib.parse.quote(t,safe=''))
+        return self.json(result)
     def update_api(self,r,d,u):
         table=r; rid=d.get('id')
-        allowed={'customers':['type','name','document_type','document','phone_type','phone','email','address','city','birth_date','balance','observations'],'models':['brand','model','service_prices','margin','warranty','notes'],'users':['name','email','role','unit','permissions','active'],'services':['unit','customer_id','device_id','kind','description','status','diagnosis','technician','technician_id','price','warranty','notes','checklist','photos','cost_material','cost_labor','cost_extra','warranty_of_id','details_json'],'unlocks':['unit','customer_id','device_id','brand','model','kind','status','operator','technician_id','price','notes','checklist','photos','cost_material','cost_labor','cost_extra','warranty_of_id','details_json'],'devices':['unit','customer_id','brand','model','imei','serial','color','storage','status','notes','photos'],'forgotten':['unit','customer_id','brand','model','imei','possible_owner','phone','status','notes','photos','checklist'],'quotes':['unit','customer_id','device_id','status','valid_until','observations','conditions','warranty_type','warranty_days','travel_enabled','travel_fee','items','subtotal','total'],'inventory':['unit','code','name','type','category','qty','min_qty','price','cost','supplier','compatibility','notes'],'purchases':['unit','customer_id','device_id','brand','model','imei','purchase_date','amount','expenses','freight','total_cost','suggested_price','expected_profit','sold','sale_date','sale_place','sale_price','sale_payment','sale_installments','sale_fee','sale_notes','status','observations','photos','checklist','details_json'],'sales':['unit','customer_id','purchase_id','items','total','payment','payment_fee','net_total','payment_details'],'finance':['unit','type','category','description','amount','due_date','paid'],'appointments':['unit','customer_id','title','service_type','start_at','end_at','status','technician','notes'],'technicians':['unit','name','phone','email','specialties','active'],'suppliers':['unit','name','document','phone','email','city','notes'],'guarantees':['unit','customer_id','source_type','source_id','device','description','start_date','end_date','status','notes'],'community':['unit','title','message','type','status'],'referrals':['unit','customer_id','service_name','commission','referrer','link','status'],'catalog-products':['unit','name','category','price','stock','image','active'],'fiado':['unit','customer_id','source_type','source_id','description','total','down_payment','balance','due_date','status','notes','installments','installment_value','frequency']}
+        if table=='users' and u.get('role')!='admin': return self.json({'error':'Somente administrador pode atualizar usuários.'},403)
+        if table=='finance' and u.get('role') not in ('admin','gerente'): return self.json({'error':'Sem permissão para atualizar lançamentos financeiros.'},403)
+        allowed={'customers':['type','name','document_type','document','phone_type','phone','email','address','city','birth_date','balance','observations','latitude','longitude'],'models':['brand','model','service_prices','margin','warranty','notes'],'users':['name','email','role','unit','permissions','active'],'services':['unit','customer_id','device_id','device_ids','kind','description','status','diagnosis','technician','technician_id','price','warranty','notes','checklist','photos','cost_material','cost_labor','cost_extra','warranty_of_id','details_json'],'unlocks':['unit','customer_id','device_id','brand','model','kind','status','operator','technician_id','price','notes','checklist','photos','cost_material','cost_labor','cost_extra','warranty_of_id','details_json'],'diagnostics':['unit','customer_id','device_id','brand','model','imei','symptoms','tests','findings','recommendation','status','estimate','notes'],'devices':['unit','customer_id','brand','model','imei','serial','color','storage','status','notes','photos'],'forgotten':['unit','customer_id','brand','model','imei','possible_owner','phone','status','notes','photos','checklist'],'quotes':['unit','customer_id','device_id','status','valid_until','observations','conditions','warranty_type','warranty_days','travel_enabled','travel_fee','items','subtotal','total'],'inventory':['unit','code','name','type','category','qty','min_qty','price','cost','supplier','compatibility','notes'],'purchases':['unit','customer_id','device_id','brand','model','imei','purchase_date','amount','expenses','freight','total_cost','suggested_price','expected_profit','sold','sale_date','sale_place','sale_price','sale_payment','sale_installments','sale_fee','sale_notes','status','observations','photos','checklist','details_json'],'sales':['unit','customer_id','purchase_id','items','total','payment','payment_fee','net_total','payment_details'],'finance':['unit','type','category','description','amount','due_date','paid'],'appointments':['unit','customer_id','title','service_type','start_at','end_at','status','technician','notes'],'technicians':['unit','name','phone','email','specialties','active'],'suppliers':['unit','name','document','phone','email','address','neighborhood','postal_code','city','latitude','longitude','notes'],'guarantees':['unit','customer_id','source_type','source_id','device','description','start_date','end_date','status','notes'],'community':['unit','title','message','type','status'],'referrals':['unit','customer_id','service_name','commission','referrer','link','status'],'catalog-products':['unit','name','category','price','stock','image','active'],'fiado':['unit','customer_id','source_type','source_id','description','total','down_payment','balance','due_date','status','notes','installments','installment_value','frequency']}
         if table not in allowed:return self.json({'error':'Atualização não permitida'},400)
         before=one('SELECT * FROM '+table+' WHERE id=?',(rid,))
         if not before:return self.json({'error':'Registro não encontrado'},404)
-        fields=[f for f in allowed[table] if f in d]; vals=[]
-        if not fields:return self.json({'error':'Nenhum campo'},400)
+        if u.get('role')!='admin' and u.get('unit') not in (None,'','TODOS') and before.get('unit') not in (None,u['unit']):
+            return self.json({'error':'Este registro pertence a outra unidade.'},403)
+        if u.get('role')!='admin' and u.get('unit') not in (None,'','TODOS') and 'unit' in d and str(d['unit'])!=str(u['unit']):
+            return self.json({'error':'Não é permitido mover registros para outra unidade.'},403)
+        if table=='users':
+            if 'role' in d and d['role'] not in ('admin','gerente','tecnico','atendente'):
+                return self.json({'error':'Perfil de usuário inválido.'},400)
+            if 'name' in d:
+                d['name']=str(d['name'] or '').strip()
+                if not d['name']:return self.json({'error':'O nome do usuário é obrigatório.'},400)
+            if 'email' in d:
+                d['email']=str(d['email'] or '').strip().lower()
+                if not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+',d['email']):
+                    return self.json({'error':'Informe um e-mail válido.'},400)
+            if 'permissions' in d:
+                permissions=d['permissions']
+                if isinstance(permissions,str):
+                    try:permissions=json.loads(permissions)
+                    except json.JSONDecodeError:return self.json({'error':'Permissões inválidas.'},400)
+                if not isinstance(permissions,dict) or any(not isinstance(value,bool) for value in permissions.values()):
+                    return self.json({'error':'Permissões devem ser uma lista de módulos booleanos.'},400)
+                d['permissions']=permissions
+            if 'active' in d and str(d['active']).lower() not in ('0','1','false','true','off','on'):
+                return self.json({'error':'Estado ativo inválido.'},400)
+            target_role=d.get('role',before.get('role'))
+            target_active=str(d.get('active',before.get('active',1))).lower() in ('1','true','on')
+            if int(rid)==int(u.get('id') or 0) and (target_role!='admin' or not target_active):
+                return self.json({'error':'Não é permitido desativar ou rebaixar a própria conta administrativa.'},409)
+            if before.get('role')=='admin' and before.get('active') and (target_role!='admin' or not target_active):
+                admins=one("SELECT COUNT(*) n FROM users WHERE role='admin' AND active=1")
+                if int((admins or {}).get('n') or 0)<=1:
+                    return self.json({'error':'O sistema precisa manter ao menos um administrador ativo.'},409)
+        if table=='finance' and before.get('ref_type'):
+            return self.json({'error':'Lançamentos vinculados devem ser alterados pelo registro de origem.'},409)
+        numeric_fields={
+            'sales':('total','payment_fee','net_total'),
+            'purchases':('amount','expenses','freight','total_cost','suggested_price','expected_profit','sale_price','sale_fee'),
+        }
+        if table in numeric_fields:
+            try:
+                numeric={key:float(d[key]) for key in numeric_fields[table] if key in d and d[key] is not None}
+            except (TypeError,ValueError):
+                return self.json({'error':'Valores financeiros inválidos.'},400)
+            if any(not 0<=value<1e12 for value in numeric.values()):
+                return self.json({'error':'Valores financeiros devem ser positivos e finitos.'},400)
+            if table=='sales' and numeric.get('payment_fee',float(before['payment_fee'] or 0))>numeric.get('total',float(before['total'] or 0)):
+                return self.json({'error':'A taxa de pagamento não pode superar o valor da venda.'},400)
+            if table=='sales':
+                gross=numeric.get('total',float(before['total'] or 0))
+                net=numeric.get('net_total',gross-numeric.get('payment_fee',float(before['payment_fee'] or 0)))
+                if net>gross:
+                    return self.json({'error':'O valor líquido não pode superar o total da venda.'},400)
+            if table=='purchases' and numeric.get('sale_fee',float(before['sale_fee'] or 0))>numeric.get('sale_price',float(before['sale_price'] or 0)):
+                return self.json({'error':'A taxa de venda não pode superar o valor da venda.'},400)
+        if table=='sales' and any(k in d for k in ('total','payment_fee')) and 'net_total' not in d:
+            d['net_total']=float(d.get('total',before['total']) or 0)-float(d.get('payment_fee',before['payment_fee']) or 0)
+        if table=='purchases' and any(k in d for k in ('amount','expenses','freight','suggested_price')):
+            total_cost=sum(float(d.get(k,before[k]) or 0) for k in ('amount','expenses','freight'))
+            d['total_cost']=total_cost
+            d['expected_profit']=float(d.get('suggested_price',before['suggested_price']) or 0)-total_cost
+        status_values={
+            'services':{'aberto','aguardando aprovação','aguardando peça','aguardando dados','em andamento','pronto','finalizado','entregue','cancelado','garantia','garantia em análise','garantia em reparo','aprovado pelo cliente','recusado pelo cliente'},
+            'unlocks':{'aberto','em andamento','aguardando dados','pronto','entregue','pendente','cancelado','garantia'},
+            'quotes':{'aberto','enviado','aguardando','aprovado','recusado','expirado','cancelado'},
+            'appointments':{'agendado','confirmado','concluído','cancelado'},
+            'guarantees':{'ativa','em análise','em reparo','encerrada'},
+            'diagnostics':{'aberto','em análise','concluído','convertido'},
+        }
+        if table in status_values and 'status' in d:
+            status=str(d.get('status') or '').strip().lower()
+            if status not in status_values[table]:
+                return self.json({'error':'Status inválido para este registro.'},400)
+        fields=[f for f in allowed[table] if f in d and f!='device_ids']; vals=[]
+        if not fields and not (table=='services' and 'device_ids' in d):return self.json({'error':'Nenhum campo'},400)
+        if table=='diagnostics':
+            diagnostic_status=str(d.get('status',before.get('status')) or '').strip().lower()
+            if diagnostic_status not in status_values['diagnostics']:
+                return self.json({'error':'Status inválido para o diagnóstico.'},400)
+            try:
+                estimate=float(d.get('estimate',before.get('estimate')) or 0)
+                customer_id=int(d.get('customer_id',before.get('customer_id')) or 0) or None
+                device_id=int(d.get('device_id',before.get('device_id')) or 0) or None
+            except (TypeError,ValueError):
+                return self.json({'error':'Os dados do diagnóstico são inválidos.'},400)
+            if not math.isfinite(estimate) or estimate<0 or estimate>=1e12:
+                return self.json({'error':'A estimativa deve ser um valor válido e não negativo.'},400)
+            diagnostic_values={key:d.get(key,before.get(key)) for key in ('brand','model','symptoms')}
+            if any(not str(value or '').strip() for value in diagnostic_values.values()):
+                return self.json({'error':'Marca, modelo e relato do problema são obrigatórios.'},400)
+            if len(str(diagnostic_values['brand']))>80 or len(str(diagnostic_values['model']))>120 or len(str(diagnostic_values['symptoms']))>4000:
+                return self.json({'error':'Revise os limites dos campos do diagnóstico.'},400)
+            if 'tests' in d and (not isinstance(d['tests'],list) or len(d['tests'])>40 or any(not isinstance(item,str) or len(item)>120 for item in d['tests'])):
+                return self.json({'error':'A lista de testes está inválida.'},400)
+            target_unit=str(d.get('unit',before.get('unit')) or '').strip()
+            if not target_unit or len(target_unit)>80:
+                return self.json({'error':'Informe uma unidade válida para o diagnóstico.'},400)
+            if customer_id and not one('SELECT id FROM customers WHERE id=?',(customer_id,)):
+                return self.json({'error':'Cliente não encontrado.'},400)
+            if device_id:
+                device=one('SELECT unit,customer_id FROM devices WHERE id=?',(device_id,))
+                if not device:
+                    return self.json({'error':'Aparelho não encontrado.'},400)
+                if device.get('unit') not in (target_unit,'TODOS'):
+                    return self.json({'error':'O aparelho pertence a outra unidade.'},400)
+                if customer_id and device.get('customer_id') not in (None,customer_id):
+                    return self.json({'error':'O aparelho selecionado não pertence ao cliente informado.'},400)
+            d['customer_id']=customer_id
+            d['device_id']=device_id
+            d['estimate']=estimate
+            if 'updated_at' not in fields:
+                fields.append('updated_at')
+                d['updated_at']=now()
         for f in fields:
-            v=d[f]; v=js(v) if f in ('checklist','photos','details_json','items','permissions','service_prices') and not isinstance(v,str) else v; vals.append(v)
+            v=d[f]; v=js(v) if f in ('checklist','photos','details_json','items','permissions','service_prices','tests') and not isinstance(v,str) else v; vals.append(v)
+        device_ids=None
+        if table=='services' and 'device_ids' in d:
+            device_ids=normalize_service_device_ids(d.get('device_ids'))
+            if 'device_id' not in d:
+                if 'device_id' in fields:
+                    vals[fields.index('device_id')]=device_ids[0] if device_ids else None
+                else:
+                    fields.append('device_id'); vals.append(device_ids[0] if device_ids else None)
         if table in ('services','unlocks'):
             price=float(d.get('price',before['price']) or 0); cm=float(d.get('cost_material',before['cost_material']) or 0); cl=float(d.get('cost_labor',before['cost_labor']) or 0); ce=float(d.get('cost_extra',before['cost_extra']) or 0);
             for k,v in [('cost_material',cm),('cost_labor',cl),('cost_extra',ce),('cost_total',cm+cl+ce),('profit',price-(cm+cl+ce))]:
                 if k not in fields: fields.append(k); vals.append(v)
         if table=='services' and 'updated_at' not in fields: fields.append('updated_at'); vals.append(now())
-        vals.append(rid); write('UPDATE '+table+' SET '+','.join(f+'=?' for f in fields)+' WHERE id=?',vals)
+        vals.append(rid)
+        if table=='services':
+            c=db()
+            try:
+                c.execute('BEGIN IMMEDIATE')
+                if fields: c.execute('UPDATE services SET '+','.join(f+'=?' for f in fields)+' WHERE id=?',vals)
+                if device_ids is not None:
+                    replace_service_devices(c,rid,device_ids,d.get('unit',before['unit']),d.get('customer_id',before['customer_id']))
+                if 'status' in d and str(d.get('status') or '')!=str(before.get('status') or ''):
+                    c.execute('INSERT INTO service_status_history(service_id,status,changed_at,user_id,source) VALUES(?,?,?,?,?)',(rid,str(d.get('status') or ''),now(),u.get('id'),'staff'))
+                c.commit()
+            except Exception:
+                c.rollback()
+                raise
+            finally:
+                c.close()
+            schedule_blob_sync()
+        elif fields:
+            if table in ('sales','purchases'):
+                c=db()
+                try:
+                    c.execute('BEGIN IMMEDIATE')
+                    c.execute('UPDATE '+table+' SET '+','.join(f+'=?' for f in fields)+' WHERE id=?',vals)
+                    updated=rowdict(c.execute('SELECT * FROM '+table+' WHERE id=?',(rid,)).fetchone())
+                    if table=='sales':
+                        net=float(updated.get('net_total') or updated.get('total') or 0)
+                        sync_reference_finance(c,'sale',rid,updated['unit'],'entrada','Venda',updated.get('items') or 'Venda',net)
+                    else:
+                        purchase_description=f"{updated.get('brand') or ''} {updated.get('model') or ''}".strip()
+                        sync_reference_finance(c,'purchase',rid,updated['unit'],'saida','Compra de aparelho',purchase_description,float(updated.get('total_cost') or 0))
+                        has_pdv_sale=c.execute('SELECT 1 FROM sales WHERE purchase_id=? LIMIT 1',(rid,)).fetchone()
+                        sale_amount=0 if has_pdv_sale else (max(0,float(updated.get('sale_price') or 0)-float(updated.get('sale_fee') or 0)) if int(updated.get('sold') or 0) else 0)
+                        sync_reference_finance(c,'purchase_sale',rid,updated['unit'],'entrada','Venda de aparelho',purchase_description,sale_amount)
+                        if str(updated.get('status') or '')=='vitrine' and not int(updated.get('sold') or 0):
+                            c.execute("UPDATE inventory SET qty=1,price=?,cost=?,notes=REPLACE(COALESCE(notes,''),' • VENDIDO NO PDV','') WHERE source_type='purchase' AND source_id=?",(float(updated.get('suggested_price') or 0),float(updated.get('total_cost') or 0),rid))
+                        if str(updated.get('status') or '') in ('vendido','sucata') or int(updated.get('sold') or 0):
+                            c.execute("UPDATE inventory SET qty=0 WHERE source_type='purchase' AND source_id=?",(rid,))
+                    c.commit()
+                except Exception:
+                    c.rollback()
+                    raise
+                finally:
+                    c.close()
+                schedule_blob_sync()
+            else:
+                write('UPDATE '+table+' SET '+','.join(f+'=?' for f in fields)+' WHERE id=?',vals)
         after=one('SELECT * FROM '+table+' WHERE id=?',(rid,))
         # V100: on finalization, process parts/products linked to the OS exactly once.
         if table=='services' and after and str(after['status'] or '')=='entregue' and str(before['status'] or '')!='entregue':
@@ -683,39 +1547,87 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e: print('V100 STOCK FINALIZE:',e,flush=True)
         if table in ('services','unlocks'):
             rt='service' if table=='services' else 'unlock'; label='Serviço' if table=='services' else 'Desbloqueio'; costrt=rt+'_cost'
-            write('DELETE FROM finance WHERE ref_type IN (?,?) AND ref_id=?',(rt,costrt,rid))
             finance_ok=(table=='unlocks' or str(after['status'] or '')=='entregue')
             if finance_ok:
-                if float(after['price'] or 0)>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(after['unit'],'entrada',label,after['description'] if table=='services' else after['kind'],float(after['price'] or 0),rt,rid,now()))
-                if float(after['cost_total'] or 0)>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(after['unit'],'saida','Custo '+('OS' if table=='services' else 'Desbloqueio'),after['description'] if table=='services' else after['kind'],float(after['cost_total'] or 0),costrt,rid,now()))
-        if table=='sales':
-            write("DELETE FROM finance WHERE ref_type='sale' AND ref_id=?",(rid,));
-            net2=float(after['net_total'] or after['total'] or 0); 
-            if net2>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(after['unit'],'entrada','Venda',after['items'] or 'Venda',net2,'sale',rid,now()))
-        if table=='purchases':
-            write("DELETE FROM finance WHERE ref_type IN ('purchase','purchase_sale') AND ref_id=?",(rid,));
-            if float(after['total_cost'] or 0)>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(after['unit'],'saida','Compra de aparelho',f"{after['brand'] or ''} {after['model'] or ''}",float(after['total_cost'] or 0),'purchase',rid,now()))
-            if int(after['sold'] or 0) and float(after['sale_price'] or 0)>0: write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(after['unit'],'entrada','Venda de aparelho',f"{after['brand'] or ''} {after['model'] or ''}",float(after['sale_price'] or 0)-float(after['sale_fee'] or 0),'purchase_sale',rid,now()))
-        if table=='purchases':
-            if str(after['status'] or '')=='vitrine' and not int(after['sold'] or 0): write("UPDATE inventory SET qty=1,price=?,cost=?,notes=REPLACE(COALESCE(notes,''),' • VENDIDO NO PDV','') WHERE source_type='purchase' AND source_id=?",(float(after['suggested_price'] or 0),float(after['total_cost'] or 0),rid))
-            if str(after['status'] or '') in ('vendido','sucata') or int(after['sold'] or 0): write("UPDATE inventory SET qty=0 WHERE source_type='purchase' AND source_id=?",(rid,))
+                description=after['description'] if table=='services' else after['kind']
+                for ref_type,entry_type,category,amount in (
+                    (rt,'entrada',label,float(after['price'] or 0)),
+                    (costrt,'saida','Custo '+('OS' if table=='services' else 'Desbloqueio'),float(after['cost_total'] or 0)),
+                ):
+                    if amount<=0: continue
+                    existing=one('SELECT id FROM finance WHERE ref_type=? AND ref_id=? ORDER BY id LIMIT 1',(ref_type,rid))
+                    if existing:
+                        write('UPDATE finance SET unit=?,type=?,category=?,description=?,amount=? WHERE id=?',(after['unit'],entry_type,category,description,amount,existing['id']))
+                    else:
+                        write('INSERT INTO finance(unit,type,category,description,amount,ref_type,ref_id,created_at) VALUES(?,?,?,?,?,?,?,?)',(after['unit'],entry_type,category,description,amount,ref_type,rid,now()))
         if table=='fiado':
             paid=float(one('SELECT COALESCE(SUM(amount),0) n FROM fiado_payments WHERE account_id=?',(rid,))['n'] or 0); bal=max(0,float(after['total'] or 0)-float(after['down_payment'] or 0)-paid); write('UPDATE fiado_accounts SET balance=?,status=? WHERE id=?',(bal,'pago' if bal<=0 else ('atrasado' if after['due_date'] and after['due_date']<date.today().isoformat() else 'aberto'),rid))
         audit(u['id'],'update',table,rid,js(d)); uu=dict(u); uu['unit']=before['unit'] if 'unit' in before.keys() else u.get('unit','TODOS'); activity(uu,'LOG',f'Alterou {table}',table,rid,js(d)); push_undo(uu,f'Alterou {table}',table,rid,dict(before),dict(after)); return self.json({'ok':True,'profit':float(after.get('profit',0) or 0)})
     def do_DELETE(self):
         p=urlparse(self.path); u=self.require()
         if not u:return
+        if p.path.startswith('/api/ai/') or p.path=='/api/mdm' or p.path.startswith('/api/mdm/'):
+            return self.json({'error':'Este módulo foi removido da versão ativa.'},404)
         if not p.path.startswith('/api/'): return self.send(404,b'Not found','text/plain')
         resource=p.path[5:]; qs=parse_qs(p.query); rid=int(qs.get('id',['0'])[0] or 0)
-        maps={'customers':'customers','devices':'devices','services':'services','unlocks':'unlocks','purchases':'purchases','inventory':'inventory','models':'models','quotes':'quotes','sales':'sales','finance':'finance','forgotten':'forgotten','film_compat':'film_compat','chat':'chat','appointments':'appointments','technicians':'technicians','suppliers':'suppliers','guarantees':'guarantees','community':'community_posts','referrals':'referrals','catalog-products':'catalog_products','fiado':'fiado_accounts','users':'users','mdm':'mdm_devices'}
+        if not self.authorize_module(u,p.path):return
+        maps={'customers':'customers','devices':'devices','services':'services','unlocks':'unlocks','diagnostics':'diagnostics','purchases':'purchases','inventory':'inventory','models':'models','quotes':'quotes','sales':'sales','finance':'finance','forgotten':'forgotten','film_compat':'film_compat','chat':'chat','appointments':'appointments','technicians':'technicians','suppliers':'suppliers','guarantees':'guarantees','community':'community_posts','referrals':'referrals','catalog-products':'catalog_products','fiado':'fiado_accounts','users':'users','mdm':'mdm_devices'}
         if resource not in maps:return self.json({'error':'Recurso inválido'},404)
         row=one('SELECT * FROM '+maps[resource]+' WHERE id=?',(rid,))
         if not row:return self.json({'error':'Registro não encontrado'},404)
+        if u.get('role')!='admin' and u.get('unit') not in (None,'','TODOS') and row.get('unit') not in (None,u['unit']):
+            return self.json({'error':'Este registro pertence a outra unidade.'},403)
+        if resource=='users':
+            if rid==int(u.get('id') or 0):
+                return self.json({'error':'Não é permitido excluir a própria conta.'},409)
+            if row.get('role')=='admin' and row.get('active'):
+                admins=one("SELECT COUNT(*) n FROM users WHERE role='admin' AND active=1")
+                if int((admins or {}).get('n') or 0)<=1:
+                    return self.json({'error':'O sistema precisa manter ao menos um administrador ativo.'},409)
         if u['role']!='admin' and resource in ('users','finance'):return self.json({'error':'Sem permissão'},403)
-        if resource in ('services','unlocks','sales','purchases'):
-            refs={'services':('service','service_cost'),'unlocks':('unlock','unlock_cost'),'sales':('sale',),'purchases':('purchase','purchase_sale')}[resource]
-            for rt in refs: write('DELETE FROM finance WHERE ref_type=? AND ref_id=?',(rt,rid))
-        if resource=='fiado': write("DELETE FROM fiado_payments WHERE account_id=?",(rid,)); write("DELETE FROM finance WHERE ref_type='fiado' AND ref_id=?",(rid,))
+        if resource=='finance' and row.get('ref_type'):
+            return self.json({'error':'Lançamentos vinculados não podem ser excluídos diretamente.'},409)
+        if resource=='sales':
+            return self.json({'error':'Vendas não podem ser excluídas fisicamente; preserve o histórico e os lançamentos financeiros.'},409)
+        if resource=='purchases' and (
+            one('SELECT id FROM sales WHERE purchase_id=? LIMIT 1',(rid,))
+            or one("SELECT id FROM finance WHERE ref_id=? AND ref_type IN ('purchase','purchase_sale') LIMIT 1",(rid,))
+            or one('SELECT id FROM inventory WHERE source_type=? AND source_id=? LIMIT 1',('purchase',rid))
+        ):
+            return self.json({'error':'Esta compra possui estoque ou histórico financeiro vinculado e não pode ser excluída.'},409)
+        if resource=='quotes':
+            return self.json({
+                'error':'Orçamentos não podem ser excluídos fisicamente. Atualize o status para cancelado para preservar o histórico.',
+            },409)
+        if resource=='customers':
+            references=(
+                ('devices','Aparelhos'),('services','Ordens de serviço'),
+                ('unlocks','Desbloqueios'),('purchases','Compras'),
+                ('quotes','Orçamentos'),('sales','Vendas'),
+                ('contracts','Contratos'),('forgotten','Aparelhos esquecidos'),
+                ('appointments','Agendamentos'),('guarantees','Garantias'),
+                ('referrals','Indicações'),('fiado_accounts','Contas de fiado'),
+                ('mdm_devices','Registros MDM históricos'),
+            )
+            linked=[label for table,label in references
+                    if one(f'SELECT id FROM {table} WHERE customer_id=? LIMIT 1',(rid,))]
+            if linked:
+                return self.json({
+                    'error':'Este cliente possui registros vinculados e não pode ser excluído.',
+                    'references':linked,
+                },409)
+        if resource=='services':
+            if u['role'] not in ('admin','gerente'):return self.json({'error':'Somente administrador ou gerente pode cancelar uma OS.'},403)
+            if row.get('status')!='cancelado':
+                stamp=now()
+                write("UPDATE services SET status='cancelado',updated_at=? WHERE id=?",(stamp,rid))
+                write('INSERT INTO service_status_history(service_id,status,changed_at,user_id,source) VALUES(?,?,?,?,?)',(rid,'cancelado',stamp,u.get('id'),'staff'))
+                audit(u['id'],'cancel','services',rid,'OS cancelada; dados e histórico financeiro preservados.')
+                activity(u,'LOG','Cancelou OS','services',rid,'Dados da OS e lançamentos financeiros preservados.')
+            return self.json({'ok':True,'id':rid,'status':'cancelado','preserved':True})
+        if resource=='fiado' and one('SELECT id FROM fiado_payments WHERE account_id=? LIMIT 1',(rid,)):
+            return self.json({'error':'Este fiado possui pagamentos vinculados. Preserve o histórico e atualize o status em vez de excluí-lo.'},409)
+        if resource=='fiado': write("DELETE FROM fiado_payments WHERE account_id=?",(rid,))
         write('DELETE FROM '+maps[resource]+' WHERE id=?',(rid,)); uu=dict(u); uu['unit']=row['unit'] if 'unit' in row.keys() else u.get('unit','TODOS'); activity(uu,'LOG',f'Excluiu {resource}',resource,rid,js(dict(row))); push_undo(uu,f'Excluiu {resource}',maps[resource],rid,dict(row),{}); return self.json({'ok':True})
 
     def mdm_list(self,qs):
@@ -913,11 +1825,26 @@ class Handler(BaseHTTPRequestHandler):
         revenue=float(sv['revenue'] or 0)+float(un['revenue'] or 0)+float(pu['revenue'] or 0); costs=float(sv['costs'] or 0)+float(un['costs'] or 0)+float(pu['costs'] or 0)
         return self.json({'services':sv,'unlocks':un,'purchases':pu,'revenue':revenue,'costs':costs,'profit':revenue-costs})
 
-    def search(self,q):
-        q='%'+q+'%'; out=[]
-        for t,cols in [('customers',['name','phone','document']),('devices',['model','imei','brand']),('services',['description','technician']),('purchases',['model','imei','brand'])]:
+    def search(self,q,u):
+        q='%'+q+'%'; out=[]; permissions=u.get('permissions') or '{}'
+        if isinstance(permissions,str):
+            try:permissions=json.loads(permissions)
+            except json.JSONDecodeError:permissions={}
+        if not isinstance(permissions,dict):permissions={}
+        sources=[
+            ('customers','customers',['name','phone','document']),
+            ('devices','devices',['model','imei','brand']),
+            ('services','services',['description','technician']),
+            ('purchases','purchases',['model','imei','brand']),
+        ]
+        for module,t,cols in sources:
+            if u.get('role')!='admin' and permissions.get('all') is not True and permissions.get(module) is not True:continue
             for col in cols:
-                out += rows(f'SELECT "{t}" source,id,"{col}" value FROM {t} WHERE "{col}" LIKE ? LIMIT 20',(q,))
+                sql=f'SELECT "{t}" source,id,"{col}" value FROM {t} WHERE "{col}" LIKE ?'
+                args=[q]
+                if t!='customers' and u.get('role')!='admin' and u.get('unit') not in (None,'','TODOS'):
+                    sql+=' AND unit=?'; args.append(u['unit'])
+                out += rows(sql+' LIMIT 20',args)
         return self.json(out[:80])
     def customer_search(self,q):
         q=(q or '').strip()
@@ -1136,8 +2063,11 @@ class Handler(BaseHTTPRequestHandler):
         if not s:return self.json({'error':'OS não encontrada'},404)
         action=d.get('action')
         if action not in ('aprovado','recusado'):return self.json({'error':'Ação inválida'},400)
+        if str(s.get('status') or '').lower() in ('entregue','cancelado','finalizado','aprovado pelo cliente','recusado pelo cliente'):
+            return self.json({'error':'Esta OS não aceita mais respostas públicas.'},409)
         status='aprovado pelo cliente' if action=='aprovado' else 'recusado pelo cliente'
         write('UPDATE services SET status=?,updated_at=? WHERE id=?',(status,now(),s['id']))
+        write('INSERT INTO service_status_history(service_id,status,changed_at,source) VALUES(?,?,?,?)',(s['id'],status,now(),'customer'))
         write('INSERT INTO notifications(unit,title,message,created_at) VALUES(?,?,?,?)',(s['unit'],'Aprovação de OS',f'OS #{s['id']} foi {status}.',now()))
         activity({'unit':s['unit'],'id':None,'name':'CLIENTE'},'LOG',f'Cliente {action} OS','services',s['id'],d.get('message',''))
         return self.json({'ok':True,'status':status})
@@ -1147,6 +2077,11 @@ class Handler(BaseHTTPRequestHandler):
         if not q:return self.json({'error':'Orçamento não encontrado'},404)
         action=d.get('action')
         if action not in ('aprovado','recusado'):return self.json({'error':'Ação inválida'},400)
+        if str(q.get('status') or '').lower() in ('aprovado','recusado','expirado','cancelado'):
+            return self.json({'error':'Este orçamento já recebeu uma resposta ou expirou.'},409)
+        valid_until=str(q.get('valid_until') or '').strip()
+        if valid_until and valid_until[:10]<date.today().isoformat():
+            return self.json({'error':'Este orçamento expirou.'},409)
         write('UPDATE quotes SET status=? WHERE id=?',(action,q['id']))
         unit=q['unit']; msg=f"Orçamento {q['number']} foi {action} pelo cliente."
         write('INSERT INTO notifications(unit,title,message,created_at) VALUES(?,?,?,?)',(unit,'Resposta de orçamento',msg,now()))
@@ -1154,8 +2089,10 @@ class Handler(BaseHTTPRequestHandler):
         activity({'unit':unit,'id':None,'name':'CLIENTE'},'LOG',msg,'quotes',q['id'],d.get('message',''))
         return self.json({'ok':True,'status':action})
 
-    def inventory_csv(self):
-        data=rows('SELECT * FROM inventory ORDER BY id DESC'); out=io.StringIO();w=csv.writer(out);w.writerow(data[0].keys() if data else ['id']);[w.writerow(x.values()) for x in data];return self.send(200,out.getvalue(),'text/csv')
+    def inventory_csv(self,unit='TODOS'):
+        sql='SELECT * FROM inventory'; args=[]
+        if unit and unit!='TODOS':sql+=' WHERE unit=?';args.append(unit)
+        data=rows(sql+' ORDER BY id DESC',args); out=io.StringIO();w=csv.writer(out);w.writerow(data[0].keys() if data else ['id']);[w.writerow(x.values()) for x in data];return self.send(200,out.getvalue(),'text/csv')
     def backup(self):
         buf=io.BytesIO();
         with zipfile.ZipFile(buf,'w',zipfile.ZIP_DEFLATED) as z:
@@ -1166,7 +2103,13 @@ class Handler(BaseHTTPRequestHandler):
             z.writestr('README_BACKUP.txt','Backup KV CELL OS PREMIUM\nGerado em '+now())
             c.close()
         return self.send(200,buf.getvalue(),'application/zip',{'Content-Disposition':'attachment; filename=kvcell-backup.zip'})
-    def public(self,path):
+    def public(self,path,qs=None):
+        qs=qs or {}
+        if path.startswith('/public/catalog/'):
+            slug=urllib.parse.unquote(path.split('/')[-1]).strip()
+            return self.send(200,public_catalog(slug,self),'text/html')
+        if path.startswith('/public/mdm/'):
+            return self.send(404,'Este portal não está disponível na versão ativa.','text/html')
         if path == '/public/mdm/apk':
             configured=(os.environ.get('MDM_AGENT_APK_PATH') or '').strip()
             candidates=[configured] if configured else []
@@ -1195,12 +2138,18 @@ class Handler(BaseHTTPRequestHandler):
             cust=one('SELECT * FROM customers WHERE id=?',(q['customer_id'],)) if q['customer_id'] else None
             store={r['k']:r['v'] for r in rows('SELECT k,v FROM settings')}
             return self.send(200,public_quote(q,cust,store),'text/html')
-        if path.startswith('/public/os/'):
-            t=urllib.parse.unquote(path.split('/')[-1]).strip()
+        if path.startswith('/public/os'):
+            t=urllib.parse.unquote(path.split('/')[-1]).strip() if path.startswith('/public/os/') else ''
+            if not t:
+                for key in ('token','public_token','id','os_id','order_id'):
+                    value=(qs.get(key) or [''])[0]
+                    if value:
+                        t=urllib.parse.unquote(str(value)).strip()
+                        break
             # Compatibilidade: token atual, token legado com espaços/codificação e links antigos usando ID numérico.
             s=one('SELECT * FROM services WHERE public_token=?',(t,))
             if not s and t.isdigit(): s=one('SELECT * FROM services WHERE id=?',(int(t),))
-            if not s and t: s=one('SELECT * FROM services WHERE lower(trim(COALESCE(public_token,'')))=lower(?)',(t,))
+            if not s and t: s=one("SELECT * FROM services WHERE lower(trim(COALESCE(public_token,'')))=lower(?)",(t,))
             # Older releases sometimes shared unlock tokens through /public/os/. Resolve those links too.
             if not s:
                 x=one('SELECT * FROM unlocks WHERE public_token=?',(t,))
@@ -1215,13 +2164,38 @@ class Handler(BaseHTTPRequestHandler):
                 s=one('SELECT * FROM services WHERE id=?',(s['id'],))
             cust=one('SELECT * FROM customers WHERE id=?',(s['customer_id'],)) if s['customer_id'] else None
             store={r['k']:r['v'] for r in rows('SELECT k,v FROM settings')}
-            return self.send(200,public_os(s,cust,store),'text/html')
+            devices=service_devices_for(s['id'],s.get('device_id'))
+            history=rows('SELECT status,changed_at FROM service_status_history WHERE service_id=? ORDER BY id',(s['id'],))
+            return self.send(200,public_os(s,cust,store,devices,history),'text/html')
         if path.startswith('/public/unlock/'):
             t=path.split('/')[-1]; x=one('SELECT * FROM unlocks WHERE public_token=?',(t,));
             if not x:return self.send(404,'OS de desbloqueio não encontrada','text/html')
             cust=one('SELECT * FROM customers WHERE id=?',(x['customer_id'],)) if x['customer_id'] else None
             return self.send(200,public_unlock(x,cust),'text/html')
         self.send(404,b'Not found','text/plain')
+
+def public_catalog(slug,handler):
+    settings={r['k']:r['v'] for r in rows('SELECT k,v FROM settings')}
+    configured=str(settings.get('catalog_slug') or 'kvcell').strip().lower()
+    if not slug or slug.lower()!=configured:
+        return '<!doctype html><meta charset="utf-8"><title>Catálogo não encontrado</title><body style="font-family:Arial;background:#050505;color:#fff;padding:48px"><h1>Catálogo não encontrado</h1><p>Confira o link enviado pela loja.</p></body>'
+    title=safe(settings.get('catalog_title') or settings.get('company_name') or 'KV CELL')
+    message=safe(settings.get('catalog_message') or 'Produtos, acessórios e serviços atualizados.')
+    phone=re.sub(r'\D','',str(settings.get('catalog_whatsapp') or settings.get('phone') or ''))
+    products=rows("SELECT * FROM catalog_products WHERE active=1 AND (unit=? OR unit='TODOS') ORDER BY id DESC",(settings.get('catalog_unit') or 'TODOS',))
+    cards=[]
+    for item in products:
+        name=safe(item.get('name') or 'Produto')
+        category=safe(item.get('category') or 'Produto')
+        price=float(item.get('price') or 0)
+        price_text=('R$ '+format(price,'.2f')).replace('.',',')
+        image=item.get('image') or ''
+        visual=f'<img src="{safe(image)}" alt="{name}">' if image else '<div class="product-image">KV</div>'
+        text=urllib.parse.quote(f'Olá! Tenho interesse em {item.get("name") or "um produto"}.')
+        action=f'<a class="buy" href="https://wa.me/{phone}?text={text}" target="_blank" rel="noopener">Pedir pelo WhatsApp</a>' if phone else '<span class="buy disabled">Contato indisponível</span>'
+        cards.append(f'<article class="product">{visual}<div class="category">{category}</div><h2>{name}</h2><strong>{price_text}</strong><small>{safe(item.get("stock") or 0)} disponível(is)</small>{action}</article>')
+    return f'''<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{title} • Catálogo</title><style>
+    :root{{color-scheme:dark}}*{{box-sizing:border-box}}body{{margin:0;background:#050505;color:#f4f4f4;font:15px Arial,sans-serif}}main{{max-width:1120px;margin:auto;padding:24px}}header{{border:1px solid #2d2700;background:#0b0b0b;border-radius:20px;padding:28px;margin-bottom:22px;box-shadow:0 0 42px #f5d00012}}.brand{{color:#ffd400;font-size:12px;font-weight:800;letter-spacing:.14em;text-transform:uppercase}}h1{{font-size:32px;margin:8px 0;color:#fff}}p{{color:#a9a9a9}}.share{{display:flex;gap:10px;flex-wrap:wrap;margin-top:20px}}.share a,.share button{{border:0;border-radius:10px;padding:12px 16px;background:#ffd400;color:#090909;font-weight:800;text-decoration:none;cursor:pointer}}.share .dark{{background:#171717;color:#ffd400;border:1px solid #665600}}.grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px}}.product{{background:#101010;border:1px solid #302900;border-radius:16px;padding:14px;display:flex;flex-direction:column;gap:7px;min-height:320px}}.product img,.product-image{{width:100%;height:170px;object-fit:cover;border-radius:11px;background:#1c1c1c;display:grid;place-items:center;color:#ffd400;font-size:36px;font-weight:900}}.category{{color:#ffd400;font-size:11px;text-transform:uppercase;font-weight:800;letter-spacing:.08em}}.product h2{{font-size:17px;margin:0}}.product strong{{font-size:22px;color:#fff}}.product small{{color:#999}}.buy{{margin-top:auto;text-align:center;padding:11px;border-radius:9px;background:#ffd400;color:#080808;text-decoration:none;font-weight:800}}.disabled{{background:#2a2a2a;color:#777}}.empty{{border:1px dashed #554900;border-radius:14px;padding:40px;text-align:center;color:#aaa}}footer{{padding:28px 0;color:#777;font-size:12px}}@media(max-width:560px){{main{{padding:14px}}h1{{font-size:26px}}}}</style></head><body><main><header><div class="brand">KV CELL OS PRO • CATÁLOGO DIGITAL</div><h1>{title}</h1><p>{message}</p><div class="share"><a href="https://wa.me/{phone}?text={urllib.parse.quote("Olá! Quero conhecer o catálogo da KV CELL.")}" target="_blank" rel="noopener">Compartilhar no WhatsApp</a><button class="dark" onclick="navigator.clipboard?.writeText(location.href);this.textContent='Link copiado'">Copiar link</button></div></header><section class="grid">{''.join(cards) or '<div class="empty">Nenhum produto publicado no catálogo ainda.</div>'}</section><footer>Catálogo oficial da loja • atualizado pelo KV CELL OS PRO</footer></main></body></html>'''
 
 def public_mdm_enroll(d):
     return """<!doctype html><html lang="pt-BR"><meta name="viewport" content="width=device-width,initial-scale=1"><title>KV CELL • MDM</title><style>{css}.hero h1{{font-size:32px}}.warn{{border-color:#6b5b00;background:#171500}}.portal{{display:inline-block;background:#ffd400;color:#080808;text-decoration:none;font-weight:900;padding:13px 18px;border-radius:12px;margin-top:8px}}</style><main><header><b>KV CELL</b><span>MDM • CREDIÁRIO ANDROID</span></header><section class="hero"><small>PROVISIONAMENTO</small><h1>{name}</h1><p>{brand} {model}</p><div class="status">Token de enrollment pronto</div><a class="portal" href="/public/mdm/portal/{token}">Abrir portal do aparelho</a></section><div class="box"><h2>Como conectar</h2><ol><li>Instale o agente MDM autorizado da KV CELL no Android.</li><li>Abra o leitor de QR do fluxo de provisionamento.</li><li>Leia este convite e confirme a política no aparelho.</li></ol><p>Este portal não instala software oculto nem remove proteções do Android; a aplicação da política depende de um agente MDM provisionado legitimamente.</p></div><div class="box warn"><b>Política atual</b><p>{policy}</p><p>{msg}</p></div><footer>KV CELL • Crediário Android</footer></main></html>""".format(css=PUBLIC_CSS,name=safe(d['device_name']),brand=safe(d['brand']),model=safe(d['model']),policy=safe(d['policy_state']),msg=safe(d['custom_message']),token=safe(d['enrollment_token']))
@@ -1285,23 +2259,29 @@ def public_quote(q,c,store=None):
     if phone and not phone.startswith('55'): phone='55'+phone
     wa=('https://wa.me/'+phone+'?text='+urllib.parse.quote('Olá! Quero falar sobre o orçamento '+str(q['number'])+' da KV CELL.') if phone else '')
     status=str(q.get('status') or 'pendente').lower()
-    status_map={'aprovado':('APROVADO','approved'),'recusado':('RECUSADO','rejected'),'expirado':('EXPIRADO','expired')}
+    status_map={'aprovado':('APROVADO','approved'),'recusado':('RECUSADO','rejected'),'expirado':('EXPIRADO','expired'),'cancelado':('CANCELADO','expired')}
     label,kind=status_map.get(status,('AGUARDANDO APROVAÇÃO','pending'))
     rows=[]
     for x in items:
+        if not isinstance(x,dict):continue
         desc=safe(x.get('description',x.get('name','Serviço')))
         qty=safe(x.get('qty',1))
-        unit=float(x.get('price',0) or 0)
-        total=float(x.get('total',unit*float(x.get('qty',1) or 1)) or 0)
-        rows.append(f'<tr><td><b>{desc}</b><small>Serviço / item do orçamento</small></td><td>{qty}</td><td>R$ {unit:,.2f}</td><td><strong>R$ {total:,.2f}</strong></td></tr>')
+        unit=float(x.get('price',x.get('total',0)) or 0)
+        quantity=float(x.get('qty',1) or 1)
+        total=unit*quantity
+        quality=safe(x.get('quality') or '')
+        detail='Qualidade: '+quality if quality else 'Serviço / item do orçamento'
+        rows.append(f'<tr><td><b>{desc}</b><small>{detail}</small></td><td>{qty}</td><td>{money_br(unit)}</td><td><strong>{money_br(total)}</strong></td></tr>')
     rows_html=''.join(rows) or '<tr><td colspan="4"><span class="muted">Nenhum item detalhado.</span></td></tr>'
-    can_answer=status not in ('aprovado','recusado','expirado')
+    can_answer=status not in ('aprovado','recusado','expirado','cancelado')
     actions=''
     if can_answer:
         actions='''<section class="action-card"><div><span class="eyebrow">DECISÃO DO CLIENTE</span><h2>Está tudo certo com o orçamento?</h2><p>Revise os valores e condições. Você pode aprovar ou recusar diretamente por este link.</p></div><div class="action-row"><button class="btn primary" onclick="respond('aprovado')">✓ Aprovar orçamento</button><button class="btn secondary" onclick="respond('recusado')">✕ Recusar</button></div><p id="msg" class="feedback"></p></section>'''
     contact=(f'''<div class="action-row"><a class="btn whatsapp" href="{safe(wa)}" target="_blank" rel="noopener">💬 Falar com a KV CELL</a><button class="btn secondary" onclick="shareLink()">↗ Compartilhar link</button><button class="btn secondary" onclick="copyLink(this)">🔗 Copiar link</button><button class="btn secondary" onclick="window.print()">🖨 Imprimir / PDF</button></div>''' if wa else '''<div class="action-row"><button class="btn secondary" onclick="shareLink()">↗ Compartilhar link</button><button class="btn secondary" onclick="copyLink(this)">🔗 Copiar link</button><button class="btn secondary" onclick="window.print()">🖨 Imprimir / PDF</button></div>''')
     customer=safe(c['name'] if c else 'Cliente')
     client_phone=safe(c.get('phone') if c else '—')
+    device=one('SELECT brand,model FROM devices WHERE id=?',(q.get('device_id'),)) if q.get('device_id') else None
+    device_label=safe(' '.join(str((device or {}).get(key) or '').strip() for key in ('brand','model')).strip() or 'Não informado')
     item_count=len(items)
     return f'''<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#ffd400"><title>{safe(q['number'])} • KV CELL</title><style>{PUBLIC_CSS}
     .topbar{{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:18px}}.brand{{display:flex;align-items:center;gap:11px}}.logo{{width:44px;height:44px;border-radius:13px;background:#ffd400;color:#070707;display:grid;place-items:center;font-weight:1000;box-shadow:0 0 24px #ffd40022}}.brand b{{font-size:17px;color:#fff}}.brand small{{display:block;color:#777;font-size:9px;font-weight:800;letter-spacing:1.2px}}.top-actions{{display:flex;gap:8px}}.mini{{border:1px solid #303030;background:#111;color:#ddd;border-radius:11px;padding:9px 12px;font-weight:800;cursor:pointer}}.status-wrap{{display:flex;align-items:center;gap:10px;flex-wrap:wrap}}.status.pending{{background:#332f00;color:#ffd400;border-color:#665b00}}.status.approved{{background:#0e3523;color:#6ff0a5;border-color:#1b6b43}}.status.rejected{{background:#3d1515;color:#ff9b9b;border-color:#6b2727}}.status.expired{{background:#2d2d2d;color:#aaa;border-color:#444}}.status-dot{{width:8px;height:8px;border-radius:50%;background:currentColor;box-shadow:0 0 12px currentColor}}.hero-meta{{display:flex;gap:22px;flex-wrap:wrap;margin-top:20px;color:#aaa;font-size:12px}}.hero-meta strong{{display:block;color:#fff;font-size:14px;margin-top:3px}}.eyebrow{{font-size:10px;font-weight:900;letter-spacing:1.7px;color:#ffd400}}.summary{{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:-4px 0 16px}}.summary .metric{{padding:17px;border-radius:17px}}.metric .accent{{color:#ffd400;font-size:26px}}.info-grid{{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}}.info{{padding:13px 14px;background:#0b0b0b;border:1px solid #252525;border-radius:13px}}.info small{{display:block;color:#777;text-transform:uppercase;font-size:9px;font-weight:800;letter-spacing:.7px}}.info b{{display:block;color:#eee;margin-top:4px;word-break:break-word}}.table-scroll{{overflow-x:auto}}.table-scroll table{{min-width:650px}}td small{{display:block;color:#686868;font-size:10px;margin-top:3px}}.total-card{{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:19px 20px;border-radius:18px;background:linear-gradient(135deg,#211d00,#111);border:1px solid #5a5000;margin-top:15px}}.total-card small{{display:block;color:#a59d65;font-size:10px;font-weight:800;text-transform:uppercase}}.total-card strong{{font-size:30px;color:#ffd400}}.action-card{{margin:18px 0;padding:21px;border:1px solid #4f4600;border-radius:20px;background:linear-gradient(135deg,#171500,#0d0d0d);box-shadow:0 18px 50px #0007}}.action-card h2{{margin:5px 0 5px;font-size:20px}}.action-card p{{color:#999;margin:0;line-height:1.6}}.action-row{{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}}.btn{{appearance:none;border:1px solid #333;border-radius:13px;padding:13px 17px;font:inherit;font-size:13px;font-weight:900;text-decoration:none;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:7px;transition:.18s transform,.18s border-color,.18s background}}.btn:hover{{transform:translateY(-1px);border-color:#665b00}}.btn.primary{{background:#ffd400;color:#070707;border-color:#ffd400}}.btn.secondary{{background:#191919;color:#f4f4f4}}.btn.whatsapp{{background:#142016;color:#8af2ad;border-color:#275b38}}.feedback{{margin-top:12px!important;color:#ffd400!important;font-weight:800}}.muted{{color:#777}}.legal{{font-size:10px;color:#666;line-height:1.6;margin-top:16px}}@media(max-width:700px){{.summary,.info-grid{{grid-template-columns:1fr}}.hero-meta{{gap:13px}}.top-actions .mini{{display:none}}.total-card{{align-items:flex-start;flex-direction:column}}.total-card strong{{font-size:26px}}.action-row>*{{width:100%}}}}
@@ -1310,14 +2290,16 @@ def public_quote(q,c,store=None):
     <div class="topbar"><div class="brand"><div class="logo">KV</div><div><b>{safe(store.get('company_name') or 'KV CELL')}</b><small>ORÇAMENTO DIGITAL • LINK DO CLIENTE</small></div></div><div class="top-actions"><button class="mini" onclick="copyLink(this)">🔗 Copiar</button><button class="mini" onclick="shareLink()">↗ Compartilhar</button></div></div>
     <section class="hero"><div class="status-wrap"><span class="eyebrow">ORÇAMENTO #{safe(q['number'])}</span><span class="status {kind}"><span class="status-dot"></span>{label}</span></div><h1>Seu orçamento está pronto</h1><p>{customer}, confira abaixo todos os detalhes do serviço antes de tomar sua decisão.</p><div class="hero-meta"><div><span>Cliente</span><strong>{customer}</strong></div><div><span>Unidade</span><strong>{safe(q['unit'] or 'KV CELL')}</strong></div><div><span>Válido até</span><strong>{safe(q['valid_until'] or 'Não informado')}</strong></div></div></section>
     <div class="summary"><div class="metric"><small>ITENS</small><b class="accent">{item_count}</b></div><div class="metric"><small>GARANTIA</small><b>{int(q.get('warranty_days') or 0)} dias</b></div><div class="metric"><small>STATUS</small><b>{label.title()}</b></div></div>
-    <div class="box"><span class="eyebrow">DADOS DO CLIENTE E APARELHO</span><h2>Conferência</h2><div class="info-grid"><div class="info"><small>Cliente</small><b>{customer}</b></div><div class="info"><small>Telefone</small><b>{client_phone}</b></div><div class="info"><small>Aparelho</small><b>{safe(q.get('device_id') or 'Informação cadastrada na OS')}</b></div><div class="info"><small>Orçamento</small><b>{safe(q['number'])}</b></div></div></div>
-    <div class="box"><span class="eyebrow">SERVIÇOS E PRODUTOS</span><h2>Itens do orçamento</h2><div class="table-scroll"><table><thead><tr><th>Descrição</th><th>Qtd.</th><th>Unitário</th><th>Total</th></tr></thead><tbody>{rows_html}</tbody></table></div><div class="total-card"><div><small>Total geral</small><span>Valor apresentado neste orçamento</span></div><strong>R$ {float(q['total'] or 0):,.2f}</strong></div></div>
-    <div class="box"><span class="eyebrow">CONDIÇÕES</span><h2>Informações importantes</h2><div class="info-grid"><div class="info"><small>Garantia</small><b>{safe(q.get('warranty_type') or 'Conforme serviço')} • {int(q.get('warranty_days') or 0)} dias</b></div><div class="info"><small>Validade</small><b>{safe(q.get('valid_until') or 'Não informado')}</b></div></div><p>{safe(q.get('conditions') or 'As condições do serviço serão confirmadas no atendimento.')}</p><p>{safe(q.get('observations') or '')}</p></div>
+    <div class="box"><span class="eyebrow">DADOS DO CLIENTE E APARELHO</span><h2>Conferência</h2><div class="info-grid"><div class="info"><small>Cliente</small><b>{customer}</b></div><div class="info"><small>Telefone</small><b>{client_phone}</b></div><div class="info"><small>Aparelho</small><b>{device_label}</b></div><div class="info"><small>Orçamento</small><b>{safe(q['number'])}</b></div></div></div>
+    <div class="box"><span class="eyebrow">SERVIÇOS E PRODUTOS</span><h2>Itens do orçamento</h2><div class="table-scroll"><table><thead><tr><th>Descrição</th><th>Qtd.</th><th>Unitário</th><th>Total</th></tr></thead><tbody>{rows_html}</tbody></table></div><div class="total-card"><div><small>Total geral</small><span>Valor apresentado neste orçamento</span></div><strong>{money_br(q.get('total'))}</strong></div></div>
+    <div class="box"><span class="eyebrow">CONDIÇÕES</span><h2>Informações importantes</h2><div class="info-grid"><div class="info"><small>Garantia</small><b>{safe(q.get('warranty_type') or 'Conforme serviço')} • {int(q.get('warranty_days') or 0)} dias</b></div><div class="info"><small>Validade</small><b>{safe(q.get('valid_until') or 'Não informado')}</b></div></div><p>{safe(q.get('conditions') or 'As condições do serviço serão confirmadas no atendimento.')}</p><p>Em caso de troca de tela, a garantia é de 90 dias para tela com aro e 30 dias para tela sem aro. A película é brinde na troca de tela.</p><p>{safe(q.get('observations') or '')}</p></div>
     {actions}{contact}<p class="legal">Este link é exclusivo para consulta e resposta deste orçamento. Guarde o endereço para futuras consultas. Ao aprovar, você autoriza a KV CELL a seguir com o serviço descrito neste documento.</p><footer>{safe(store.get('company_name') or 'KV CELL')} • {safe(store.get('units') or 'LAGOS + MAGÉ')} • {safe(store.get('phone') or '')}</footer>
     </main><script>async function respond(a){{const msg=prompt(a==='aprovado'?'Mensagem opcional para a KV CELL:':'Motivo da recusa (opcional):','');try{{const r=await fetch(location.pathname,{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{action:a,message:msg||''}})}});const d=await r.json();document.getElementById('msg').textContent=d.ok?'Resposta registrada com sucesso. Obrigado!':'Não foi possível registrar sua resposta.';if(d.ok)setTimeout(()=>location.reload(),700)}}catch{{document.getElementById('msg').textContent='Falha de conexão. Tente novamente.'}}}}async function copyLink(btn){{try{{await navigator.clipboard.writeText(location.href);if(btn){{const old=btn.textContent;btn.textContent='✓ Copiado';setTimeout(()=>btn.textContent=old,1400)}}}}catch{{prompt('Copie o link abaixo:',location.href)}}}}async function shareLink(){{try{{if(navigator.share)await navigator.share({{title:'Orçamento {safe(q["number"])} • KV CELL',text:'Confira seu orçamento da KV CELL',url:location.href}});else{{await navigator.clipboard.writeText(location.href);alert('Link copiado!')}}}}catch{{}}}}</script></body></html>'''
 
-def public_os(s,c,store=None):
+def public_os(s,c,store=None,devices=None,history=None):
     store=store or {}
+    devices=devices or []
+    history=history or []
     details=json.loads(s['details_json'] or '{}') if s.get('details_json') else {}
     photos=json.loads(s['photos'] or '[]')
     status=str(s.get('status') or 'aberto').lower()
@@ -1370,6 +2352,19 @@ def public_os(s,c,store=None):
     video_html=(f'<div class="box video-box"><span class="eyebrow">REGISTRO DO REPARO</span><h2>Vídeo do atendimento</h2><video controls preload="metadata" src="{safe(video)}"></video></div>') if video else '<div class="box video-box empty"><div class="video-icon">▶</div><b>Vídeo do reparo ainda não disponível</b><span>Quando a equipe publicar, ele aparecerá aqui.</span></div>'
     photo_box=f'<div class="box"><span class="eyebrow">EVIDÊNCIAS</span><h2>Fotos do aparelho</h2><div class="photo-grid">{thumbs or "<span class=\'muted\'>Nenhuma foto cadastrada.</span>"}</div></div>'
     customer=safe(c['name'] if c else 'Cliente')
+    device_cards=''.join(
+        '<div class="info"><small>Aparelho '+str(i+1)+'</small><b>'+safe(' '.join(part for part in (d.get('brand'),d.get('model')) if part) or 'Aparelho')+'</b>'
+        +('<span>'+safe(' • '.join(part for part in (d.get('color'),d.get('storage')) if part))+'</span>' if d.get('color') or d.get('storage') else '')
+        +'</div>'
+        for i,d in enumerate(devices)
+    )
+    devices_html=('<div class="box"><span class="eyebrow">APARELHOS VINCULADOS</span><h2>Dispositivo(s) desta OS</h2><div class="info-grid">'+device_cards+'</div></div>' if device_cards else '')
+    status_names={'aberto':'Aberta','aguardando peça':'Aguardando peça','em andamento':'Em andamento','pronto':'Pronto para retirada','finalizado':'Concluída','entregue':'Entregue','cancelado':'Cancelada','aprovado pelo cliente':'Aprovada pelo cliente','recusado pelo cliente':'Recusada pelo cliente'}
+    history_items=''.join(
+        '<div class="timeline-step"><div class="timeline-dot">•</div><div><b>'+safe(status_names.get(str(item.get('status') or '').lower(),str(item.get('status') or '').title()))+'</b><small>'+safe(item.get('changed_at') or '')+'</small></div></div>'
+        for item in history
+    )
+    history_html=('<div class="box"><span class="eyebrow">HISTÓRICO</span><h2>Atualizações da ordem</h2><div class="timeline">'+history_items+'</div></div>' if history_items else '')
     return f'''<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#ffd400"><title>OS #{s['id']} • KV CELL</title><style>{PUBLIC_CSS}
     .topbar{{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:18px}}.brand{{display:flex;align-items:center;gap:11px}}.logo{{width:44px;height:44px;border-radius:13px;background:#ffd400;color:#070707;display:grid;place-items:center;font-weight:1000;box-shadow:0 0 24px #ffd40022}}.brand b{{font-size:17px;color:#fff}}.brand small{{display:block;color:#777;font-size:9px;font-weight:800;letter-spacing:1.2px}}.top-actions{{display:flex;gap:8px}}.mini{{border:1px solid #303030;background:#111;color:#ddd;border-radius:11px;padding:9px 12px;font-weight:800;cursor:pointer}}.status-wrap{{display:flex;align-items:center;gap:10px;flex-wrap:wrap}}.status.pending{{background:#332f00;color:#ffd400;border-color:#665b00}}.status.done{{background:#0e3523;color:#6ff0a5;border-color:#1b6b43}}.status.warn{{background:#34230b;color:#ffbf65;border-color:#6b471b}}.status.bad{{background:#3d1515;color:#ff9b9b;border-color:#6b2727}}.status-dot{{width:8px;height:8px;border-radius:50%;background:currentColor;box-shadow:0 0 12px currentColor}}.hero-message{{max-width:700px;color:#aaa;line-height:1.65}}.hero-meta{{display:flex;gap:22px;flex-wrap:wrap;margin-top:20px;color:#aaa;font-size:12px}}.hero-meta strong{{display:block;color:#fff;font-size:14px;margin-top:3px}}.eyebrow{{font-size:10px;font-weight:900;letter-spacing:1.7px;color:#ffd400}}.info-grid{{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}}.info{{padding:13px 14px;background:#0b0b0b;border:1px solid #252525;border-radius:13px}}.info small{{display:block;color:#777;text-transform:uppercase;font-size:9px;font-weight:800;letter-spacing:.7px}}.info b{{display:block;color:#eee;margin-top:4px;word-break:break-word}}.timeline{{position:relative;display:grid;gap:0;margin-top:8px}}.timeline:before{{content:"";position:absolute;left:16px;top:15px;bottom:15px;width:2px;background:#292929}}.timeline-step{{position:relative;display:flex;gap:14px;padding:12px 0;color:#777}}.timeline-dot{{position:relative;z-index:1;width:34px;height:34px;min-width:34px;border-radius:50%;display:grid;place-items:center;background:#101010;border:1px solid #343434;font-size:11px;font-weight:900}}.timeline-step.done{{color:#fff}}.timeline-step.done .timeline-dot{{background:#ffd400;color:#080808;border-color:#ffd400;box-shadow:0 0 16px #ffd40022}}.timeline-step b{{display:block;font-size:14px}}.timeline-step small{{display:block;color:#777;margin-top:3px;font-size:11px}}.value-grid{{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}}.value-card{{padding:17px;border-radius:16px;background:#101010;border:1px solid #292929}}.value-card small{{display:block;color:#777;font-size:9px;font-weight:900;letter-spacing:1px}}.value-card strong{{display:block;color:#ffd400;font-size:22px;margin-top:5px}}.value-card span{{display:block;color:#999;font-size:11px;margin-top:4px}}.photo-grid{{display:grid;grid-template-columns:repeat(4,1fr);gap:9px}}.photo-grid img{{width:100%;height:130px;object-fit:cover;border-radius:13px;border:1px solid #292929;cursor:pointer;transition:.18s}}.photo-grid img:hover{{opacity:.82;transform:translateY(-1px)}}.video-box video{{width:100%;max-height:480px;border-radius:15px;background:#000;margin-top:10px}}.video-box.empty{{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;min-height:210px;color:#777}}.video-box.empty b{{color:#bbb;margin-top:8px}}.video-icon{{width:58px;height:58px;border-radius:50%;display:grid;place-items:center;background:#1b1b1b;border:1px solid #333;color:#ffd400}}.action-card{{margin:18px 0;padding:21px;border:1px solid #4f4600;border-radius:20px;background:linear-gradient(135deg,#171500,#0d0d0d);box-shadow:0 18px 50px #0007}}.action-card h2{{margin:5px 0 5px;font-size:20px}}.action-card p{{color:#999;margin:0;line-height:1.6}}.action-row{{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}}.btn{{appearance:none;border:1px solid #333;border-radius:13px;padding:13px 17px;font:inherit;font-size:13px;font-weight:900;text-decoration:none;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:7px;transition:.18s transform,.18s border-color,.18s background}}.btn:hover{{transform:translateY(-1px);border-color:#665b00}}.btn.primary{{background:#ffd400;color:#070707;border-color:#ffd400}}.btn.secondary{{background:#191919;color:#f4f4f4}}.btn.whatsapp{{background:#142016;color:#8af2ad;border-color:#275b38}}.feedback{{margin-top:12px!important;color:#ffd400!important;font-weight:800}}.legal{{font-size:10px;color:#666;line-height:1.6;margin-top:16px}}.lightbox{{position:fixed;inset:0;background:#000d;display:none;place-items:center;padding:20px;z-index:50}}.lightbox.open{{display:grid}}.lightbox img{{max-width:min(100%,1100px);max-height:90vh;border-radius:16px;box-shadow:0 30px 90px #000}}.lightbox button{{position:fixed;right:18px;top:18px;border:1px solid #555;background:#111;color:#fff;border-radius:10px;padding:10px 14px;cursor:pointer}}@media(max-width:700px){{.info-grid,.value-grid{{grid-template-columns:1fr 1fr}}.photo-grid{{grid-template-columns:repeat(2,1fr)}}.top-actions .mini{{display:none}}.action-row>*{{width:100%}}.hero-meta{{gap:13px}}}}@media(max-width:430px){{.info-grid,.value-grid{{grid-template-columns:1fr}}}}
     @media print{{body{{background:#fff;color:#111}}main{{max-width:none;padding:12px}}.hero,.box,.value-card,.action-card{{box-shadow:none;background:#fff;border-color:#ddd;color:#111}}.hero h1,.brand b,.value-card strong,.box strong{{color:#111}}.hero p,.muted,.legal{{color:#555}}.action-card,.action-row,.top-actions,.lightbox{{display:none!important}}header{{border-color:#ddd}}}}
@@ -1377,9 +2372,10 @@ def public_os(s,c,store=None):
     <section class="hero"><div class="status-wrap"><span class="eyebrow">ORDEM DE SERVIÇO #{s['id']}</span><span class="status {('done' if current>=3 else 'bad' if current==0 else 'warn' if current==2 else 'pending')}"><span class="status-dot"></span>{safe(label.upper())}</span></div><h1>Acompanhe seu aparelho</h1><p class="hero-message">{safe(message)}</p><div class="hero-meta"><div><span>Cliente</span><strong>{customer}</strong></div><div><span>Aparelho</span><strong>{safe(model or s.get('description') or 'Não informado')}</strong></div><div><span>Entrada</span><strong>{safe(s.get('created_at') or '—')}</strong></div><div><span>Previsão</span><strong>{safe(details.get('expected_date') or details.get('estimated_date') or 'A confirmar')}</strong></div></div></section>
     <div class="box"><span class="eyebrow">PROGRESSO DO SERVIÇO</span><h2>Linha do tempo</h2><div class="timeline">{timeline_html}</div></div>
     <div class="box"><span class="eyebrow">APARELHO</span><h2>Informações do dispositivo</h2><div class="info-grid"><div class="info"><small>Modelo</small><b>{safe(model or '—')}</b></div><div class="info"><small>IMEI</small><b>{safe(imei or '—')}</b></div><div class="info"><small>Nº de série</small><b>{safe(serial or '—')}</b></div><div class="info"><small>Técnico responsável</small><b>{safe(s.get('technician') or 'Não atribuído')}</b></div></div></div>
-    <div class="box"><span class="eyebrow">SERVIÇO</span><h2>O que está sendo feito</h2><p>{safe(s.get('description') or 'Serviço não detalhado.')}</p><p>{safe(s.get('diagnosis') or '')}</p>{'<div class="info-grid"><div class="info"><small>Observações</small><b>'+safe(s.get('notes') or '')+'</b></div></div>' if s.get('notes') else ''}</div>
+    {devices_html}{history_html}
+    <div class="box"><span class="eyebrow">SERVIÇO</span><h2>O que está sendo feito</h2><p>{safe(s.get('description') or 'Serviço não detalhado.')}</p><p>{safe(s.get('diagnosis') or '')}</p></div>
     {customer_items_html}
-    <div class="value-grid"><div class="value-card"><small>VALOR DO SERVIÇO</small><strong>R$ {float(s.get('price') or 0):,.2f}</strong><span>Valor registrado na OS</span></div><div class="value-card"><small>GARANTIA</small><strong>{safe(s.get('warranty') or '—')}</strong><span>Conforme condições da KV CELL</span></div><div class="value-card"><small>STATUS</small><strong>{safe(label)}</strong><span>Atualização pelo painel</span></div></div>
+    <div class="value-grid"><div class="value-card"><small>VALOR DO SERVIÇO</small><strong>{money_br(s.get('price'))}</strong><span>Valor registrado na OS</span></div><div class="value-card"><small>GARANTIA</small><strong>{safe(s.get('warranty') or '—')}</strong><span>Conforme condições da KV CELL</span></div><div class="value-card"><small>STATUS</small><strong>{safe(label)}</strong><span>Atualização pelo painel</span></div></div>
     {video_html}{photo_box}{approval}{contact}<div class="box"><span class="eyebrow">GARANTIA DIGITAL</span><h2>Verificação da OS</h2><p>Este link identifica a Ordem de Serviço #{s['id']} da KV CELL. Guarde o endereço para futuras consultas e conferência do atendimento.</p></div><p class="legal">{safe(store.get('company_name') or 'KV CELL')} • {safe(store.get('units') or 'LAGOS + MAGÉ')} • {safe(store.get('phone') or '')}</p><footer>KV CELL • Portal oficial do cliente</footer></main><div id="lightbox" class="lightbox" onclick="closePhoto()"><button onclick="event.stopPropagation();closePhoto()">Fechar</button><img id="lightboxImg" src="" alt="Foto ampliada" onclick="event.stopPropagation()"></div><script>async function respond(a){{const msg=prompt(a==='aprovado'?'Mensagem opcional para a KV CELL:':'Motivo da recusa (opcional):','');try{{const r=await fetch(location.pathname,{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{action:a,message:msg||''}})}});const d=await r.json();document.getElementById('msg').textContent=d.ok?'Resposta registrada com sucesso. Obrigado!':'Não foi possível registrar sua resposta.';if(d.ok)setTimeout(()=>location.reload(),700)}}catch{{document.getElementById('msg').textContent='Falha de conexão. Tente novamente.'}}}}async function copyLink(btn){{try{{await navigator.clipboard.writeText(location.href);if(btn){{const old=btn.textContent;btn.textContent='✓ Copiado';setTimeout(()=>btn.textContent=old,1400)}}}}catch{{prompt('Copie o link abaixo:',location.href)}}}}async function shareLink(){{try{{if(navigator.share)await navigator.share({{title:'OS #{s["id"]} • KV CELL',text:'Acompanhe sua Ordem de Serviço',url:location.href}});else{{await navigator.clipboard.writeText(location.href);alert('Link copiado!')}}}}catch{{}}}}function openPhoto(src){{document.getElementById('lightboxImg').src=src;document.getElementById('lightbox').classList.add('open')}}function closePhoto(){{document.getElementById('lightbox').classList.remove('open')}}document.addEventListener('keydown',e=>{{if(e.key==='Escape')closePhoto()}})</script></body></html>'''
 
 def public_unlock(x,c):
@@ -1387,14 +2383,15 @@ def public_unlock(x,c):
     return f"""<!doctype html><html lang="pt-BR"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Desbloqueio #{x['id']} • KV CELL</title><style>{PUBLIC_CSS}.photos img{{width:100px;height:100px;object-fit:cover;border-radius:10px;margin:5px}}</style><main><header><b>KV CELL</b><span>UNLOCKER PRO</span></header><section class="hero"><small>OS DE DESBLOQUEIO</small><h1>#{x['id']}</h1><p>{safe(c['name'] if c else 'Cliente')} • {safe(x['unit'])}</p><div class="status">{safe(x['status'])}</div></section><div class="grid"><div class="box"><h2>Aparelho</h2><p>{safe(x['brand'])} {safe(x['model'])}</p><p>IMEI: {safe(x['imei'])}</p><p>Nº de série: {safe(details.get('serial',''))}</p></div><div class="box"><h2>Serviço</h2><p>{safe(x['kind'])}</p><h2>R$ {float(x['price'] or 0):,.2f}</h2></div></div><div class="box"><h2>Prazo</h2><p>{safe(details.get('expected_date','Não informado'))} · {safe(details.get('estimated_time',''))}</p><p>Prioridade: {safe(details.get('priority','Normal'))}</p></div><div class="box"><b>Fotos</b><div class="photos">{thumbs or '<span>Sem fotos.</span>'}</div></div><div class="box"><b>Política de Garantia</b><p>Esta OS de desbloqueio é finalizada SEM GARANTIA. Serviços de software podem ser revertidos por atualizações.</p></div><footer>KV CELL • Link de acompanhamento</footer></main></html>"""
 
 PUBLIC_CSS='''@font-face{font-family:Poppins;src:url('/static/fonts/pxiEyp8kv8JHgFVrJJfecg.woff2')}@font-face{font-family:Poppins;src:url('/static/fonts/pxiByp8kv8JHgFVrLEj6Z1xlFQ.woff2');font-weight:600}@font-face{font-family:Poppins;src:url('/static/fonts/pxiByp8kv8JHgFVrLGT9Z1xlFQ.woff2');font-weight:700}*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:radial-gradient(circle at 50% -18%,#292400 0,#0a0a0a 35%,#050505 75%);color:#f7f7f7;font-family:Poppins,Inter,Arial,sans-serif}main{max-width:1040px;margin:0 auto;padding:22px}header{display:flex;justify-content:space-between;align-items:center;padding:12px 0 16px;border-bottom:1px solid #292929}header b{font-size:25px;letter-spacing:-.5px;color:#ffd400}header span{font-size:10px;color:#9a9a9a;font-weight:700;letter-spacing:1.2px}.hero{position:relative;overflow:hidden;margin:24px 0;padding:30px;border:1px solid #3c3700;border-radius:24px;background:linear-gradient(135deg,#1b1800 0,#121212 48%,#0c0c0c 100%);box-shadow:0 20px 55px #0008}.hero:after{content:"";position:absolute;width:220px;height:220px;right:-90px;top:-100px;border-radius:50%;background:#ffd40012;filter:blur(5px)}.hero small{position:relative;z-index:1;color:#ffd400;font-size:10px;font-weight:800;letter-spacing:1.5px}.hero h1{position:relative;z-index:1;font-size:42px;line-height:1.1;margin:7px 0;color:#ffd400}.hero p{position:relative;z-index:1;color:#bdbdbd}.grid{display:grid;grid-template-columns:2fr 1fr;gap:16px}.box{background:linear-gradient(145deg,#151515,#0e0e0e);border:1px solid #292929;border-radius:19px;padding:20px;margin:14px 0;box-shadow:0 15px 40px #0006}.box h2,.box h3{margin:0 0 12px;font-size:17px}.box strong{color:#ffd400}table{width:100%;border-collapse:separate;border-spacing:0;margin-top:14px;overflow:hidden;border:1px solid #292929;border-radius:14px}td,th{padding:12px 13px;border-bottom:1px solid #262626;text-align:left}th{background:#1a1a1a;color:#a9a9a9;font-size:11px;text-transform:uppercase;letter-spacing:.6px}tr:last-child td{border-bottom:0}.status{display:inline-flex;align-items:center;gap:7px;padding:8px 12px;border-radius:999px;background:#332f00;color:#ffd400;border:1px solid #655900;font-weight:800;margin:10px 0}.status:before{content:"";width:7px;height:7px;border-radius:50%;background:#ffd400;box-shadow:0 0 10px #ffd400}.actions{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0}.actions button,.actions a,button.pay{border:1px solid #343434;border-radius:13px;padding:13px 18px;font-weight:800;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center}.ok,.pay{background:#ffd400!important;color:#070707!important;border-color:#ffd400!important}.no{background:#222!important;color:#fff!important}.whatsapp{background:#151515;color:#ffd400;border-color:#4d4500!important}.timeline{display:grid;gap:10px}.step{position:relative;padding:14px 16px 14px 42px;background:#101010;border:1px solid #292929;border-radius:14px;color:#8f8f8f}.step:before{content:"";position:absolute;left:17px;top:18px;width:11px;height:11px;border:2px solid #555;border-radius:50%}.step.done{color:#f4f4f4;border-color:#4b4300;background:linear-gradient(90deg,#171500,#101010)}.step.done:before{background:#ffd400;border-color:#ffd400;box-shadow:0 0 12px #ffd40066}.step b{display:block}.step small{display:block;margin-top:4px;color:#777}.notice{padding:14px;border:1px solid #514900;background:#171500;border-radius:13px;color:#d9d9d9}.pix textarea{width:100%;min-height:82px;margin-top:8px;background:#090909;color:#ddd;border:1px solid #333;border-radius:12px;padding:10px}.pix button{margin-top:8px;background:#222;color:#fff;border:1px solid #333;border-radius:10px;padding:10px 14px;font-weight:700}.metric-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.metric{background:#101010;border:1px solid #292929;border-radius:16px;padding:15px}.metric small{display:block;color:#8e8e8e;font-size:10px;font-weight:700}.metric b{display:block;font-size:22px;margin-top:5px}.pill{display:inline-block;padding:5px 9px;border-radius:999px;background:#252525}.pill.ok{background:#123d24;color:#76f0a1}.pill.late{background:#4a1717;color:#ff9b9b}footer{color:#737373;text-align:center;padding:30px 10px;font-size:11px}@media(max-width:700px){.grid{grid-template-columns:1fr}.metric-grid{grid-template-columns:repeat(2,1fr)}main{padding:14px}.hero h1{font-size:30px}header{gap:10px}header span{font-size:8px}}@media(max-width:430px){.metric-grid{grid-template-columns:1fr 1fr}.actions>*{width:100%}}'''
+PUBLIC_CSS+='''@keyframes publicRise{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}.hero{animation:publicRise .55s ease-out both}.box,.metric,.value-card{animation:publicRise .55s ease-out both}.box:nth-of-type(2){animation-delay:.06s}.box:nth-of-type(3){animation-delay:.12s}.box:nth-of-type(4){animation-delay:.18s}.hero:after{animation:publicGlow 7s ease-in-out infinite alternate}@keyframes publicGlow{from{transform:translate(-8px,0) scale(.92);opacity:.5}to{transform:translate(8px,8px) scale(1.08);opacity:1}}.actions a:hover,.actions button:hover{transform:translateY(-2px);box-shadow:0 10px 28px #ffd40020;transition:transform .2s,box-shadow .2s}@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;scroll-behavior:auto!important;transition-duration:.01ms!important}}@media print{.actions,.action-row,.top-actions,.action-card{display:none!important}body{background:#fff!important;color:#111!important}main{max-width:none;padding:8px}.hero,.box,.metric,.value-card{animation:none!important;box-shadow:none;background:#fff!important;border-color:#ddd;color:#111}.hero h1,.box strong,.value-card strong{color:#111!important}header{border-color:#ddd}}'''
 
-INDEX='''<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>KV CELL OS PREMIUM</title><link rel="stylesheet" href="/static/app.css"></head><body><div id="app"></div><script src="/static/app.js"></script></body></html>'''
+INDEX='''<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>KV CELL OS PRO</title><link rel="stylesheet" href="/static/app.css"><link rel="stylesheet" href="/static/v4000.css"><link rel="stylesheet" href="/static/adapti.css"><link rel="stylesheet" href="/static/pro_neon.css"><link rel="stylesheet" href="/static/pro_ref.css"><link rel="stylesheet" href="/static/pro_support.css"><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script></head><body><div id="app"></div><script src="/static/app.js"></script><script src="/static/adapti.js"></script><script src="/static/pro_neon.js"></script></body></html>'''
 
 # KV CELL V810 runtime entrypoint — required by Square Cloud MAIN=app.py
 if __name__ == '__main__':
     host = os.environ.get('HOST', '0.0.0.0')
     server = ThreadingHTTPServer((host, PORT), Handler)
-    print(f'KV CELL OS PREMIUM V1101.2 listening on {host}:{PORT}', flush=True)
+    print(f'KV CELL OS PREMIUM V4000.0 listening on {host}:{PORT}', flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

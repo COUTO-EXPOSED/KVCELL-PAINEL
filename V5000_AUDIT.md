@@ -1,0 +1,56 @@
+# V5000 audit — evidence snapshot
+
+**Status:** Partial audit; not a release certification.  
+**Scope:** Current project source and isolated test databases. No production database was reset or used.
+
+## Evidence-based checklist
+
+| Requirement | Status | Evidence / remaining work |
+|---|---|---|
+| Public OS links resolve valid tokens and reject invalid tokens cleanly | IMPLEMENTED AND VERIFIED | `app.py` public OS handler and `tools/smoke_test.py`; valid OS page, numeric legacy ID, and invalid-token 404 were exercised without a SQL/connection failure. |
+| Editing an OS updates its original record instead of creating a duplicate | IMPLEMENTED AND VERIFIED | `app.py` update API; integration regression confirms the OS ID and public token remain stable after edit. |
+| One OS can retain multiple devices through edits and compatible database migration | IMPLEMENTED AND VERIFIED | OS/device migration and update paths in `app.py`; smoke test creates two linked devices, edits the OS, and confirms both links persist. |
+| OS status persists and appears on the public tracking page | IMPLEMENTED AND VERIFIED | Status update and public OS checks in `tools/smoke_test.py`; status history is checked in SQLite. |
+| Public quote approval and rejection persist; cancelled quotes cannot be answered | IMPLEMENTED AND VERIFIED | `app.py` public quote endpoints and quote regressions in `tools/smoke_test.py`; approval/rejection and repeated/cancelled responses are covered. |
+| Customer edit/delete controls preserve linked business records | IMPLEMENTED AND VERIFIED | CRM controls in `static/app.js`; `app.py` returns HTTP 409 for linked-customer deletion; integration test covers both blocked linked deletion and an unlinked deletion. |
+| Technician, supplier, appointment, guarantee, and manual-finance edit controls save real changes | IMPLEMENTED AND VERIFIED | Browser tests on the isolated 8093 application verified UI create/edit and API persistence; smoke test covers technician/supplier/appointment/guarantee updates and allowed statuses. |
+| Reference-generated finance entries cannot be manually edited or deleted | IMPLEMENTED AND VERIFIED | `app.py` now returns HTTP 409 for direct changes to linked finance rows; `tools/smoke_test.py` verifies this for a sale entry while manual entries remain editable/deletable. |
+| PDV checkout keeps sale, purchase state, stock, and cash consistent | IMPLEMENTED AND VERIFIED | `app.py` `/api/pdv/checkout` now validates the full cart and commits all sales, purchase status, inventory quantities, and cash/credit records in one SQLite transaction. Browser checkout and API tests verify state changes. |
+| PDV prevents duplicate sales and partial cart completion | IMPLEMENTED AND VERIFIED | A sold/non-vitrine or already-linked purchase is rejected with HTTP 409. Regression submits a cart containing a new and already-sold device and confirms neither a partial sale nor stock change was committed. |
+| PDV discount, credit sale, and purchase-sale ledger | IMPLEMENTED AND VERIFIED | Discount is applied against server-side vitrine prices. “Fiado/Crediário” creates receivables without recording the unpaid balance as collected cash. Editing a PDV-linked purchase does not create a second incoming ledger entry. |
+| Purchase creation persists purchase, expense, and inventory atomically | IMPLEMENTED AND VERIFIED | `app.py` now creates those records in a single transaction; smoke regressions exercise the resulting purchase and financial/stock state. |
+| Module permissions are enforced on API reads and writes, including unit scoping | IMPLEMENTED AND VERIFIED | `Handler.authorize_module`, session refresh in `require`, unit scoping in `do_GET`/`do_POST`, and row ownership checks in update/delete paths. `tools/smoke_test.py` verifies allowed/denied module access, finance-role restrictions, immediate permission revocation/grant, forged-unit create and move rejection, cross-unit update denial, and self-delete protection. |
+| OS/quote client messages can be prepared, copied, and explicitly sent to Telegram | IMPLEMENTED AND VERIFIED | Authenticated `POST /api/telegram/service/{id}` and `/api/telegram/quote/{id}` validate module permission, row existence, and unit ownership. Smoke tests verify OS/quote text, item qualities/prices, privacy (internal notes excluded), anonymous denial, module permission, and cross-unit denial. Browser check verified the PII confirmation and the no-credentials copy modal. |
+| Telegram login/activity audit delivery is configured and successfully reaches the production group | IMPLEMENTED BUT NOT TESTED | `app.py` queues redacted activity summaries and login/logout/failed-login notices via `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`. No real token or group is configured in this workspace; the test suite explicitly removes these variables, so no external Telegram message was sent. |
+| User creation/edit persists role, unit, active state, and module permissions | IMPLEMENTED AND VERIFIED | `static/app.js` `userForm` and `window.editUser` expose the forms. Browser test created a scoped user, changed services permission to inventory, reloaded, and verified saved checkboxes; the new login showed only inventory, fixed the unit selector to LAGOS, and received HTTP 200 for inventory and 403 for services. |
+| Technical diagnostics support persistent create/view/edit/status/delete, unit and module permissions, and additive legacy migration | IMPLEMENTED AND VERIFIED | `app.py` schema, `/api/diagnostics` CRUD and validation; `static/app.js` Diagnósticos navigation, checklist, filters and actions; `tools/smoke_test.py` covers CRUD, invalid estimates/status/unit-device links, module allow/deny, unit scoping, and adding the table to a legacy database without losing existing OS/device history. Browser-tested create, details, edit, status, delete and persistence after reload on an isolated database. Estimates do not create finance entries. |
+| User deletion control and administrator lifecycle safeguards | IMPLEMENTED BUT NOT TESTED | `static/app.js` `pages.users`/`window.deleteUser` expose deletion. The backend rejects self-delete and preserves the last active administrator; smoke tests verify self-delete rejection, but ordinary user deletion and the last-admin edge have not been exercised end-to-end. |
+| All retained modules provide complete CRUD and persistence | PARTIALLY IMPLEMENTED | Prior browser testing rendered 25 navigation destinations and observed 31 API calls without HTTP errors; smoke testing now covers additional authorization and unit boundaries. This does not establish full CRUD or persistence for each module; the module-by-module audit remains open. |
+| ADB / antivirus operations work on real supported hardware | IMPLEMENTED BUT NOT TESTED | The active screen exposes WebUSB/ADB operations, but no Android device or authorized USB debugging session was available for end-to-end hardware validation. |
+| Settings operate without AI integration | IMPLEMENTED AND VERIFIED | Settings were saved, read back, and verified after an isolated server restart and reauthentication. No AI provider key was configured for this check. |
+| Backend-unavailable feedback and recovery | IMPLEMENTED AND VERIFIED | On isolated port 8094, an outage showed the retry/panel error. After restart, retry returned the user to login because sessions are in memory; reauthentication restored the app and the saved setting. |
+| Tech OS Pro reference archives were inspected and compared | IMPLEMENTED AND VERIFIED | `techospro.com(2).zip`: 123 entries (109 JS, 3 CSS, 5 HTML, fonts/images). The other archive: 109 JS files and no CSS/HTML/assets. 108 JS basenames overlap; all 108 hashes differ, with one unique JS file in each archive. |
+| All reference images were inspected and the complete KV CELL redesign matches them | PARTIALLY IMPLEMENTED | Prior visual inspection covered 76 images / 35 unique images. An AMOLED black/gold animation polish was added to the dashboard in `static/v4000.css` and checked in browser; a complete screen-by-screen comparison/redesign against Tech OS Pro remains outstanding. |
+| Square Cloud and GitHub deployment configuration remains intact | IMPLEMENTED BUT NOT TESTED | `Procfile`, `squarecloud.app`, `start.sh`, and `requirements.txt` were inspected and left unchanged. No production Square Cloud deployment or GitHub workflow execution was performed. |
+| Release ZIP is complete, clean, and verified | NOT IMPLEMENTED | No V5000 ZIP was generated. The code and tests are not yet sufficient to certify a release; no archive integrity/exclusion check has been performed. |
+
+## Current continuation checks
+
+- **Fiado MDM controls:** IMPLEMENTED AND VERIFIED. The final `static/app.js` overrides remove the MDM tab and action from Fiado while retaining the standalone MDM module.
+- **Manual Fiado products:** IMPLEMENTED AND VERIFIED end to end in the browser. A temporary promissory saved the manual product JSON to `/api/fiado` notes and was deleted after verification; blank name/price blocked submission while an explicit zero price was accepted.
+- **Film reference links:** IMPLEMENTED AND VERIFIED. The Películas page displays six source cards with safe new-tab links and a compatibility disclaimer. `FILM_COMPATIBILITY_SOURCES.md` is included in the two new Tech OS Pro archive copies; both passed CRC checks.
+- **Technical diagnostics module:** IMPLEMENTED AND VERIFIED for its first internal workflow. An additive SQLite table and per-unit indexes back the new page; the API validates status, estimate, test list, selected customer/device association and unit ownership. The UI supports create, view, edit, status changes, filtering, and delete. Smoke and isolated-browser checks passed, including persistence after reload and legacy database migration.
+
+## Reference and release notes
+
+The two reference ZIPs are different JavaScript builds rather than matching copies: the 108 shared basenames have different SHA-256 hashes. Their chunks should therefore be treated as interaction/visual references, not interchangeable deployable assets. No reference code was copied into the project. The originals were left unchanged; copies ending in `_com_fontes_peliculas.zip` include `KV_CELL_FILM_COMPATIBILITY_SOURCES.md`.
+
+The V4000 ZIP remains a prior release artifact. The current working project includes later V4000 frontend/backend fixes and the V5000 changes recorded in `V5000_CHANGELOG.md`; the old ZIP was not reused as a V5000 package.
+
+## Outstanding audit scope
+
+- Exercise create/view/edit/delete and persistence in every retained module, including role restrictions and multi-unit boundaries. The authorization layer is implemented and tested on representative paths, but not every route and operation has module-specific coverage.
+- Complete the design-system and per-screen visual comparison against both Tech OS references and the supplied images.
+- Run the ADB/antivirus workflows against authorized physical devices.
+- Validate Square Cloud startup, persistence, and GitHub deployment workflows in their real target environments.
+- Finish release packaging, inspect archive contents, calculate its SHA-256, and verify archive integrity before publishing a V5000 ZIP.

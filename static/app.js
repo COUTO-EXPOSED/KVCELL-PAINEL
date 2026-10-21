@@ -1,14 +1,30 @@
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 let UNIT=localStorage.getItem('kv_unit')||'TODOS', MOD='dashboard', ME=null;
-const icons={dashboard:'⌂',services:'🔧',devices:'📱',purchases:'🛒',unlock:'🔓',pdv:'▣',pricing:'💲',quotes:'🧾',finance:'💰',inventory:'📦',forgotten:'🗃️',customers:'👥',contracts:'📜',users:'👤',chat:'💬',chat_units:'↔',ai:'🤖',logs:'☷',admin:'🛡️',settings:'⚙️'};
-const names={dashboard:'Painel',services:'Consertos / OS',devices:'Aparelhos',purchases:'Compras',unlock:'Desbloqueios',pdv:'PDV',pricing:'Precificação',quotes:'Orçamentos',finance:'Financeiro',inventory:'Estoque',forgotten:'Esquecidos',customers:'Clientes',contracts:'Termos',users:'Usuários',chat:'Chat',chat_units:'Unidades',ai:'I.A.',logs:'Logs',admin:'Administração',settings:'Configurações'};
+const icons={dashboard:'⌂',services:'🔧',diagnostics:'🧪',devices:'📱',purchases:'🛒',unlock:'🔓',pdv:'▣',pricing:'💲',quotes:'🧾',finance:'💰',inventory:'📦',forgotten:'🗃️',customers:'👥',contracts:'📜',users:'👤',chat:'💬',chat_units:'↔',ai:'🤖',logs:'☷',admin:'🛡️',settings:'⚙️'};
+const names={dashboard:'Painel',services:'Consertos / OS',diagnostics:'Diagnósticos',devices:'Aparelhos',purchases:'Compras',unlock:'Desbloqueios',pdv:'PDV',pricing:'Precificação',quotes:'Orçamentos',finance:'Financeiro',inventory:'Estoque',forgotten:'Esquecidos',customers:'Clientes',contracts:'Termos',users:'Usuários',chat:'Chat',chat_units:'Unidades',ai:'I.A.',logs:'Logs',admin:'Administração',settings:'Configurações'};
 async function api(url,opt={}){let r=await fetch(url,{headers:{'Content-Type':'application/json',...(opt.headers||{})},...opt});let d;try{d=await r.json()}catch{d={}}if(r.status===401){showLogin();throw Error('Sessão expirada')}if(!r.ok){const msg=d.reply||d.error||'Erro';throw Error(msg)}return d}
+window.copyTelegramMessage=async function(){const text=$('#telegramClientMessage')?.value;if(!text)return;try{await navigator.clipboard.writeText(text);toast('Texto copiado para enviar ao cliente')}catch{const area=$('#telegramClientMessage');area.focus();area.select();toast('Texto selecionado; copie manualmente')}} ;
+window.sendClientMessageTelegram=async function(kind,id){
+ if(!confirm('Esta ação compartilhará nome, telefone, detalhes e valores do cliente com o grupo Telegram configurado. Deseja continuar?'))return;
+ try{
+  const response=await fetch(`/api/telegram/${encodeURIComponent(kind)}/${encodeURIComponent(id)}`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+  let result={};try{result=await response.json()}catch{}
+  if(response.status===401){showLogin();return}
+  if(!result.message)throw new Error(result.error||'O servidor não retornou o texto da mensagem.');
+  const state=result.sent?'Enviado ao grupo Telegram.':
+   result.configured?`Falha ao enviar ao Telegram: ${result.error||'erro de comunicação'}. O texto continua disponível para copiar.`:
+   'Telegram não configurado. O texto está pronto para copiar; configure TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID.';
+  $('#modal').innerHTML=`<div class="modalbox"><div class="modalhead"><h2>Mensagem pronta para o cliente</h2><button type="button" class="close" onclick="closeModal()">✕</button></div><div class="modalbody"><p role="status">${esc(state)}</p><textarea id="telegramClientMessage" class="input" rows="15" readonly style="width:100%;resize:vertical">${esc(result.message)}</textarea></div><div class="modalfoot"><button type="button" class="btn ghost" onclick="closeModal()">Fechar</button><button type="button" class="btn" onclick="copyTelegramMessage()">Copiar texto</button></div></div>`;
+  $('#modal').classList.add('show');
+  if(result.sent)toast('Mensagem enviada ao grupo Telegram');
+ }catch(error){toast('Não foi possível preparar a mensagem: '+(error.message||'falha de conexão'),'error')}
+};
 function toast(s){let t=$('#toast');t.textContent=s;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2600)}
-function showLogin(){document.body.innerHTML=`<div class="login"><div class="login-card"><div class="login-logo">KV</div><h1>KV CELL OS PREMIUM</h1><p>Gestão completa da assistência técnica • Lagos + Magé</p><form id="lf"><div class="field"><label>E-mail</label><input class="input" name="email" autocomplete="username"></div><div class="field"><label>Senha</label><input class="input" name="password" type="password" autocomplete="current-password"></div><button class="btn">Entrar no sistema</button></form><p style="margin-top:16px" class="muted">Credenciais definidas pelo administrador.</p></div></div>`;$('#lf').onsubmit=async e=>{e.preventDefault();try{let d=await api('/api/login',{method:'POST',body:JSON.stringify(formValues(e.target))});ME=d.user;boot()}catch(x){toast(x.message)}}}
-function boot(){document.body.innerHTML=`<div class="shell"><aside class="sidebar"><div class="brand"><div class="logo">KV</div><div><b>KV CELL</b><small>OS PREMIUM • 2026</small></div></div><div class="nav"><div class="navtitle">OPERAÇÃO</div>${['dashboard','services','devices','purchases','unlock','pdv'].map(m=>nav(m)).join('')}<div class="navtitle">GESTÃO</div>${['pricing','quotes','finance','inventory','customers','technicians','contracts'].map(m=>nav(m)).join('')}<div class="navtitle">ADMIN</div>${['users','chat','admin','settings'].map(m=>nav(m)).join('')}</div></aside><main class="main"><div class="topbar"><div><b id="crumb">Painel</b><div class="crumb">KV CELL OS PREMIUM • controle da operação</div></div><div class="top-actions"><select id="unit" class="select unit"><option>TODOS</option><option>LAGOS</option><option>MAGÉ</option></select><button class="btn ghost" onclick="openSearch()">⌕ Buscar</button><button class="btn ghost" onclick="logout()">Sair</button></div></div><div id="content"></div></main></div><div id="modal" class="modal"></div><div id="toast" class="toast"></div>`;$('#unit').value=UNIT;$('#unit').onchange=e=>{UNIT=e.target.value;localStorage.setItem('kv_unit',UNIT);render()};render()}
+function showLogin(){ME=null;document.body.innerHTML=`<div class="login"><div class="login-card"><div class="login-logo">KV</div><h1>KV CELL OS PREMIUM</h1><p>Gestão completa da assistência técnica • Lagos + Magé</p><form id="lf"><div class="field"><label>E-mail</label><input class="input" name="email" autocomplete="username"></div><div class="field"><label>Senha</label><input class="input" name="password" type="password" autocomplete="current-password"></div><button class="btn">Entrar no sistema</button></form><p style="margin-top:16px" class="muted">Credenciais definidas pelo administrador.</p></div></div>`;$('#lf').onsubmit=async e=>{e.preventDefault();try{let d=await api('/api/login',{method:'POST',body:JSON.stringify(formValues(e.target))});ME=d.user;boot()}catch(x){toast(x.message)}}}
+function boot(){document.body.innerHTML=`<div class="shell"><aside class="sidebar"><div class="brand"><div class="logo">KV</div><div><b>KV CELL</b><small>OS PREMIUM • 2026</small></div></div><div class="nav"><div class="navtitle">OPERAÇÃO</div>${['dashboard','services','devices','purchases','unlock','pdv'].map(m=>nav(m)).join('')}<div class="navtitle">GESTÃO</div>${['pricing','quotes','finance','inventory','customers','contracts'].map(m=>nav(m)).join('')}<div class="navtitle">ADMIN</div>${['users','chat','admin','settings'].map(m=>nav(m)).join('')}</div></aside><main class="main"><div class="topbar"><div><b id="crumb">Painel</b><div class="crumb">KV CELL OS PREMIUM • controle da operação</div></div><div class="top-actions"><select id="unit" class="select unit"><option>TODOS</option><option>LAGOS</option><option>MAGÉ</option></select><button class="btn ghost" onclick="openSearch()">⌕ Buscar</button><button class="btn ghost" onclick="logout()">Sair</button></div></div><div id="content"></div></main></div><div id="modal" class="modal"></div><div id="toast" class="toast"></div>`;$('#unit').value=UNIT;$('#unit').onchange=e=>{UNIT=e.target.value;localStorage.setItem('kv_unit',UNIT);render()};render()}
 function nav(m){return `<button id="nav-${m}" onclick="go('${m}')"><span class="ico">${icons[m]}</span><span>${names[m]}</span></button>`}
 function go(m){MOD=m;render()}
-async function render(){if(!ME)return showLogin();$$('.nav button').forEach(x=>x.classList.remove('active'));$('#nav-'+MOD)?.classList.add('active');$('#crumb').textContent=names[MOD];let fn=pages[MOD]||pages.dashboard;await fn()}
+async function render(){if(!ME)return showLogin();$$('.nav button').forEach(x=>x.classList.remove('active'));$('#nav-'+MOD)?.classList.add('active');$('#crumb').textContent=names[MOD]||$('#nav-'+MOD+' span:last-child')?.textContent||'Painel';let fn=pages[MOD]||pages.dashboard;try{await fn()}catch(e){if(!ME||!$('#content'))return;const message=e instanceof TypeError?'Sem comunicação com o servidor. Verifique se a aplicação está iniciada e tente novamente.':(e.message||'Não foi possível carregar esta aba.');$('#content').innerHTML=`<section class="panel page-error" role="alert"><div class="page-error-icon">!</div><h2>Não foi possível abrir ${esc(names[MOD]||MOD)}</h2><p>${esc(message)}</p><div class="row-actions"><button class="btn" onclick="render()">Tentar novamente</button><button class="btn ghost" onclick="go('dashboard')">Voltar ao painel</button></div></section>`;console.error('Falha ao renderizar a aba '+MOD,e)}}
 function money(n){return 'R$ '+Number(n||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})}
 function badge(v){let x=String(v||'');let cls=/pronto|entregue|vitrine|aberto/i.test(x)?'g':/cancel|baixo/i.test(x)?'r':'y';return `<span class="badge ${cls}">${esc(x||'-')}</span>`}
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
@@ -88,15 +104,15 @@ function serviceChecklist(){return checklist()}
 function serviceForm(kind='conserto'){
   formModal('Nova Ordem de Serviço Técnica',`<div class="formgrid">${f('unit','Unidade','select',['LAGOS','MAGÉ'])}${customerPicker()}${devicePicker()}${f('technician','Técnico')}${f('service_name','Serviço técnico','select',['Troca de tela','Troca de bateria','Troca de conector de carga','Troca de câmera','Troca de tampa traseira','Troca de carcaça','Software / otimização','Reparo de placa','Troca de película','Outro'])}${f('description','Descrição do serviço','textarea','',true)}${f('diagnosis','Diagnóstico','textarea','',true)}${f('price','Valor','number','0')}${warrantyDaysField()}${f('status','Status','select',['aberto','aguardando peça','em andamento','pronto','entregue','cancelado'])}<div class="field full"><label>Checklist técnico</label>${serviceChecklist()}</div>${photoBox()}${f('notes','Observações','textarea','',true)}</div>`,async()=>{try{let m=$('#modal'),photos=await readPhotos(),data=formValues(m.querySelector('#modalForm'));data.kind='conserto';data.description=(data.service_name==='Outro'?'':data.service_name)+(data.description?' — '+data.description:'');data.checklist=collectChecks(m);data.photos=photos;data.price=Number(data.price||0);data.warranty=(data.warranty_days||0)+' dias';let r=await api('/api/services',{method:'POST',body:JSON.stringify(data)});closeModal();toast('OS salva • link de acompanhamento gerado');render()}catch(e){toast('Não foi possível salvar: '+e.message)}});setTimeout(wirePickers,40);}
 function unlockForm(){
-  formModal('Novo Desbloqueio',`<div class="formgrid">${f('unit','Unidade','select',['LAGOS','MAGÉ'])}${customerPicker()}${devicePicker()}${f('operator','Operador')}${f('brand','Marca')}${f('model','Modelo')}${f('imei','IMEI')}${f('kind','Tipo de desbloqueio','select',['FRP / Conta Google','MDM','Desbloqueio de rede','Software','Outro'])}${f('price','Valor','number','0')}${warrantyDaysField()}${f('status','Status','select',['aberto','em andamento','pronto','entregue','cancelado'])}<div class="field full"><label>Checklist do desbloqueio</label>${checklist()}</div>${photoBox()}${f('notes','Observações','textarea','',true)}</div>`,async()=>{try{let m=$('#modal'),data=formValues(m.querySelector('#modalForm'));data.checklist=collectChecks(m);data.photos=await readPhotos();data.price=Number(data.price||0);await api('/api/unlocks',{method:'POST',body:JSON.stringify(data)});closeModal();toast('Desbloqueio salvo');render()}catch(e){toast('Não foi possível salvar: '+e.message)}});setTimeout(wirePickers,40)}
-function quoteItemsEditor(defaults=[]){let items=defaults.length?defaults:[{description:'',qty:1,total:0}];return `<div class="field full"><label>Serviços do orçamento</label><div id="quoteItems">${items.map((x,i)=>`<div class="quote-item"><input class="input qi-desc" placeholder="Serviço / desbloqueio" value="${esc(x.description||'')}"><input class="input qi-qty" type="number" min="1" value="${x.qty||1}"><input class="input qi-total" type="number" min="0" step="0.01" value="${x.total||0}"><button type="button" class="btn danger" onclick="this.parentElement.remove()">✕</button></div>`).join('')}</div><button type="button" class="btn ghost" onclick="addQuoteItem()">+ Adicionar item</button></div>`}
-function addQuoteItem(){const c=$('#quoteItems');if(c)c.insertAdjacentHTML('beforeend',`<div class="quote-item"><input class="input qi-desc" placeholder="Serviço / desbloqueio"><input class="input qi-qty" type="number" min="1" value="1"><input class="input qi-total" type="number" min="0" step="0.01" value="0"><button type="button" class="btn danger" onclick="this.parentElement.remove()">✕</button></div>`)}
-function collectQuoteItems(){return $$('#quoteItems .quote-item').map(r=>({description:r.querySelector('.qi-desc').value,qty:Number(r.querySelector('.qi-qty').value||1),total:Number(r.querySelector('.qi-total').value||0)})).filter(x=>x.description)}
+  formModal('Novo Desbloqueio',`<div class="formgrid">${f('unit','Unidade','select',['LAGOS','MAGÉ'])}${customerPicker()}${devicePicker()}${f('operator','Operador')}${f('brand','Marca')}${f('model','Modelo')}${f('imei','IMEI')}${f('kind','Tipo de desbloqueio','select',['FRP / Conta Google','Desbloqueio de rede','Software','Outro'])}${f('price','Valor','number','0')}${warrantyDaysField()}${f('status','Status','select',['aberto','em andamento','pronto','entregue','cancelado'])}<div class="field full"><label>Checklist do desbloqueio</label>${checklist()}</div>${photoBox()}${f('notes','Observações','textarea','',true)}</div>`,async()=>{try{let m=$('#modal'),data=formValues(m.querySelector('#modalForm'));data.checklist=collectChecks(m);data.photos=await readPhotos();data.price=Number(data.price||0);await api('/api/unlocks',{method:'POST',body:JSON.stringify(data)});closeModal();toast('Desbloqueio salvo');render()}catch(e){toast('Não foi possível salvar: '+e.message)}});setTimeout(wirePickers,40)}
+function quoteItemsEditor(defaults=[]){let items=defaults.length?defaults:[{description:'',quality:'',qty:1,total:0}];return `<div class="field full"><label>Serviços, peças e qualidades do orçamento</label><div id="quoteItems">${items.map(x=>`<div class="quote-item"><input class="input qi-desc" placeholder="Serviço / peça" value="${esc(x.description||'')}"><input class="input qi-quality" placeholder="Qualidade (opcional)" value="${esc(x.quality||'')}"><input class="input qi-qty" type="number" min="1" value="${x.qty||1}"><input class="input qi-total" type="number" min="0" step="0.01" value="${x.total||0}"><button type="button" class="btn danger" onclick="this.parentElement.remove()">✕</button></div>`).join('')}</div><button type="button" class="btn ghost" onclick="addQuoteItem()">+ Adicionar item</button></div>`}
+function addQuoteItem(){const c=$('#quoteItems');if(c)c.insertAdjacentHTML('beforeend',`<div class="quote-item"><input class="input qi-desc" placeholder="Serviço / peça"><input class="input qi-quality" placeholder="Qualidade (opcional)"><input class="input qi-qty" type="number" min="1" value="1"><input class="input qi-total" type="number" min="0" step="0.01" value="0"><button type="button" class="btn danger" onclick="this.parentElement.remove()">✕</button></div>`)}
+function collectQuoteItems(){return $$('#quoteItems .quote-item').map(r=>({description:r.querySelector('.qi-desc').value,quality:r.querySelector('.qi-quality').value.trim(),qty:Number(r.querySelector('.qi-qty').value||1),total:Number(r.querySelector('.qi-total').value||0)})).filter(x=>x.description)}
 function quoteForm(type='servico'){
  const isUnlock=type==='desbloqueio';
- formModal(isUnlock?'Orçamento de Desbloqueio':'Orçamento de Serviço Técnico',`<div class="formgrid"><div class="field full"><div class="quote-kind"><b>${isUnlock?'🔓 DESBLOQUEIO':'🔧 SERVIÇO TÉCNICO'}</b><span>${isUnlock?'Operação de desbloqueio, FRP, MDM, rede ou software.':'Troca/reparo técnico com serviços e peças.'}</span></div></div>${f('unit','Unidade','select',['LAGOS','MAGÉ'])}${customerPicker()}${devicePicker()}${isUnlock?f('unlock_type','Desbloqueio','select',['FRP / Conta Google','MDM','Desbloqueio de rede','Software','Outro']):f('service_name','Serviço','select',['Troca de tela','Troca de bateria','Troca de conector','Troca de câmera','Troca de tampa','Software / otimização','Reparo de placa','Película','Outro'])}${quoteItemsEditor()}${f('subtotal','Subtotal','number','0')}${travelField()}${warrantyDaysField()}${f('valid_until','Válido até','date')}${f('status','Status','select',['aberto','aprovado','aguardando','recusado','expirado'])}${f('conditions','Condições','textarea','Orçamento sujeito à avaliação técnica.',true)}${f('observations','Observações','textarea','',true)}</div>`,async()=>{try{let m=$('#modal'),d=formValues(m.querySelector('#modalForm'));d.quote_type=type;d.items=collectQuoteItems();d.total=d.items.reduce((s,x)=>s+(x.total*x.qty),0)+((d.travel_enabled==='1')?Number(d.travel_fee||0):0);d.subtotal=d.items.reduce((s,x)=>s+(x.total*x.qty),0);let r=await api('/api/quotes',{method:'POST',body:JSON.stringify(d)});closeModal();const url=location.origin+r.public_url;try{await navigator.clipboard.writeText(url)}catch{}toast('Orçamento '+r.number+' salvo • link copiado');render()}catch(e){toast('Não foi possível salvar: '+e.message)}});setTimeout(()=>{wirePickers();const t=$('#travelToggle');if(t)t.onchange=()=>{$('#travelBox').hidden=!t.checked}},40)}
+ formModal(isUnlock?'Orçamento de Desbloqueio':'Orçamento de Serviço Técnico',`<div class="formgrid"><div class="field full"><div class="quote-kind"><b>${isUnlock?'🔓 DESBLOQUEIO':'🔧 SERVIÇO TÉCNICO'}</b><span>${isUnlock?'Operação de desbloqueio, FRP, MDM, rede ou software.':'Troca/reparo técnico com serviços e peças.'}</span></div></div>${f('unit','Unidade','select',['LAGOS','MAGÉ'])}${customerPicker()}${devicePicker()}${isUnlock?f('unlock_type','Desbloqueio','select',['FRP / Conta Google','Desbloqueio de rede','Software','Outro']):f('service_name','Serviço','select',['Troca de tela','Troca de bateria','Troca de conector','Troca de câmera','Troca de tampa','Software / otimização','Reparo de placa','Película','Outro'])}${quoteItemsEditor()}${f('subtotal','Subtotal','number','0')}${travelField()}${warrantyDaysField()}${f('valid_until','Válido até','date')}${f('status','Status','select',['aberto','aprovado','aguardando','recusado','expirado'])}${f('conditions','Condições','textarea','Orçamento sujeito à avaliação técnica.',true)}${f('observations','Observações','textarea','',true)}</div>`,async()=>{try{let m=$('#modal'),d=formValues(m.querySelector('#modalForm'));d.quote_type=type;d.items=collectQuoteItems();d.total=d.items.reduce((s,x)=>s+(x.total*x.qty),0)+((d.travel_enabled==='1')?Number(d.travel_fee||0):0);d.subtotal=d.items.reduce((s,x)=>s+(x.total*x.qty),0);let r=await api('/api/quotes',{method:'POST',body:JSON.stringify(d)});closeModal();const url=location.origin+r.public_url;try{await navigator.clipboard.writeText(url)}catch{}toast('Orçamento '+r.number+' salvo • link copiado');render()}catch(e){toast('Não foi possível salvar: '+e.message)}});setTimeout(()=>{wirePickers();const t=$('#travelToggle');if(t)t.onchange=()=>{$('#travelBox').hidden=!t.checked}},40)}
 function userForm(){
- formModal('Novo usuário / funcionário',`<div class="formgrid">${f('name','Nome completo *')}${f('email','E-mail *','email')}${f('password','Senha inicial *','password','123456')}${f('role','Perfil','select',['admin','gerente','tecnico','atendente'])}${f('unit','Unidade','select',['TODOS','LAGOS','MAGÉ'])}<div class="field full"><label>Permissões</label><div class="checkgrid">${['dashboard','services','unlock','quotes','pdv','finance','inventory','purchases','customers','devices','contracts','users','chat','admin','settings'].map(x=>`<label class="check"><input type="checkbox" name="perm" value="${x}" checked> ${x}</label>`).join('')}</div></div></div>`,async()=>{try{let m=$('#modal'),d=formValues(m.querySelector('#modalForm'));d.permissions={};m.querySelectorAll('input[name=perm]:checked').forEach(x=>d.permissions[x.value]=true);await api('/api/users',{method:'POST',body:JSON.stringify(d)});closeModal();toast('Usuário criado com sucesso');render()}catch(e){toast('Erro ao criar usuário: '+e.message)}})}
+ formModal('Novo usuário / funcionário',`<div class="formgrid">${f('name','Nome completo *')}${f('email','E-mail *','email')}${f('password','Senha inicial *','password')}${f('role','Perfil','select',['admin','gerente','tecnico','atendente'])}${f('unit','Unidade','select',['TODOS','LAGOS','MAGÉ'])}<div class="field full"><label>Permissões</label><div class="checkgrid">${['dashboard','services','unlock','quotes','pdv','finance','inventory','purchases','customers','devices','contracts','users','chat','admin','settings'].map(x=>`<label class="check"><input type="checkbox" name="perm" value="${x}" checked> ${x}</label>`).join('')}</div></div></div>`,async()=>{try{let m=$('#modal'),d=formValues(m.querySelector('#modalForm'));d.permissions={};m.querySelectorAll('input[name=perm]:checked').forEach(x=>d.permissions[x.value]=true);await api('/api/users',{method:'POST',body:JSON.stringify(d)});closeModal();toast('Usuário criado com sucesso');render()}catch(e){toast('Erro ao criar usuário: '+e.message)}})}
 function forgottenForm(){formModal('Aparelho esquecido / abandono',`<div class="formgrid">${f('unit','Unidade','select',['LAGOS','MAGÉ'])}${f('brand','Marca')}${f('model','Modelo')}${f('imei','IMEI')}${f('possible_owner','Possível proprietário')}${f('phone','Telefone')}${f('status','Status','select',['aguardando identificação','contatado','retido','liberado','descartado'])}<div class="field full"><label>Checklist de avaliação — marque o que está ruim ou precisa atenção</label>${checklist('forgotten_check')}</div>${photoBox()}${f('notes','Observações','textarea','',true)}</div>`,async()=>{try{let m=$('#modal'),d=formValues(m.querySelector('#modalForm'));d.checklist={};m.querySelectorAll('input[name="forgotten_check"]:checked').forEach(x=>d.checklist[x.value]=true);d.photos=await readPhotos();await api('/api/forgotten',{method:'POST',body:JSON.stringify(d)});closeModal();toast('Aparelho abandonado salvo');render()}catch(e){toast('Não foi possível salvar: '+e.message)}})}
 function customerStatsHtml(c){const days=c.inactive_days;const inactive=days==null?'Nunca fez serviço':days===0?'Fez hoje':`Último serviço há ${days} dias`;return `<div class="customer-insights"><div><b>⭐ Score ${c.score}</b><span>${c.service_count} serviços</span></div><div><b>${inactive}</b><span>Total: ${money(c.total_spent||0)}</span></div><a class="btn ghost" target="_blank" href="https://wa.me/55${String(c.phone||'').replace(/\\D/g,'')}?text=${encodeURIComponent('Olá '+c.name+'! A KV CELL preparou uma condição especial para você. Aproveite nossas promoções e serviços. 📱⭐')}">💬 Promoção no WhatsApp</a></div>`}
 async function openCustomer(id){try{const c=await api('/api/customer-stats?id='+id);formModal('Cliente • relacionamento',`<div class="panel"><h2>${esc((await api('/api/customers?unit=TODOS')).find(x=>x.id===id)?.name||'Cliente')}</h2>${customerStatsHtml(c)}<h3>Histórico</h3><div id="custHistory">Carregando...</div></div>`,async()=>closeModal());const [s,u]=await Promise.all([api('/api/services?customer_id='+id+'&unit=TODOS'),api('/api/unlocks?customer_id='+id+'&unit=TODOS')]);$('#custHistory').innerHTML=table([...s.map(x=>({...x,_tipo:'Serviço'})),...u.map(x=>({...x,_tipo:'Desbloqueio'} ) )],[['_tipo','Tipo'],['description','Serviço',r=>esc(r.description||r.kind||'-')],['price','Valor',r=>money(r.price)],['status','Status',r=>badge(r.status)],['created_at','Data']]);}catch(e){toast(e.message)}}
@@ -131,7 +147,7 @@ function formValues(form){
 icons.films='🛡️'; names.films='Películas';
 const _boot=boot;
 boot=async function(){
-  document.body.innerHTML=`<div class="shell"><aside class="sidebar"><div class="brand"><div class="logo-wrap"><img id="brandLogo" class="brand-logo" src="" alt="KV CELL"><div class="logo">KV</div></div><div><b>KV CELL</b><small>OS PREMIUM • 2026</small></div></div><div class="nav"><div class="navtitle">OPERAÇÃO</div>${['dashboard','services','devices','purchases','unlock','pdv'].map(m=>nav(m)).join('')}<div class="navtitle">GESTÃO</div>${['pricing','quotes','finance','inventory','films','customers','technicians','contracts'].map(m=>nav(m)).join('')}<div class="navtitle">ADMIN</div>${['users','chat','admin','settings'].map(m=>nav(m)).join('')}</div></aside><main class="main"><div class="topbar"><div><b id="crumb">Painel</b><div class="crumb">KV CELL OS PREMIUM • gestão Lagos + Magé</div></div><div class="top-actions"><select id="unit" class="select unit"><option>TODOS</option><option>LAGOS</option><option>MAGÉ</option></select><button class="btn ghost" onclick="openSearch()">⌕ Buscar</button><button class="btn ghost" onclick="logout()">Sair</button></div></div><div id="content"></div></main></div><div id="modal" class="modal"></div><div id="toast" class="toast"></div>`;
+  document.body.innerHTML=`<div class="shell"><aside class="sidebar"><div class="brand"><div class="logo-wrap"><img id="brandLogo" class="brand-logo" src="" alt="KV CELL"><div class="logo">KV</div></div><div><b>KV CELL</b><small>OS PREMIUM • 2026</small></div></div><div class="nav"><div class="navtitle">OPERAÇÃO</div>${['dashboard','services','devices','purchases','unlock','pdv'].map(m=>nav(m)).join('')}<div class="navtitle">GESTÃO</div>${['pricing','quotes','finance','inventory','films','customers','contracts'].map(m=>nav(m)).join('')}<div class="navtitle">ADMIN</div>${['users','chat','admin','settings'].map(m=>nav(m)).join('')}</div></aside><main class="main"><div class="topbar"><div><b id="crumb">Painel</b><div class="crumb">KV CELL OS PREMIUM • gestão Lagos + Magé</div></div><div class="top-actions"><select id="unit" class="select unit"><option>TODOS</option><option>LAGOS</option><option>MAGÉ</option></select><button class="btn ghost" onclick="openSearch()">⌕ Buscar</button><button class="btn ghost" onclick="logout()">Sair</button></div></div><div id="content"></div></main></div><div id="modal" class="modal"></div><div id="toast" class="toast"></div>`;
   $('#unit').value=UNIT; $('#unit').onchange=e=>{UNIT=e.target.value;localStorage.setItem('kv_unit',UNIT);render()};
   try{const st=await api('/api/settings'); if(st.logo_data) $('#brandLogo').src=st.logo_data; else $('#brandLogo').style.display='none';}catch{}
   render();
@@ -151,8 +167,8 @@ async function aiFilmSuggest(){const q=prompt('Digite marca/modelo da película:
 
 /* Logo configurável e diagnóstico da IA */
 pages.settings=async()=>{
-  const s=await api('/api/settings'); const ai=await api('/api/ai/status');
-  $('#content').innerHTML=head('Configurações','Empresa, identidade visual e integrações seguras')+`<section class="panel"><form id="sf" class="formgrid">${f('company_name','Nome da empresa', 'text', s.company_name||'KV CELL')}${f('tagline','Subtítulo','text',s.tagline||'OS PREMIUM • Laboratório avançado • Desde 2023')}${f('phone','Telefone','text',s.phone||'')}${f('instagram','Instagram','text',s.instagram||'')}${f('currency','Moeda','text',s.currency||'BRL')}${f('units','Unidades','text',s.units||'LAGOS,MAGÉ')}<div class="field full"><label>Logo da empresa</label><input id="logoInput" class="input" type="file" accept="image/png,image/jpeg,image/webp"><div id="logoPreview" class="logo-preview">${s.logo_data?`<img src="${s.logo_data}" alt="Logo">`:'Nenhuma logo cadastrada.'}</div></div><div class="field full"><button class="btn">Salvar configurações</button></div></form></section><section class="panel"><div class="panel-head"><h2>🤖 IA</h2><span class="badge ${ai.configured?'g':'r'}">${ai.configured?'CONFIGURADA':'NÃO CONFIGURADA'}</span></div><p>A chave nunca fica no frontend nem no GitHub. O backend usa <b>OPENROUTER_API_KEY</b> com <b>openrouter/free</b> como principal. Gemini fica somente como fallback secundário. As chaves ficam apenas nas variáveis de ambiente do Square Cloud.</p><div class="kpi"><span>Principal</span><b>${esc(ai.primary_model||ai.model)}</b></div><div class="kpi"><span>Gemini fallback</span><b>${esc(ai.secondary_model||'gemini-2.5-flash')}</b></div><p class="muted">OpenRouter Free é o provedor principal. Gemini só entra se configurado e necessário.</p></section>`;
+  const s=await api('/api/settings');
+  $('#content').innerHTML=head('Configurações','Empresa, identidade visual e unidades')+`<section class="panel"><form id="sf" class="formgrid">${f('company_name','Nome da empresa', 'text', s.company_name||'KV CELL')}${f('tagline','Subtítulo','text',s.tagline||'OS PREMIUM • Laboratório avançado • Desde 2023')}${f('phone','Telefone','text',s.phone||'')}${f('instagram','Instagram','text',s.instagram||'')}${f('currency','Moeda','text',s.currency||'BRL')}${f('units','Unidades','text',s.units||'LAGOS,MAGÉ')}<div class="field full"><label>Logo da empresa</label><input id="logoInput" class="input" type="file" accept="image/png,image/jpeg,image/webp"><div id="logoPreview" class="logo-preview">${s.logo_data?`<img src="${s.logo_data}" alt="Logo">`:'Nenhuma logo cadastrada.'}</div></div><div class="field full"><button class="btn">Salvar configurações</button></div></form></section>`;
   $('#logoInput').onchange=e=>{const file=e.target.files?.[0];if(!file)return;const r=new FileReader();r.onload=()=>$('#logoPreview').innerHTML=`<img src="${r.result}" alt="Logo">`;r.readAsDataURL(file)};
   $('#sf').onsubmit=async e=>{e.preventDefault();try{const d=formValues(e.target);const file=$('#logoInput').files?.[0];if(file){const data=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(file)});d.logo_data=data}await api('/api/settings',{method:'POST',body:JSON.stringify(d)});toast('Configurações e logo salvas');await boot()}catch(x){toast('Não foi possível salvar: '+x.message)}};
 };
@@ -283,7 +299,7 @@ async function whatsappUnlock(id,status){
   const msg=waText(status||d.status,{id:d.id},c)+`\n\n🔗 Acompanhe o serviço:\n${track}`;
   window.open('https://wa.me/'+(phone.startsWith('55')?phone:'55'+phone)+'?text='+encodeURIComponent(msg),'_blank');
 }
-async function copyOSLink(token){const u=location.origin+'/public/os/'+token;try{await navigator.clipboard.writeText(u)}catch{}toast('Link da OS copiado')}
+async function copyOSLink(token,type='service'){const u=location.origin+(type==='unlock'?'/public/unlock/':'/public/os/')+encodeURIComponent(token||'');try{await navigator.clipboard.writeText(u);toast('Link da OS copiado')}catch{prompt('Copie o link da OS:',u)}}
 function downloadOS(token){window.open(location.origin+'/public/os/'+token+'?print=1','_blank')}
 
 async function thermalUnlock(id){
@@ -308,18 +324,32 @@ async function warrantyUnlock(id){
   formModal('Abrir garantia • Desbloqueio #'+id,`<div class="formgrid">${f('status','Status','select',statusOptions('unlock'))}${f('notes','Motivo do retorno','textarea','Retorno em garantia do desbloqueio #'+id,true)}${f('cost_material','Custo de material','number','0')}${f('cost_labor','Custo de mão de obra','number','0')}${f('cost_extra','Outros custos','number','0')}${f('price','Valor cobrado','number','0')}</div>`,async()=>{const m=$('#modal'),x=formValues(m.querySelector('#modalForm'));x.unit=d.unit;x.customer_id=d.customer_id;x.device_id=d.device_id;x.brand=d.brand;x.model=d.model;x.imei=d.imei;x.operator=d.operator;x.kind=d.kind;x.warranty_of_id=id;x.checklist=JSON.parse(d.checklist||'{}');x.photos=JSON.parse(d.photos||'[]');try{await api('/api/unlocks',{method:'POST',body:JSON.stringify(x)});closeModal();toast('Garantia de desbloqueio criada');render()}catch(e){toast(e.message,'error')}})
 }
 async function editService(id){
-  const d=(await api('/api/services?unit=TODOS')).find(x=>x.id===id);if(!d)return;
-  formModal('Editar OS #'+id,`<div class="formgrid">${f('technician','Técnico', 'text',d.technician||'')}${f('status','Status','select',statusOptions('service'),false)}${f('price','Valor','number',d.price||0)}${f('warranty','Garantia','text',d.warranty||'')}${f('cost_material','Custo material','number',d.cost_material||0)}${f('cost_labor','Custo mão de obra','number',d.cost_labor||0)}${f('cost_extra','Outros custos','number',d.cost_extra||0)}${f('diagnosis','Diagnóstico','textarea',d.diagnosis||'',true)}${f('notes','Observações','textarea',d.notes||'',true)}</div>`,async()=>{const x=formValues($('#modal').querySelector('#modalForm'));x.id=id;try{await api('/api/services',{method:'PUT',body:JSON.stringify(x)});closeModal();toast('OS atualizada');render()}catch(e){toast(e.message,'error')}});setTimeout(()=>{$('#modalForm [name=status]').value=d.status},20)
+  const d=(await api('/api/services?unit=TODOS')).find(x=>Number(x.id)===Number(id));if(!d)return toast('OS não encontrada para edição.','error');
+  let details={};try{details=typeof d.details_json==='string'?JSON.parse(d.details_json||'{}'):(d.details_json||{})}catch{}
+  formModal('Editar OS completa #'+id,`<div class="formgrid">
+    ${f('unit','Unidade','select',['LAGOS','MAGÉ'],d.unit||'LAGOS')}${customerPicker('customer_id','Cliente')}
+    ${f('device_id','ID do aparelho','number',d.device_id||'')}${f('kind','Tipo de serviço','text',d.kind||'conserto')}
+    ${f('description','Serviço / aparelho *','text',d.description||'')}${f('technician','Técnico responsável','text',d.technician||'')}
+    ${f('technician_id','ID do técnico','number',d.technician_id||'')}${f('status','Status','select',statusOptions('service'),d.status||'aberto')}
+    ${f('price','Valor cobrado','number',d.price||0)}${f('warranty','Garantia','text',d.warranty||'')}
+    ${f('cost_material','Custo material','number',d.cost_material||0)}${f('cost_labor','Custo mão de obra','number',d.cost_labor||0)}${f('cost_extra','Outros custos','number',d.cost_extra||0)}
+    ${f('diagnosis','Diagnóstico','textarea',d.diagnosis||'',true)}${f('notes','Observações internas','textarea',d.notes||'',true)}
+    ${f('details_json','Detalhes extras (JSON)','textarea',JSON.stringify(details,null,2),true)}
+    <div class="field full"><label>Checklist atual</label><pre class="edit-json">${esc(JSON.stringify(d.checklist||{},null,2))}</pre></div>
+    <div class="field full"><label>Fotos atuais</label><small class="muted">As fotos existentes serão preservadas; esta edição não as remove.</small></div>
+  </div>`,async()=>{const x=formValues($('#modal').querySelector('#modalForm'));x.id=id;try{if(x.details_json){JSON.parse(x.details_json)}x.checklist=d.checklist||'{}';x.photos=d.photos||'[]';await api('/api/services',{method:'PUT',body:JSON.stringify(x)});closeModal();toast('OS #'+id+' atualizada sem duplicar o lançamento');render()}catch(e){toast(e instanceof SyntaxError?'O JSON dos detalhes extras está inválido.':e.message,'error')}});
+  setTimeout(()=>{const m=$('#modalForm');if(m){const c=m.querySelector('[name=customer_id]');if(c)c.value=d.customer_id||'';const st=m.querySelector('[name=status]');if(st)st.value=d.status||'aberto';wirePickers?.()}},80)
 }
+
 async function editUnlock(id){const d=(await api('/api/unlocks?unit=TODOS')).find(x=>x.id===id);if(!d)return;formModal('Editar desbloqueio #'+id,`<div class="formgrid">${f('operator','Operador','text',d.operator||'')}${f('status','Status','select',statusOptions('unlock'))}${f('price','Valor','number',d.price||0)}${f('cost_material','Custo material','number',d.cost_material||0)}${f('cost_labor','Custo mão de obra','number',d.cost_labor||0)}${f('cost_extra','Outros custos','number',d.cost_extra||0)}${f('notes','Observações','textarea',d.notes||'',true)}</div>`,async()=>{const x=formValues($('#modal').querySelector('#modalForm'));x.id=id;try{await api('/api/unlocks',{method:'PUT',body:JSON.stringify(x)});closeModal();toast('Desbloqueio atualizado');render()}catch(e){toast(e.message,'error')}});setTimeout(()=>{$('#modalForm [name=status]').value=d.status},20)}
 
 pages.services=async()=>{
  const d=await list('services');
- $('#content').innerHTML=head('Consertos / Ordens de Serviço','Controle completo da bancada, status, garantia, custos, lucro e acompanhamento público',`<button class="btn" onclick="serviceForm('conserto')">+ Nova OS</button>`)+table(d,[['id','OS',r=>'OS-'+r.id],['customer_name','Cliente'],['description','Serviço'],['created_at','Entrada'],['status','Status',r=>badge(r.status)],['price','Valor',r=>money(r.price)],['warranty','Garantia'],['profit','Lucro',r=>`<b class="${Number(r.profit)>=0?'green':'red'}">${money(r.profit)}</b>`]],r=>`<div class="row-actions"><button class="iconbtn" title="Visualizar" onclick="serviceDetails(${r.id})">👁️</button><button class="iconbtn" title="Editar" onclick="editService(${r.id})">📝</button><button class="iconbtn" title="Baixar / imprimir PDF" onclick="downloadOS('${r.public_token}')">⬇️</button><button class="iconbtn" title="Copiar link" onclick="copyOSLink('${r.public_token}')">🔗</button><button class="iconbtn" title="2ª via / impressora térmica" onclick="thermalUnlock(${r.id})">＄</button><button class="iconbtn" title="WhatsApp" onclick="whatsappService(${r.id},'${String(r.status||'').replace(/'/g,"\\'")}')">🟢</button><button class="iconbtn" title="Garantia" onclick="warrantyService(${r.id})">🛡️</button><button class="iconbtn" title="Finalizar Serviço" onclick="statusService(${r.id},'entregue')">✓</button><button class="iconbtn danger" title="Apagar / desfazer" onclick="deleteService(${r.id})">🗑️</button></div><div class="status-actions">${statusOptions('service').map(st=>`<button class="mini" onclick="statusService(${r.id},'${st}')">${st}</button>`).join('')}</div>`);
+ $('#content').innerHTML=head('Consertos / Ordens de Serviço','Controle completo da bancada, status, garantia, custos, lucro e acompanhamento público',`<button class="btn" onclick="serviceForm('conserto')">+ Nova OS</button>`)+table(d,[['id','OS',r=>'OS-'+r.id],['customer_name','Cliente'],['description','Serviço'],['created_at','Entrada'],['status','Status',r=>badge(r.status)],['price','Valor',r=>money(r.price)],['warranty','Garantia'],['profit','Lucro',r=>`<b class="${Number(r.profit)>=0?'green':'red'}">${money(r.profit)}</b>`]],r=>`<div class="row-actions"><button class="iconbtn" title="Visualizar" onclick="serviceDetails(${r.id})">👁️</button><button class="iconbtn" title="Editar" onclick="editService(${r.id})">📝</button><button class="iconbtn" title="Baixar / imprimir PDF" onclick="downloadOS('${r.public_token}')">⬇️</button><button class="iconbtn" title="Copiar link" onclick="copyOSLink('${r.public_token}','service')">🔗</button><button class="iconbtn" title="2ª via / impressora térmica" onclick="thermalUnlock(${r.id})">＄</button><button class="iconbtn" title="WhatsApp" onclick="whatsappService(${r.id},'${String(r.status||'').replace(/'/g,"\\'")}')">🟢</button><button class="iconbtn" title="Garantia" onclick="warrantyService(${r.id})">🛡️</button><button class="iconbtn" title="Finalizar Serviço" onclick="statusService(${r.id},'entregue')">✓</button><button class="iconbtn danger" title="Apagar / desfazer" onclick="deleteService(${r.id})">🗑️</button></div><div class="status-actions">${statusOptions('service').map(st=>`<button class="mini" onclick="statusService(${r.id},'${st}')">${st}</button>`).join('')}</div>`);
 };
 pages.unlock=async()=>{
  const d=await list('unlocks');
- $('#content').innerHTML=head('Desbloqueios','Pendentes, em processo, efetuados, entrega e garantia',`<button class="btn" onclick="unlockForm()">+ Novo desbloqueio</button>`)+table(d,[['id','#'],['unit','Unidade'],['brand','Marca'],['model','Modelo'],['kind','Operação'],['operator','Operador'],['status','Status',r=>badge(r.status)],['price','Valor',r=>money(r.price)],['profit','Lucro',r=>`<b class="${Number(r.profit)>=0?'green':'red'}">${money(r.profit)}</b>`]],r=>`<div class="row-actions"><button class="iconbtn" title="Visualizar" onclick="unlockDetails(${r.id})">👁️</button><button class="iconbtn" title="Editar" onclick="editUnlock(${r.id})">📝</button><button class="iconbtn" title="Copiar link" onclick="copyOSLink('${r.public_token}')">🔗</button><button class="iconbtn" title="2ª via" onclick="thermalUnlock(${r.id})">＄</button><button class="iconbtn" title="WhatsApp" onclick="whatsappUnlock(${r.id},'${String(r.status||'').replace(/'/g,"\\'")}')">🟢</button><button class="iconbtn" title="Garantia" onclick="warrantyUnlock(${r.id})">🛡️</button><button class="iconbtn" title="Finalizar Desbloqueio" onclick="statusUnlock(${r.id},'entregue')">✓</button><button class="iconbtn danger" title="Apagar / desfazer" onclick="deleteUnlock(${r.id})">🗑️</button></div><div class="status-actions">${statusOptions('unlock').map(st=>`<button class="mini" onclick="statusUnlock(${r.id},'${st}')">${st}</button>`).join('')}</div>`);
+ $('#content').innerHTML=head('Desbloqueios','Pendentes, em processo, efetuados, entrega e garantia',`<button class="btn" onclick="unlockForm()">+ Novo desbloqueio</button>`)+table(d,[['id','#'],['unit','Unidade'],['brand','Marca'],['model','Modelo'],['kind','Operação'],['operator','Operador'],['status','Status',r=>badge(r.status)],['price','Valor',r=>money(r.price)],['profit','Lucro',r=>`<b class="${Number(r.profit)>=0?'green':'red'}">${money(r.profit)}</b>`]],r=>`<div class="row-actions"><button class="iconbtn" title="Visualizar" onclick="unlockDetails(${r.id})">👁️</button><button class="iconbtn" title="Editar" onclick="editUnlock(${r.id})">📝</button><button class="iconbtn" title="Copiar link" onclick="copyOSLink('${r.public_token}','service')">🔗</button><button class="iconbtn" title="2ª via" onclick="thermalUnlock(${r.id})">＄</button><button class="iconbtn" title="WhatsApp" onclick="whatsappUnlock(${r.id},'${String(r.status||'').replace(/'/g,"\\'")}')">🟢</button><button class="iconbtn" title="Garantia" onclick="warrantyUnlock(${r.id})">🛡️</button><button class="iconbtn" title="Finalizar Desbloqueio" onclick="statusUnlock(${r.id},'entregue')">✓</button><button class="iconbtn danger" title="Apagar / desfazer" onclick="deleteUnlock(${r.id})">🗑️</button></div><div class="status-actions">${statusOptions('unlock').map(st=>`<button class="mini" onclick="statusUnlock(${r.id},'${st}')">${st}</button>`).join('')}</div>`);
 };
 
 // OS com custos detalhados desde a abertura.
@@ -387,7 +417,7 @@ unlockForm=function(){
     ${f('unit','Unidade','select',['LAGOS','MAGÉ'])}
     ${customerPicker('customer_id','Cliente')}
     ${f('operator','Operador')}${f('brand','Marca')}${f('model','Modelo')}${f('imei','IMEI')}
-    ${f('kind','Tipo de desbloqueio','select',['FRP / Conta Google','MDM','Desbloqueio de rede','Software','Remoção de PayJoy','Outro'])}
+    ${f('kind','Tipo de desbloqueio','select',['FRP / Conta Google','Desbloqueio de rede','Software','Remoção de PayJoy','Outro'])}
     ${f('price','Valor cobrado','number','0')}${f('cost_material','Custo de material / ferramenta','number','0')}${f('cost_labor','Custo de mão de obra','number','0')}${f('cost_extra','Outros custos','number','0')}
     ${f('warranty','Garantia','text','0 dias')}${f('status','Status','select',['aberto','em andamento','pronto','entregue','cancelado'])}
     <div class="field full"><label>Checklist</label>${checklist()}</div>${photoBox()}${f('notes','Observações','textarea','',true)}
@@ -397,7 +427,7 @@ unlockForm=function(){
 
 quoteForm=function(type='servico'){
   const isUnlock=type==='desbloqueio';
-  formModal(isUnlock?'Orçamento de Desbloqueio':'Orçamento de Serviço Técnico',`<div class="formgrid">${f('unit','Unidade','select',['LAGOS','MAGÉ'])}${customerPicker('customer_id','Cliente')}${f('brand','Marca')}${f('model','Modelo')}${f('imei','IMEI (opcional)')}${isUnlock?f('unlock_type','Desbloqueio','select',['FRP / Conta Google','MDM','Desbloqueio de rede','Software','Outro']):f('service_name','Serviço','select',['Troca de tela','Troca de bateria','Troca de conector','Troca de câmera','Troca de tampa','Software / otimização','Reparo de placa','Película','Outro'])}${quoteItemsEditor()}${f('subtotal','Subtotal','number','0')}${travelField()}${warrantyDaysField()}${f('valid_until','Válido até','date')}${f('status','Status','select',['aberto','aprovado','aguardando','recusado','expirado'])}${f('conditions','Condições','textarea','Orçamento sujeito à avaliação técnica.',true)}${f('observations','Observações','textarea','',true)}</div>`,async()=>{try{const m=$('#modal'),d=formValues(m.querySelector('#modalForm'));d.quote_type=type;d.items=collectQuoteItems();d.total=d.items.reduce((s,x)=>s+(x.total*x.qty),0)+((d.travel_enabled==='1')?Number(d.travel_fee||0):0);d.subtotal=d.items.reduce((s,x)=>s+(x.total*x.qty),0);await api('/api/quotes',{method:'POST',body:JSON.stringify(d)});closeModal();toast('Orçamento salvo');render()}catch(e){toast(e.message,'error')}});setTimeout(()=>{wirePickers();const t=$('#travelToggle');if(t)t.onchange=()=>{$('#travelBox').hidden=!t.checked}},40)
+  formModal(isUnlock?'Orçamento de Desbloqueio':'Orçamento de Serviço Técnico',`<div class="formgrid">${f('unit','Unidade','select',['LAGOS','MAGÉ'])}${customerPicker('customer_id','Cliente')}${f('brand','Marca')}${f('model','Modelo')}${f('imei','IMEI (opcional)')}${isUnlock?f('unlock_type','Desbloqueio','select',['FRP / Conta Google','Desbloqueio de rede','Software','Outro']):f('service_name','Serviço','select',['Troca de tela','Troca de bateria','Troca de conector','Troca de câmera','Troca de tampa','Software / otimização','Reparo de placa','Película','Outro'])}${quoteItemsEditor()}${f('subtotal','Subtotal','number','0')}${travelField()}${warrantyDaysField()}${f('valid_until','Válido até','date')}${f('status','Status','select',['aberto','aprovado','aguardando','recusado','expirado'])}${f('conditions','Condições','textarea','Orçamento sujeito à avaliação técnica.',true)}${f('observations','Observações','textarea','',true)}</div>`,async()=>{try{const m=$('#modal'),d=formValues(m.querySelector('#modalForm'));d.quote_type=type;d.items=collectQuoteItems();d.total=d.items.reduce((s,x)=>s+(x.total*x.qty),0)+((d.travel_enabled==='1')?Number(d.travel_fee||0):0);d.subtotal=d.items.reduce((s,x)=>s+(x.total*x.qty),0);await api('/api/quotes',{method:'POST',body:JSON.stringify(d)});closeModal();toast('Orçamento salvo');render()}catch(e){toast(e.message,'error')}});setTimeout(()=>{wirePickers();const t=$('#travelToggle');if(t)t.onchange=()=>{$('#travelBox').hidden=!t.checked}},40)
 };
 
 pages.chat_units=async()=>{
@@ -479,12 +509,10 @@ unlockForm=function(){
 // Unified OS: technical + unlock in one operational queue.
 pages.services=async()=>{
  const [s,u]=await Promise.all([list('services'),list('unlocks')]);const rowsAll=[...s.map(x=>({...x,_type:'Técnica',_client:x.customer_name||'-',_device:(x.model||'')||'-',_value:x.price||0,_status:x.status})),...u.map(x=>({...x,_type:'Desbloqueio',_client:x.customer_name||'-',_device:(x.brand||'')+' '+(x.model||''),_value:x.price||0,_status:x.status}))].sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
- $('#content').innerHTML=head('Ordens de Serviço','Central única para assistência técnica + desbloqueios • sem duplicar operação',`<button class="btn" onclick="serviceForm()">＋ Nova OS Técnica</button><button class="btn dark" onclick="unlockForm()">🔓 Novo Desbloqueio</button>`)+`<div class="os-tabs"><button class="active" onclick="filterUnifiedOS('todos',this)">Todas <b>${rowsAll.length}</b></button><button onclick="filterUnifiedOS('tecnica',this)">Técnicas <b>${s.length}</b></button><button onclick="filterUnifiedOS('unlock',this)">Desbloqueios <b>${u.length}</b></button></div><div id="unifiedOsTable">${table(rowsAll,[['_type','Tipo',r=>r._type==='Desbloqueio'?'<span class="badge y">🔓 Desbloqueio</span>':'<span class="badge g">🔧 Técnica</span>'],['_client','Cliente'],['_device','Aparelho'],['_status','Status',r=>badge(r._status)],['_value','Valor',r=>money(r._value)],['created_at','Entrada']],r=>r._type==='Desbloqueio'?`<div class="row-actions"><button class="iconbtn" onclick="unlockDetails(${r.id})">👁️</button><button class="iconbtn" onclick="editUnlock(${r.id})">📝</button><button class="iconbtn" onclick="statusUnlock(${r.id},'pronto')">✓</button><button class="iconbtn" onclick="whatsappUnlock(${r.id},'${String(r._status||'').replace(/'/g,"\\'")}')">🟢</button></div>`:`<div class="row-actions"><button class="iconbtn" onclick="serviceDetails(${r.id})">👁️</button><button class="iconbtn" onclick="editService(${r.id})">📝</button><button class="iconbtn" onclick="statusService(${r.id},'pronto')">✓</button><button class="iconbtn" onclick="copyOSLink('${r.public_token}')">🔗</button><button class="iconbtn" onclick="whatsappService(${r.id},'${String(r._status||'').replace(/'/g,"\\'")}')">🟢</button></div>`)}</div>`;
+ $('#content').innerHTML=head('Ordens de Serviço','Central única para assistência técnica + desbloqueios • sem duplicar operação',`<button class="btn" onclick="serviceForm()">＋ Nova OS Técnica</button><button class="btn dark" onclick="unlockForm()">🔓 Novo Desbloqueio</button>`)+`<div class="os-tabs"><button class="active" onclick="filterUnifiedOS('todos',this)">Todas <b>${rowsAll.length}</b></button><button onclick="filterUnifiedOS('tecnica',this)">Técnicas <b>${s.length}</b></button><button onclick="filterUnifiedOS('unlock',this)">Desbloqueios <b>${u.length}</b></button></div><div id="unifiedOsTable">${table(rowsAll,[['_type','Tipo',r=>r._type==='Desbloqueio'?'<span class="badge y">🔓 Desbloqueio</span>':'<span class="badge g">🔧 Técnica</span>'],['_client','Cliente'],['_device','Aparelho'],['_status','Status',r=>badge(r._status)],['_value','Valor',r=>money(r._value)],['created_at','Entrada']],r=>r._type==='Desbloqueio'?`<div class="row-actions"><button class="iconbtn" onclick="unlockDetails(${r.id})">👁️</button><button class="iconbtn" onclick="editUnlock(${r.id})">📝</button><button class="iconbtn" onclick="statusUnlock(${r.id},'pronto')">✓</button><button class="iconbtn" onclick="whatsappUnlock(${r.id},'${String(r._status||'').replace(/'/g,"\\'")}')">🟢</button></div>`:`<div class="row-actions"><button class="iconbtn" onclick="serviceDetails(${r.id})">👁️</button><button class="iconbtn" onclick="editService(${r.id})">📝</button><button class="iconbtn" onclick="statusService(${r.id},'pronto')">✓</button><button class="iconbtn" onclick="copyOSLink('${r.public_token}','service')">🔗</button><button class="iconbtn" onclick="whatsappService(${r.id},'${String(r._status||'').replace(/'/g,"\\'")}')">🟢</button></div>`)}</div>`;
  window.__unifiedOS=rowsAll;
 };
 window.filterUnifiedOS=function(type,btn){$$('.os-tabs button').forEach(x=>x.classList.remove('active'));btn.classList.add('active');const a=window.__unifiedOS||[];const f=type==='todos'?a:type==='tecnica'?a.filter(x=>x._type==='Técnica'):a.filter(x=>x._type==='Desbloqueio');$('#unifiedOsTable').innerHTML=table(f,[['_type','Tipo',r=>r._type==='Desbloqueio'?'<span class="badge y">🔓 Desbloqueio</span>':'<span class="badge g">🔧 Técnica</span>'],['_client','Cliente'],['_device','Aparelho'],['_status','Status',r=>badge(r._status)],['_value','Valor',r=>money(r._value)],['created_at','Entrada']],r=>r._type==='Desbloqueio'?`<button class="iconbtn" onclick="unlockDetails(${r.id})">👁️</button>`:`<button class="iconbtn" onclick="serviceDetails(${r.id})">👁️</button>`)};
-pages.unlock=async()=>go('services');
-
 // Operational pages inspired by the reference workflow, implemented natively for KV CELL.
 pages.agenda=async()=>{const d=await list('appointments');$('#content').innerHTML=head('Agenda','Agendamentos, retornos, entregas e encaixes',`<button class="btn" onclick="appointmentForm()">＋ Novo Agendamento</button>`)+table(d,[['start_at','Data / Hora'],['customer_name','Cliente'],['title','Compromisso'],['service_type','Tipo'],['technician','Técnico'],['status','Status',r=>badge(r.status)],['notes','Observações']],r=>`<button class="btn ghost" onclick="appointmentDone(${r.id})">Concluir</button>`)};
 window.appointmentForm=function(){formModal('Novo Agendamento',`<div class="formgrid">${f('unit','Unidade','select',['LAGOS','MAGÉ'])}${customerPicker('customer_id','Cliente')}${f('title','Título *')}${f('service_type','Tipo','select',['Entrega','Retorno','Diagnóstico','Orçamento','Outro'])}${f('start_at','Início','datetime-local')}${f('end_at','Fim','datetime-local')}${f('technician','Técnico')}${f('status','Status','select',['agendado','confirmado','concluído','cancelado'])}${f('notes','Observações','textarea','',true)}</div>`,async()=>{const m=$('#modal'),d=formValues(m.querySelector('#modalForm'));await api('/api/appointments',{method:'POST',body:JSON.stringify(d)});closeModal();toast('Agendamento salvo');render()});setTimeout(wirePickers,40)};
@@ -524,18 +552,17 @@ pages.adb=async()=>{$('#content').innerHTML=head('ADB e Antivírus','Central de 
 pages.plan=async()=>{$('#content').innerHTML=head('Meu Plano','Recursos do KV CELL ULTIMATE SUPREME',`<span class="badge g">ULTIMATE SUPREME</span>`)+`<div class="cards"><div class="metric"><div class="label">OS</div><div class="value">∞</div><div class="sub">Operação local</div></div><div class="metric"><div class="label">UNIDADES</div><div class="value">2</div><div class="sub">LAGOS + MAGÉ</div></div><div class="metric"><div class="label">IA</div><div class="value">FREE</div><div class="sub">OpenRouter → Gemini</div></div><div class="metric"><div class="label">BACKUP</div><div class="value">☁</div><div class="sub">Square Cloud Blob</div></div></div><section class="panel"><h2>Central de recursos</h2><p>OS unificada, fiado integrado, CRM, agenda, estoque, catálogo, películas, equipe, financeiro e canais internos.</p></section>`};
 
 // Employees alias to existing user module.
-names.users='Funcionários';
+names.users='Usuários';
 
 // V100 navigation: model after the reference screenshots, but native KV CELL branding.
 const _v100Boot=boot;
 boot=async function(){
  document.body.innerHTML=`<div class="shell v100-shell"><aside class="sidebar"><div class="brand"><div class="logo-wrap"><div class="logo">KV</div></div><div><b>KV CELL</b><small>ULTIMATE SUPREME • V100</small></div></div><div class="nav">
  <div class="navtitle">PAINEL</div>${['dashboard'].map(nav).join('')}
- <div class="navtitle">ATENDIMENTO</div>${['services','agenda','quotes','pricing','adb','guarantees','fiado'].map(nav).join('')}
+ <div class="navtitle">ATENDIMENTO</div>${['services','agenda','quotes','adb','guarantees','fiado'].map(nav).join('')}
  <div class="navtitle">CADASTROS</div>${['customers','radar','technicians','purchases','suppliers'].map(nav).join('')}
- <div class="navtitle">OPERAÇÃO</div>${['inventory','finance','pdv','devices'].map(nav).join('')}
- <div class="navtitle">DIGITAL</div>${['films','referrals'].map(nav).join('')}
- <div class="navtitle">SISTEMA</div>${['employees','plan','chat_units','ai','logs','admin','settings'].map(nav).join('')}
+ <div class="navtitle">OPERAÇÃO</div>${['finance','pdv'].map(nav).join('')}
+ <div class="navtitle">SISTEMA</div>${['logs','admin','settings'].map(nav).join('')}
  </div></aside><main class="main"><div class="topbar"><div><b id="crumb">Painel</b><div class="crumb">KV CELL ULTIMATE SUPREME • LAGOS + MAGÉ • V100</div></div><div class="top-actions"><select id="unit" class="select unit"><option>TODOS</option><option>LAGOS</option><option>MAGÉ</option></select><button class="btn ghost" onclick="openSearch()">⌕ Buscar</button><button class="btn ghost" onclick="logout()">Sair</button></div></div><div id="content"></div></main></div><div id="modal" class="modal"></div><div id="toast" class="toast"></div>`;
  $('#unit').value=UNIT;$('#unit').onchange=e=>{UNIT=e.target.value;localStorage.setItem('kv_unit',UNIT);render()};render();
 };
@@ -624,7 +651,7 @@ pages.customers=async()=>{
  $('#content').innerHTML=analyticsHeader('Clientes','CRM da KV CELL • visão gerencial, frequência, score, recência e relacionamento',`<button class="btn" onclick="customerForm()">＋ Novo cliente</button>`)+
  `<div class="cards"><div class="metric"><div class="label">CLIENTES</div><div class="value">${enriched.length}</div><div class="sub">Base cadastrada</div></div><div class="metric"><div class="label">ATIVOS</div><div class="value green">${active}</div><div class="sub">Com OS registrada</div></div><div class="metric"><div class="label">NO RADAR</div><div class="value red">${inactive}</div><div class="sub">120+ dias sem voltar</div></div><div class="metric"><div class="label">TICKET MÉDIO</div><div class="value yellow">${money(avg)}</div><div class="sub">Total gasto por cliente</div></div></div>
  <div class="analytics-grid"><section class="panel"><div class="panel-head"><h2>Distribuição por recorrência</h2><span class="badge y">CRM</span></div>${donutChart([{label:'0 OS',value:buckets[0].value,color:'#777'},{label:'1–2 OS',value:buckets[1].value,color:'#ffd400'},{label:'3+ OS',value:buckets[2].value,color:'#34d399'}])}</section><section class="panel"><div class="panel-head"><h2>Clientes que mais movimentam</h2><span class="muted">Top 8</span></div>${miniBarChart(top.map(x=>({name:x.name,total_spent:x.total_spent})).map(x=>({...x,labelKey:'name'})),'total_spent','name',money)}</section></div>
- <section class="panel" style="margin-top:16px"><div class="panel-head"><h2>Base de clientes</h2><span class="badge g">${enriched.length} registros</span></div>${table(enriched,[['type','Tipo'],['name','Nome',r=>`<button class="linkbtn" onclick="openCustomer(${r.id})">${esc(r.name)}</button>`],['phone','Telefone'],['service_count','OS'],['score','Score',r=>`<span class="score">${r.score||0}</span>`],['last_service','Último serviço',r=>r.last_service?new Date(r.last_service.replace(' ','T')).toLocaleDateString('pt-BR'):'Nunca'],['total_spent','Total gasto',r=>money(r.total_spent)],['balance','Saldo',r=>money(r.balance)]],r=>`<button class="btn ghost" onclick="openCustomer(${r.id})">Detalhes</button> <a class="btn ghost" target="_blank" href="https://wa.me/55${String(r.phone||'').replace(/\D/g,'')}?text=${encodeURIComponent('Olá '+r.name+'! Temos uma novidade especial na KV CELL. 📱⭐')}">WhatsApp</a>`)}</section>`;
+ <section class="panel" style="margin-top:16px"><div class="panel-head"><h2>Base de clientes</h2><span class="badge g">${enriched.length} registros</span></div>${table(enriched,[['type','Tipo'],['name','Nome',r=>`<button class="linkbtn" onclick="openCustomer(${r.id})">${esc(r.name)}</button>`],['phone','Telefone'],['service_count','OS'],['score','Score',r=>`<span class="score">${r.score||0}</span>`],['last_service','Último serviço',r=>r.last_service?new Date(r.last_service.replace(' ','T')).toLocaleDateString('pt-BR'):'Nunca'],['total_spent','Total gasto',r=>money(r.total_spent)],['balance','Saldo',r=>money(r.balance)]],r=>`<button class="btn ghost" onclick="openCustomer(${r.id})">Detalhes</button> <button class="btn ghost" onclick="editCustomerV500(${r.id})">Editar</button> <button class="btn ghost" onclick="deleteCustomerV500(${r.id})">Excluir</button> <a class="btn ghost" target="_blank" href="https://wa.me/55${String(r.phone||'').replace(/\D/g,'')}?text=${encodeURIComponent('Olá '+r.name+'! Temos uma novidade especial na KV CELL. 📱⭐')}">WhatsApp</a>`)}</section>`;
 };
 
 // Finance — screenshot-like KPI row + monthly evolution + category distribution.
@@ -636,7 +663,7 @@ pages.finance=async()=>{
  $('#content').innerHTML=analyticsHeader('Financeiro','Entradas, custos reais, lucro e evolução financeira por unidade',`<button class="btn" onclick="financeForm()">＋ Lançamento</button>`)+
  `<div class="cards"><div class="metric metric-focus"><div class="label">TOTAL DE ENTRADAS</div><div class="value green">${money(inc)}</div><div class="sub">Receitas registradas</div></div><div class="metric"><div class="label">TOTAL DE SAÍDAS</div><div class="value red">${money(out)}</div><div class="sub">Custos e despesas</div></div><div class="metric"><div class="label">LUCRO OPERACIONAL</div><div class="value yellow">${money(profit.profit)}</div><div class="sub">Receita − custo</div></div><div class="metric"><div class="label">SALDO</div><div class="value">${money(bal)}</div><div class="sub">Caixa financeiro</div></div></div>
  <div class="analytics-grid"><section class="panel"><div class="panel-head"><h2>Evolução financeira • 14 dias</h2><div class="legend"><span><i class="dot" style="background:#34d399"></i>Entradas</span><span><i class="dot" style="background:#ff5c68"></i>Saídas</span></div></div><div class="finance-chart">${chart.map(x=>{const mx=Math.max(1,...chart.map(y=>Math.max(y.income,y.expense)));return `<div class="finance-col"><div class="finance-bars"><i class="fb-in" style="height:${Math.max(3,x.income/mx*150)}px" title="${money(x.income)}"></i><i class="fb-out" style="height:${Math.max(3,x.expense/mx*150)}px" title="${money(x.expense)}"></i></div><small>${esc(x.date)}</small></div>`}).join('')}</div></section><section class="panel"><div class="panel-head"><h2>Distribuição por categoria</h2><span class="muted">Movimentação</span></div>${donutChart(cats.length?cats:[{label:'Sem lançamentos',value:1,color:'#333'}])}</section></div>
- <section class="panel" style="margin-top:16px"><div class="panel-head"><h2>Histórico financeiro</h2><span class="badge y">${d.length} lançamentos</span></div>${table(d,[['unit','Unidade'],['type','Tipo',r=>r.type==='entrada'?'<span class="badge g">Entrada</span>':'<span class="badge r">Saída</span>'],['category','Categoria'],['description','Descrição'],['amount','Valor',r=>money(r.amount)],['due_date','Vencimento'],['created_at','Data']])}</section>`;
+ <section class="panel" style="margin-top:16px"><div class="panel-head"><h2>Histórico financeiro</h2><span class="badge y">${d.length} lançamentos</span></div>${table(d,[['unit','Unidade'],['type','Tipo',r=>r.type==='entrada'?'<span class="badge g">Entrada</span>':'<span class="badge r">Saída</span>'],['category','Categoria'],['description','Descrição'],['amount','Valor',r=>money(r.amount)],['due_date','Vencimento'],['created_at','Data']],r=>`<button class="btn ghost" onclick="editFinanceV500(${r.id})">Editar</button>`)}</section>`;
 };
 
 // Recompra radar — segmentation + score chart + inactive list.
@@ -694,7 +721,7 @@ window.adbConnect=async(type,mode)=>{const status=$('#adbStatus');if(status)stat
 
 // Remove the three requested sidebar tabs: Meu Plano, Catálogo Digital and Serviços e Indicações.
 boot=async function(){
- document.body.innerHTML=`<div class="shell v100-shell"><aside class="sidebar"><div class="brand"><div class="logo-wrap"><div class="logo">KV</div></div><div><b>KV CELL</b><small>ULTIMATE SUPREME • V101</small></div></div><div class="nav"><div class="navtitle">PAINEL</div>${['dashboard'].map(nav).join('')}<div class="navtitle">ATENDIMENTO</div>${['services','agenda','quotes','pricing','adb','guarantees','fiado'].map(nav).join('')}<div class="navtitle">CADASTROS</div>${['customers','radar','technicians','purchases','suppliers'].map(nav).join('')}<div class="navtitle">OPERAÇÃO</div>${['inventory','finance','pdv','devices'].map(nav).join('')}<div class="navtitle">DIGITAL</div>${['films'].map(nav).join('')}<div class="navtitle">SISTEMA</div>${['employees','chat_units','ai','logs','admin','settings'].map(nav).join('')}</div></aside><main class="main"><div class="topbar"><div><b id="crumb">Painel</b><div class="crumb">KV CELL ULTIMATE SUPREME • LAGOS + MAGÉ • V101</div></div><div class="top-actions"><select id="unit" class="select unit"><option>TODOS</option><option>LAGOS</option><option>MAGÉ</option></select><button class="btn ghost" onclick="openSearch()">⌕ Buscar</button><button class="btn ghost" onclick="logout()">Sair</button></div></div><div id="content"></div></main></div><div id="modal" class="modal"></div><div id="toast" class="toast"></div>`;
+ document.body.innerHTML=`<div class="shell v100-shell"><aside class="sidebar"><div class="brand"><div class="logo-wrap"><div class="logo">KV</div></div><div><b>KV CELL</b><small>ULTIMATE SUPREME • V101</small></div></div><div class="nav"><div class="navtitle">PAINEL</div>${['dashboard'].map(nav).join('')}<div class="navtitle">ATENDIMENTO</div>${['services','agenda','quotes','adb','guarantees','fiado'].map(nav).join('')}<div class="navtitle">CADASTROS</div>${['customers','radar','technicians','purchases','suppliers'].map(nav).join('')}<div class="navtitle">OPERAÇÃO</div>${['inventory','finance','pdv','devices'].map(nav).join('')}<div class="navtitle">SISTEMA</div>${['chat_units','logs','admin','settings'].map(nav).join('')}</div></aside><main class="main"><div class="topbar"><div><b id="crumb">Painel</b><div class="crumb">KV CELL ULTIMATE SUPREME • LAGOS + MAGÉ • V101</div></div><div class="top-actions"><select id="unit" class="select unit"><option>TODOS</option><option>LAGOS</option><option>MAGÉ</option></select><button class="btn ghost" onclick="openSearch()">⌕ Buscar</button><button class="btn ghost" onclick="logout()">Sair</button></div></div><div id="content"></div></main></div><div id="modal" class="modal"></div><div id="toast" class="toast"></div>`;
  $('#unit').value=UNIT;$('#unit').onchange=e=>{UNIT=e.target.value;localStorage.setItem('kv_unit',UNIT);render()};render();
 };
 // KV CELL ULTIMATE SUPREME V300 — restore useful OS workflow + preserve V101 features
@@ -801,7 +828,7 @@ serviceForm=function(){
 unlockForm=function(){
   formModal('Nova OS de Desbloqueio',`<div class="v100-modal-title unlock-title">UNLOCKER PRO · operação de desbloqueio</div><div class="formgrid">
     ${f('unit','Unidade','select',['LAGOS','MAGÉ'])}${customerPicker('customer_id','Selecionar Cliente')}${detailedClientFields()}
-    ${f('brand','Marca *')}${f('model','Modelo *')}${f('kind','Tipo de Desbloqueio *','select',['FRP / Conta Google','MDM','Desbloqueio de rede','Software','Remoção de PayJoy','Outro'])}${f('provider','Servidor / Provedor')}${technicianPicker('technician_id','Técnico Responsável')}${f('description','Descrição do Serviço *','textarea','',true)}
+    ${f('brand','Marca *')}${f('model','Modelo *')}${f('kind','Tipo de Desbloqueio *','select',['FRP / Conta Google','Desbloqueio de rede','Software','Remoção de PayJoy','Outro'])}${f('provider','Servidor / Provedor')}${technicianPicker('technician_id','Técnico Responsável')}${f('description','Descrição do Serviço *','textarea','',true)}
     ${f('expected_date','Previsão de entrega','date')}${f('estimated_time','Tempo estimado')}${f('priority','Prioridade','select',['Normal','Alta','Urgente'])}
     ${f('price','Valor do Serviço (R$) *','number','0')}${f('entry_value','Sinal / Entrada (R$)','number','0')}${f('cost_material','Custo de material / ferramenta','number','0')}${f('cost_labor','Custo de mão de obra','number','0')}${f('cost_extra','Outros custos','number','0')}
     ${f('notes','Observações Adicionais','textarea','',true)}<div class="field full guarantee-alert"><b>⚠ SEM GARANTIA</b><span>Ordens de Serviço de desbloqueio são finalizadas SEM GARANTIA.</span></div>
@@ -816,7 +843,7 @@ pages.services=async()=>{
   const rows=[...s.map(x=>({...x,_type:'Técnica',_client:x.customer_name||'-',_device:x.model||'-',_value:x.price||0,_status:x.status})),...u.map(x=>({...x,_type:'Desbloqueio',_client:x.customer_name||'-',_device:[x.brand,x.model].filter(Boolean).join(' '),_value:x.price||0,_status:x.status}))].sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
   const actions=r=>r._type==='Desbloqueio'
     ? `<div class="row-actions"><button class="iconbtn" onclick="unlockDetails(${r.id})">👁️</button><button class="iconbtn" onclick="editUnlock(${r.id})">📝</button><button class="iconbtn" onclick="statusUnlock(${r.id},'pronto')">✓</button><button class="iconbtn" onclick="whatsappUnlock(${r.id},'${String(r._status||'').replace(/'/g,"\\'")}')">💬</button></div>`
-    : `<div class="os-actions-v300"><div class="row-actions"><button class="iconbtn" title="Abrir OS" onclick="serviceDetails(${r.id})">👁️</button><button class="iconbtn" title="Editar" onclick="editService(${r.id})">📝</button><button class="iconbtn" title="Copiar link do cliente" onclick="copyOSLink('${r.public_token}')">🔗</button><button class="iconbtn" title="Garantia desta OS" onclick="warrantyService(${r.id})">🛡️</button><button class="iconbtn" title="WhatsApp conforme status" onclick="whatsappService(${r.id},'${String(r._status||'').replace(/'/g,"\\'")}')">💬</button></div>${osStatusButtons(r.id,r._status)}</div>`;
+    : `<div class="os-actions-v300"><div class="row-actions"><button class="iconbtn" title="Abrir OS" onclick="serviceDetails(${r.id})">👁️</button><button class="iconbtn" title="Editar" onclick="editService(${r.id})">📝</button><button class="iconbtn" title="Copiar link do cliente" onclick="copyOSLink('${r.public_token}','service')">🔗</button><button class="iconbtn" title="Garantia desta OS" onclick="warrantyService(${r.id})">🛡️</button><button class="iconbtn" title="WhatsApp conforme status" onclick="whatsappService(${r.id},'${String(r._status||'').replace(/'/g,"\\'")}')">💬</button></div>${osStatusButtons(r.id,r._status)}</div>`;
   $('#content').innerHTML=head('Ordens de Serviço','OS técnica com acompanhamento público por status • desbloqueio separado',`<button class="btn" onclick="serviceForm()">＋ Nova OS Técnica</button><button class="btn dark" onclick="unlockForm()">🔓 Novo Desbloqueio</button>`)+`<div class="os-tabs"><button class="active" onclick="filterUnifiedOS('todos',this)">Todas <b>${rows.length}</b></button><button onclick="filterUnifiedOS('tecnica',this)">Técnicas <b>${s.length}</b></button><button onclick="filterUnifiedOS('unlock',this)">Desbloqueios <b>${u.length}</b></button></div><div id="unifiedOsTable">${table(rows,[['_type','Tipo',r=>r._type==='Desbloqueio'?'<span class="badge y">🔓 Desbloqueio</span>':'<span class="badge g">🔧 Técnica</span>'],['_client','Cliente'],['_device','Aparelho'],['_status','Status',r=>badge(r._status)],['_value','Valor',r=>money(r._value)],['created_at','Entrada']],actions)}</div>`;
 };
 
@@ -840,7 +867,7 @@ function deviceDetailsV300(id){api('/api/devices?unit=TODOS').then(ds=>{const d=
 
 // Sidebar V300: removes only the redundant separate abandoned tab; all other useful modules remain.
 boot=async function(){
- document.body.innerHTML=`<div class="shell v100-shell"><aside class="sidebar"><div class="brand"><div class="logo-wrap"><div class="logo">KV</div></div><div><b>KV CELL</b><small>ULTIMATE SUPREME • V1000.0</small></div></div><div class="nav"><div class="navtitle">PAINEL</div>${['dashboard'].map(nav).join('')}<div class="navtitle">ATENDIMENTO</div>${['services','agenda','quotes','pricing','adb','guarantees','fiado'].map(nav).join('')}<div class="navtitle">CADASTROS</div>${['customers','radar','technicians','purchases','suppliers'].map(nav).join('')}<div class="navtitle">OPERAÇÃO</div>${['inventory','finance','pdv','devices'].map(nav).join('')}<div class="navtitle">DIGITAL</div>${['films'].map(nav).join('')}<div class="navtitle">SISTEMA</div>${['employees','chat_units','ai','logs','admin','settings'].map(nav).join('')}</div></aside><main class="main"><div class="topbar"><div><b id="crumb">Painel</b><div class="crumb">KV CELL ULTIMATE SUPREME • LAGOS + MAGÉ • V300</div></div><div class="top-actions"><select id="unit" class="select unit"><option>TODOS</option><option>LAGOS</option><option>MAGÉ</option></select><button class="btn ghost" onclick="openSearch()">⌕ Buscar</button><button class="btn ghost" onclick="logout()">Sair</button></div></div><div id="content"></div></main></div><div id="modal" class="modal"></div><div id="toast" class="toast"></div>`;
+ document.body.innerHTML=`<div class="shell v100-shell"><aside class="sidebar"><div class="brand"><div class="logo-wrap"><div class="logo">KV</div></div><div><b>KV CELL</b><small>ULTIMATE SUPREME • V1000.0</small></div></div><div class="nav"><div class="navtitle">PAINEL</div>${['dashboard'].map(nav).join('')}<div class="navtitle">ATENDIMENTO</div>${['services','agenda','quotes','adb','guarantees','fiado'].map(nav).join('')}<div class="navtitle">CADASTROS</div>${['customers','radar','technicians','purchases','suppliers'].map(nav).join('')}<div class="navtitle">OPERAÇÃO</div>${['inventory','finance','pdv','devices'].map(nav).join('')}<div class="navtitle">SISTEMA</div>${['chat_units','logs','admin','settings'].map(nav).join('')}</div></aside><main class="main"><div class="topbar"><div><b id="crumb">Painel</b><div class="crumb">KV CELL ULTIMATE SUPREME • LAGOS + MAGÉ • V300</div></div><div class="top-actions"><select id="unit" class="select unit"><option>TODOS</option><option>LAGOS</option><option>MAGÉ</option></select><button class="btn ghost" onclick="openSearch()">⌕ Buscar</button><button class="btn ghost" onclick="logout()">Sair</button></div></div><div id="content"></div></main></div><div id="modal" class="modal"></div><div id="toast" class="toast"></div>`;
  $('#unit').value=UNIT;$('#unit').onchange=e=>{UNIT=e.target.value;localStorage.setItem('kv_unit',UNIT);render()};render();
 };
 /* =========================================================
@@ -880,21 +907,102 @@ window.wirePickersV500=function(){
 // never rendered as customer-facing fields.
 window.editSimpleV500=async function(resource,id,title,fields){
   const d=(await api('/api/'+resource+'?unit=TODOS')).find(x=>x.id===id); if(!d)return;
-  formModal(title,`<div class="formgrid">${fields.map(x=>f(x.name,x.label,x.type||'text',d[x.name]??'',!!x.full)).join('')}</div>`,async()=>{
+  const body=fields.map(field=>{
+    const value=d[field.name]??'';
+    if(field.type==='boolean'||field.type==='select'){
+      const options=field.type==='boolean'?[{value:'1',label:'Sim'},{value:'0',label:'Não'}]:(field.options||[]).map(option=>typeof option==='string'?{value:option,label:option}:option);
+      const selected=field.type==='boolean'?(value===true||value===1||String(value)==='1'?'1':'0'):String(value);
+      return `<div class="field ${field.full?'full':''}"><label>${esc(field.label)}</label><select class="select" name="${esc(field.name)}">${options.map(option=>`<option value="${esc(option.value)}" ${String(option.value)===selected?'selected':''}>${esc(option.label)}</option>`).join('')}</select></div>`;
+    }
+    const inputValue=field.type==='datetime-local'?String(value).replace(' ','T').slice(0,16):value;
+    return f(field.name,field.label,field.type||'text',inputValue,!!field.full);
+  }).join('');
+  formModal(title,`<div class="formgrid">${body}</div>`,async()=>{
     const m=$('#modal'),x=formValues(m.querySelector('#modalForm'));x.id=id;
+    fields.forEach(field=>{
+      if(field.type==='boolean')x[field.name]=x[field.name]==='1';
+      else if(field.type==='number')x[field.name]=x[field.name]===''?null:Number(x[field.name]);
+    });
     try{await api('/api/'+resource,{method:'PUT',body:JSON.stringify(x)});closeModal();toast('Registro atualizado');render()}catch(e){toast(e.message,'error')}
   });
 };
 
-window.editTechnician= id=>editSimpleV500('technicians',id,'Editar técnico',[{name:'name',label:'Nome'},{name:'phone',label:'Telefone'},{name:'email',label:'E-mail'},{name:'specialties',label:'Especialidades'},{name:'active',label:'Ativo'}]);
-window.editSupplier= id=>editSimpleV500('suppliers',id,'Editar fornecedor',[{name:'name',label:'Nome'},{name:'document',label:'Documento'},{name:'phone',label:'Telefone'},{name:'email',label:'E-mail'},{name:'city',label:'Cidade'},{name:'notes',label:'Observações',full:true}]);
-window.editAppointment= id=>editSimpleV500('appointments',id,'Editar agendamento',[{name:'title',label:'Título'},{name:'service_type',label:'Tipo'},{name:'start_at',label:'Início',type:'datetime-local'},{name:'end_at',label:'Fim',type:'datetime-local'},{name:'status',label:'Status'},{name:'technician',label:'Técnico'},{name:'notes',label:'Observações',full:true}]);
-window.editGuarantee= id=>editSimpleV500('guarantees',id,'Editar garantia',[{name:'device',label:'Aparelho'},{name:'description',label:'Descrição',full:true},{name:'start_date',label:'Início',type:'date'},{name:'end_date',label:'Fim',type:'date'},{name:'status',label:'Status'},{name:'notes',label:'Observações',full:true}]);
+window.editCustomerV500=id=>editSimpleV500('customers',id,'Editar cliente',[
+  {name:'name',label:'Nome completo'},
+  {name:'type',label:'Pessoa (PF/PJ)'},
+  {name:'document_type',label:'Tipo de documento'},
+  {name:'document',label:'CPF / CNPJ'},
+  {name:'phone_type',label:'Tipo de telefone'},
+  {name:'phone',label:'Telefone'},
+  {name:'email',label:'E-mail',type:'email'},
+  {name:'address',label:'Endereço'},
+  {name:'city',label:'Cidade'},
+  {name:'birth_date',label:'Data de nascimento',type:'date'},
+  {name:'balance',label:'Saldo',type:'number'},
+  {name:'observations',label:'Observações',type:'textarea',full:true},
+]);
+window.deleteCustomerV500=async id=>{
+  if(!confirm('Excluir este cliente? Registros vinculados nunca serão removidos.'))return;
+  try{
+    await api('/api/customers?id='+encodeURIComponent(id),{method:'DELETE'});
+    toast('Cliente excluído');
+    render();
+  }catch(e){toast(e.message,'error')}
+};
+
+window.editTechnician= id=>editSimpleV500('technicians',id,'Editar técnico',[{name:'name',label:'Nome'},{name:'unit',label:'Unidade',type:'select',options:['LAGOS','MAGÉ']},{name:'phone',label:'Telefone'},{name:'email',label:'E-mail',type:'email'},{name:'specialties',label:'Especialidades'},{name:'active',label:'Ativo',type:'boolean'}]);
+window.editSupplier= id=>editSimpleV500('suppliers',id,'Editar fornecedor',[{name:'name',label:'Nome'},{name:'unit',label:'Unidade',type:'select',options:['LAGOS','MAGÉ']},{name:'document',label:'Documento'},{name:'phone',label:'Telefone'},{name:'email',label:'E-mail',type:'email'},{name:'city',label:'Cidade'},{name:'notes',label:'Observações',type:'textarea',full:true}]);
+window.editAppointment= id=>editSimpleV500('appointments',id,'Editar agendamento',[{name:'title',label:'Título'},{name:'service_type',label:'Tipo'},{name:'start_at',label:'Início',type:'datetime-local'},{name:'end_at',label:'Fim',type:'datetime-local'},{name:'status',label:'Status',type:'select',options:['agendado','confirmado','concluído','cancelado']},{name:'technician',label:'Técnico'},{name:'notes',label:'Observações',type:'textarea',full:true}]);
+window.editGuarantee= id=>editSimpleV500('guarantees',id,'Editar garantia',[{name:'device',label:'Aparelho'},{name:'description',label:'Descrição',type:'textarea',full:true},{name:'start_date',label:'Início',type:'date'},{name:'end_date',label:'Fim',type:'date'},{name:'status',label:'Status',type:'select',options:['ativa','em análise','em reparo','encerrada']},{name:'notes',label:'Observações',type:'textarea',full:true}]);
 window.editInventory= id=>editSimpleV500('inventory',id,'Editar estoque',[{name:'code',label:'Código'},{name:'name',label:'Nome'},{name:'category',label:'Categoria'},{name:'qty',label:'Quantidade',type:'number'},{name:'min_qty',label:'Mínimo',type:'number'},{name:'cost',label:'Custo',type:'number'},{name:'price',label:'Venda',type:'number'},{name:'supplier',label:'Fornecedor'},{name:'compatibility',label:'Compatibilidade',full:true}]);
-window.editCatalogProduct= id=>editSimpleV500('catalog-products',id,'Editar produto',[{name:'name',label:'Produto'},{name:'category',label:'Categoria'},{name:'price',label:'Preço',type:'number'},{name:'stock',label:'Estoque',type:'number'},{name:'active',label:'Ativo'}]);
+window.editCatalogProduct= id=>editSimpleV500('catalog-products',id,'Editar produto',[{name:'name',label:'Produto'},{name:'category',label:'Categoria'},{name:'price',label:'Preço',type:'number'},{name:'stock',label:'Estoque',type:'number'},{name:'active',label:'Ativo',type:'boolean'}]);
 window.editCommunity= id=>editSimpleV500('community',id,'Editar publicação',[{name:'title',label:'Título'},{name:'message',label:'Mensagem',full:true},{name:'type',label:'Tipo'},{name:'status',label:'Status'}]);
 window.editModel= id=>editSimpleV500('models',id,'Editar precificação',[{name:'brand',label:'Marca'},{name:'model',label:'Modelo'},{name:'margin',label:'Margem %',type:'number'},{name:'warranty',label:'Garantia'},{name:'notes',label:'Observações',full:true}]);
-window.editUser= id=>editSimpleV500('users',id,'Editar funcionário',[{name:'name',label:'Nome'},{name:'email',label:'E-mail'},{name:'role',label:'Perfil'},{name:'unit',label:'Unidade'},{name:'active',label:'Ativo'}]);
+window.editUser= id=>editSimpleV500('users',id,'Editar funcionário',[{name:'name',label:'Nome'},{name:'email',label:'E-mail',type:'email'},{name:'role',label:'Perfil'},{name:'unit',label:'Unidade'},{name:'active',label:'Ativo',type:'boolean'}]);
+window.editFinanceV500=id=>editSimpleV500('finance',id,'Editar lançamento financeiro',[
+  {name:'type',label:'Tipo',type:'select',options:['entrada','saida']},
+  {name:'category',label:'Categoria'},
+  {name:'description',label:'Descrição',type:'textarea',full:true},
+  {name:'amount',label:'Valor',type:'number'},
+  {name:'due_date',label:'Vencimento',type:'date'},
+  {name:'paid',label:'Pago',type:'boolean'},
+]);
+window.cancelAppointmentV500=async id=>{
+  if(!confirm('Cancelar este agendamento? O registro será preservado.'))return;
+  try{await api('/api/appointments',{method:'PUT',body:JSON.stringify({id,status:'cancelado'})});toast('Agendamento cancelado');render()}
+  catch(e){toast(e.message,'error')}
+};
+window.closeGuaranteeV500=async id=>{
+  try{await api('/api/guarantees',{method:'PUT',body:JSON.stringify({id,status:'encerrada'})});toast('Garantia encerrada');render()}
+  catch(e){toast(e.message,'error')}
+};
+pages.agenda=async()=>{
+  const d=await list('appointments');
+  $('#content').innerHTML=head('Agenda','Agendamentos, retornos, entregas e encaixes',`<button class="btn" onclick="appointmentForm()">＋ Novo Agendamento</button>`)+
+    table(d,[['start_at','Data / Hora'],['customer_name','Cliente'],['title','Compromisso'],['service_type','Tipo'],['technician','Técnico'],['status','Status',r=>badge(r.status)],['notes','Observações']],
+      r=>`<div class="row-actions"><button class="btn ghost" onclick="editAppointment(${r.id})">Editar</button><button class="btn ghost" onclick="appointmentDone(${r.id})">Concluir</button><button class="btn ghost" onclick="cancelAppointmentV500(${r.id})">Cancelar</button></div>`);
+};
+pages.guarantees=async()=>{
+  const d=await list('guarantees');
+  $('#content').innerHTML=head('Garantias','Controle de garantia, prazo e retorno do cliente',`<button class="btn" onclick="guaranteeForm()">＋ Nova Garantia</button>`)+
+    table(d,[['customer_name','Cliente'],['device','Aparelho'],['description','Serviço'],['start_date','Início'],['end_date','Fim'],['status','Status',r=>badge(r.status)]],
+      r=>`<div class="row-actions"><button class="btn ghost" onclick="editGuarantee(${r.id})">Editar</button>${r.status!=='encerrada'?`<button class="btn ghost" onclick="closeGuaranteeV500(${r.id})">Encerrar</button>`:''}</div>`);
+};
+pages.technicians=async()=>{
+  const d=await api('/api/technician-stats?unit='+encodeURIComponent(UNIT));
+  const total=d.reduce((a,x)=>a+Number(x.service_count||0),0);
+  const earnings=d.reduce((a,x)=>a+Number(x.earnings||0),0);
+  $('#content').innerHTML=analyticsHeader('Técnicos','Equipe, score, ganhos totais, produtividade e serviços atribuídos',`<button class="btn" onclick="technicianForm()">＋ Novo Técnico</button>`)+
+    `<div class="cards"><div class="metric"><div class="label">TÉCNICOS</div><div class="value">${d.length}</div></div><div class="metric"><div class="label">SERVIÇOS ATRIBUÍDOS</div><div class="value">${total}</div></div><div class="metric"><div class="label">GANHOS ATRIBUÍDOS</div><div class="value green">${money(earnings)}</div></div></div>`+
+    table(d,[['name','Nome'],['unit','Unidade'],['phone','Telefone'],['email','E-mail'],['specialties','Especialidades'],['service_count','Serviços'],['active','Ativo',r=>r.active?'🟢 Ativo':'⚪ Inativo']],
+      r=>`<div class="row-actions"><button class="btn ghost" onclick="technicianDetails(${r.id})">Desempenho</button><button class="btn ghost" onclick="editTechnician(${r.id})">Editar</button></div>`);
+};
+pages.suppliers=async()=>{
+  const d=await list('suppliers');
+  $('#content').innerHTML=head('Fornecedores','Contatos e observações de fornecedores',`<button class="btn" onclick="supplierForm()">＋ Novo Fornecedor</button>`)+
+    table(d,[['name','Fornecedor'],['document','Documento'],['phone','Telefone'],['email','E-mail'],['city','Cidade'],['notes','Observações']],
+      r=>`<div class="row-actions"><button class="btn ghost" onclick="editSupplier(${r.id})">Editar</button></div>`);
+};
 
 // Technical OS: preserve V300 form and add the exact requested device-password UI.
 const _serviceFormV300=serviceForm;
@@ -943,14 +1051,10 @@ window.kvUpdateOSPriceCheck=function(){
  if(price>0){if(price<band.lo){status='ABAIXO DA FAIXA DE REFERÊNCIA';color='#ffd400'}else if(price>band.hi){status='ACIMA DA FAIXA DE REFERÊNCIA';color='#ff8d8d'}else{status='DENTRO DA FAIXA DE REFERÊNCIA';color='#6ff0a5'}}
  box.innerHTML=`<b style="color:${color}">${esc(status)}</b><div>Faixa indicativa RJ: ${money(band.lo)} – ${money(band.hi)} · média da faixa: ${money((band.lo+band.hi)/2)}</div><small>${esc(band.source)}. Comparação interna para a equipe; não aparece no acompanhamento público do cliente. Fontes: <a href="https://loqal.com.br/servicos/celular/apple/rj" target="_blank" rel="noopener">guia de preços RJ</a> · <a href="https://infomixbotafogo.com.br/servicos/conserto-de-celular/largo-do-machado/" target="_blank" rel="noopener">referência local RJ</a> · <a href="https://www.aquitemimportados.com.br/assistencia/troca-de-bateria" target="_blank" rel="noopener">baterias por modelo</a>.</small>`;
 };
-window.addOSDeviceRow=function(v={}){const box=document.querySelector('#osDevicesRows');if(!box)return;const row=document.createElement('div');row.className='os-device-row';row.innerHTML=`<input class="input" data-device="brand" placeholder="Marca" value="${esc(v.brand||'')}"><input class="input" data-device="model" placeholder="Modelo" value="${esc(v.model||'')}"><input class="input" data-device="imei" placeholder="IMEI (opcional)" value="${esc(v.imei||'')}"><input class="input" data-device="serial" placeholder="Nº de série (opcional)" value="${esc(v.serial||'')}"><button type="button" class="iconbtn danger" title="Remover aparelho" onclick="this.parentElement.remove()">✕</button>`;box.appendChild(row)};
-function readOSDeviceRows(){return [...document.querySelectorAll('#osDevicesRows .os-device-row')].map(r=>Object.fromEntries([...r.querySelectorAll('[data-device]')].map(x=>[x.dataset.device,x.value.trim()]))).filter(x=>x.brand||x.model||x.imei||x.serial)}
-
 serviceForm=function(seed={}){
  formModal('Nova Ordem de Serviço',`<div class="v100-modal-title">Assistência Técnica · OS completa</div><div class="formgrid">
  ${f('unit','Unidade','select',['LAGOS','MAGÉ'],seed.unit||UNIT)}${customerPickerV500('customer_id','Selecionar Cliente')}${detailedClientFields()}
  ${f('brand','Marca *','text',seed.brand||'')}${f('model','Modelo *','text',seed.model||'')}${f('imei','IMEI','text',seed.imei||'')}${f('serial','S/N (Serial)','text',seed.serial||'')}${lockCredentialFieldsV500()}
- <div class="field full multi-device-panel"><label>Aparelhos vinculados à mesma OS</label><p class="muted">Adicione outros aparelhos sem criar novas ordens. Todos ficam vinculados ao mesmo cliente e número de OS.</p><div id="osDevicesRows"></div><button type="button" class="btn ghost" onclick="addOSDeviceRow()">＋ Adicionar outro aparelho</button></div>
  ${f('description','Problema relatado *','textarea',seed.description||'',true)}<div class="field full"><label>Checklist de entrada</label>${entryChecklist()}</div>
  ${f('service_type','Tipo de Serviço','select',['Troca de tela','Troca de bateria','Troca de conector','Troca de câmera','Troca de tampa','Software / otimização','Reparo de placa','Película','Outro'],seed.service_type||'Troca de tela')}${f('service_provided','Serviço prestado / peças e qualidade','textarea',seed.service_provided||'',true)}
  ${damageMap()}${photoBox()}${partsEditor()}${productsEditor()}
@@ -965,8 +1069,8 @@ serviceForm=function(seed={}){
    if(d.lock_type==='pattern'&&String(d.pattern||'').split('-').filter(Boolean).length<4){toast('Registre um desenho com pelo menos 4 pontos.','error');return}
    if(!d.customer_id){toast('Selecione um cliente cadastrado.','error');return}
    d.kind='conserto';d.technician_id=tech.id;d.technician=tech.name;d.checklist=collectChecks(m);d.photos=await readPhotos();d.cost_material=Number(d.cost_manual||0);d.cost_labor=0;d.cost_extra=0;
-   d.details={customer_name:d.customer_name,customer_phone:d.customer_phone,customer_document:d.customer_document,brand:d.brand,model:d.model,imei:d.imei,serial:d.serial,lock_type:d.lock_type,pin:d.pin,pattern:d.pattern,service_type:d.service_type,service_provided:d.service_provided,entry_value:Number(d.entry_value||0),bench_location:d.bench_location,expected_date:d.created_expected,approval_required:!!d.approval_required,technician_id:tech.id,technician_name:tech.name,parts:readItemRows('partsRows'),products:readItemRows('productRows'),damage_map:d.damage_map||'{}',market_price_reference:kvRjBand(d.service_type,d.brand,d.model),devices:readOSDeviceRows()};
-   await api('/api/services',{method:'POST',body:JSON.stringify(d)});closeModal();toast((tech.name?'OS criada • técnico: '+tech.name:'OS criada')+(d.details.devices.length?' • '+(d.details.devices.length+1)+' aparelhos vinculados':''));render();
+   d.details={customer_name:d.customer_name,customer_phone:d.customer_phone,customer_document:d.customer_document,brand:d.brand,model:d.model,imei:d.imei,serial:d.serial,lock_type:d.lock_type,pin:d.pin,pattern:d.pattern,service_type:d.service_type,service_provided:d.service_provided,entry_value:Number(d.entry_value||0),bench_location:d.bench_location,expected_date:d.created_expected,approval_required:!!d.approval_required,technician_id:tech.id,technician_name:tech.name,parts:readItemRows('partsRows'),products:readItemRows('productRows'),damage_map:d.damage_map||'{}',market_price_reference:kvRjBand(d.service_type,d.brand,d.model)};
+   await api('/api/services',{method:'POST',body:JSON.stringify(d)});closeModal();toast(tech.name?'OS criada • técnico vinculado: '+tech.name:'OS criada');render();
   }catch(e){toast(e.message,'error')}
  });
  setTimeout(()=>{wirePickersV500();wirePhotoLimit();wireTechnicianPickers();addPart();addProductLine();const m=$('#modalForm');if(m){['service_type','brand','model','price'].forEach(n=>{const el=m.querySelector(`[name="${n}"]`);if(el){el.addEventListener('input',kvUpdateOSPriceCheck);el.addEventListener('change',kvUpdateOSPriceCheck)}});if(seed.customer_id)preselectCustomerV500(seed.customer_id);kvUpdateOSPriceCheck();}},80);
@@ -984,16 +1088,17 @@ window.syncPinV500=el=>{el.value=String(el.value||'').replace(/\D/g,'').slice(0,
 async function preselectCustomerV500(id){try{const c=(await api('/api/customers?unit=TODOS')).find(x=>x.id===Number(id));if(!c)return;const m=$('#modalForm'),h=m.querySelector('[name=customer_id]'),i=m.querySelector('.cp-input');if(h)h.value=c.id;if(i)i.value=c.name+(c.phone?' · '+c.phone:'');['customer_name','customer_phone','customer_document'].forEach(n=>{const e=m.querySelector(`[name="${n}"]`);if(e)e.value=n==='customer_name'?c.name:n==='customer_phone'?c.phone||'':c.document||''})}catch{}}
 
 // Unlock OS stays intentionally simple: no checklist, no photos, no warranty.
-unlockForm=function(seed={}){formModal('Novo Desbloqueio',`<div class="formgrid">${f('unit','Unidade','select',['LAGOS','MAGÉ'],seed.unit||UNIT)}${customerPickerV500('customer_id','Selecionar Cliente')}${detailedClientFields()}${f('brand','Marca', 'text',seed.brand||'')}${f('model','Modelo','text',seed.model||'')}${f('imei','IMEI','text',seed.imei||'')}${f('serial','Número de série','text',seed.serial||'')}${f('operator_original','Operadora original')}${f('kind','Tipo de desbloqueio','select',['FRP / Conta Google','MDM','Desbloqueio de rede','Software','Remoção de PayJoy','Outro'])}${f('provider','Servidor / Provedor')}${f('anydesk','AnyDesk / suporte remoto')}${f('technician','Técnico responsável')}${f('description','Descrição do serviço','textarea','',true)}${f('account_email','E-mail da conta','email')}${f('account_password','Senha da conta','password')}${f('pin','PIN')}${f('pattern','Desenho / padrão')}${f('expected_date','Prazo','date')}${f('estimated_time','Tempo estimado')}${f('priority','Prioridade','select',['Normal','Alta','Urgente'])}${f('price','Valor do serviço','number','0')}${f('entry_value','Entrada','number','0')}${f('cost_material','Custo material/ferramenta','number','0')}${f('cost_labor','Custo de mão de obra','number','0')}${f('cost_extra','Outros custos','number','0')}${f('notes','Observações','textarea','',true)}<div class="field full guarantee-alert"><b>⚠ SEM GARANTIA</b><span>Desbloqueios são executados sem garantia.</span></div></div>`,async()=>{const m=$('#modal'),d=formValues(m.querySelector('#modalForm'));d.status='aberto';d.warranty='0 dias';d.checklist={};d.photos=[];d.details={...d,customer_name:d.customer_name,customer_phone:d.customer_phone,customer_document:d.customer_document};if(seed.customer_id&&!d.customer_id)d.customer_id=seed.customer_id;if(!d.customer_id)return toast('Selecione o cliente.','error');try{await api('/api/unlocks',{method:'POST',body:JSON.stringify(d)});closeModal();toast('Desbloqueio criado sem checklist/fotos/garantia');render()}catch(e){toast(e.message,'error')}});setTimeout(()=>{wirePickersV500();if(seed.customer_id)preselectCustomerV500(seed.customer_id)},50)};
+unlockForm=function(seed={}){formModal('Novo Desbloqueio',`<div class="formgrid">${f('unit','Unidade','select',['LAGOS','MAGÉ'],seed.unit||UNIT)}${customerPickerV500('customer_id','Selecionar Cliente')}${detailedClientFields()}${f('brand','Marca', 'text',seed.brand||'')}${f('model','Modelo','text',seed.model||'')}${f('imei','IMEI','text',seed.imei||'')}${f('serial','Número de série','text',seed.serial||'')}${f('operator_original','Operadora original')}${f('kind','Tipo de desbloqueio','select',['FRP / Conta Google','Desbloqueio de rede','Software','Remoção de PayJoy','Outro'])}${f('provider','Servidor / Provedor')}${f('anydesk','AnyDesk / suporte remoto')}${f('technician','Técnico responsável')}${f('description','Descrição do serviço','textarea','',true)}${f('account_email','E-mail da conta','email')}${f('account_password','Senha da conta','password')}${f('pin','PIN')}${f('pattern','Desenho / padrão')}${f('expected_date','Prazo','date')}${f('estimated_time','Tempo estimado')}${f('priority','Prioridade','select',['Normal','Alta','Urgente'])}${f('price','Valor do serviço','number','0')}${f('entry_value','Entrada','number','0')}${f('cost_material','Custo material/ferramenta','number','0')}${f('cost_labor','Custo de mão de obra','number','0')}${f('cost_extra','Outros custos','number','0')}${f('notes','Observações','textarea','',true)}<div class="field full guarantee-alert"><b>⚠ SEM GARANTIA</b><span>Desbloqueios são executados sem garantia.</span></div></div>`,async()=>{const m=$('#modal'),d=formValues(m.querySelector('#modalForm'));d.status='aberto';d.warranty='0 dias';d.checklist={};d.photos=[];d.details={...d,customer_name:d.customer_name,customer_phone:d.customer_phone,customer_document:d.customer_document};if(seed.customer_id&&!d.customer_id)d.customer_id=seed.customer_id;if(!d.customer_id)return toast('Selecione o cliente.','error');try{await api('/api/unlocks',{method:'POST',body:JSON.stringify(d)});closeModal();toast('Desbloqueio criado sem checklist/fotos/garantia');render()}catch(e){toast(e.message,'error')}});setTimeout(()=>{wirePickersV500();if(seed.customer_id)preselectCustomerV500(seed.customer_id)},50)};
 
 // OS actions: status -> finalizado -> WhatsApp; entrega -> white checklist -> ENTREGUE + Financeiro.
 window.finalizeServiceV500=async function(id){const d=(await api('/api/services?unit=TODOS')).find(x=>x.id===id);if(!d)return;await api('/api/services',{method:'PUT',body:JSON.stringify({id,status:'finalizado'})});toast('Serviço finalizado');try{const c=await serviceCustomer(d.customer_id);const phone=String(c.phone||'').replace(/\D/g,'');if(phone)window.open('https://wa.me/'+(phone.startsWith('55')?phone:'55'+phone)+'?text='+encodeURIComponent(`Olá ${c.name||'cliente'}! 📱 Seu aparelho da OS está pronto na KV CELL. Acompanhe pelo link: ${location.origin}/public/os/${d.public_token}`),'_blank')}catch{}render()};
 window.deliverServiceV500=async function(id){const d=(await api('/api/services?unit=TODOS')).find(x=>x.id===id);if(!d)return;formModal('Checklist de Saída · Serviço Entregue',`<div class="delivery-white-card"><div class="delivery-title">✓ Checklist de Saída</div><div class="delivery-value">${money(d.price)}</div><div class="delivery-checks"><label><input type="checkbox" name="device_returned"> Aparelho conferido e devolvido</label><label><input type="checkbox" name="service_confirmed"> Serviço conferido com o cliente</label><label><input type="checkbox" name="warranty_explained"> Garantia e condições explicadas</label><label><input type="checkbox" name="payment_confirmed"> Pagamento confirmado</label></div>${f('payment','Forma de pagamento','select',['PIX','Dinheiro','Débito','Crédito','Transferência','Fiado/Crediário'])}${f('notes','Observação da entrega','textarea','',true)}<p class="muted">Confirmando, a OS vira ENTREGUE e o lançamento é sincronizado com o Financeiro.</p></div>`,async()=>{const m=$('#modal'),checks=[...m.querySelectorAll('.delivery-checks input')];if(checks.some(x=>!x.checked))return toast('Confirme todos os itens do checklist.','error');await api('/api/services',{method:'PUT',body:JSON.stringify({id,status:'entregue',notes:m.querySelector('[name=notes]').value})});closeModal();toast('Serviço entregue e financeiro atualizado');render()});setTimeout(()=>$('#modal').classList.add('delivery-modal'),30)};
-window.statusServiceV500=async(id,status)=>{await api('/api/services',{method:'PUT',body:JSON.stringify({id,status})});toast('Status atualizado e link público sincronizado');render()};
+window.statusServiceV500=async(id,status)=>{try{await api('/api/services',{method:'PUT',body:JSON.stringify({id,status})});toast('Status atualizado e acompanhamento sincronizado');render()}catch(e){toast('Falha ao atualizar status: '+e.message,'error')}};
+window.statusUnlockV1111=async(id,status)=>{try{await api('/api/unlocks',{method:'PUT',body:JSON.stringify({id,status})});toast('Status do desbloqueio atualizado');render()}catch(e){toast('Falha ao atualizar status: '+e.message,'error')}};
 window.deleteServiceV500=async id=>{if(!confirm('Excluir esta OS?'))return;await api('/api/services?id='+id,{method:'DELETE'});toast('OS excluída');render()};
 window.deleteUnlockV500=async id=>{if(!confirm('Excluir este desbloqueio?'))return;await api('/api/unlocks?id='+id,{method:'DELETE'});toast('Desbloqueio excluído');render()};
 window.copyOSLinkV500=async token=>{const u=location.origin+'/public/os/'+token;try{await navigator.clipboard.writeText(u)}catch{}toast('Link público da OS copiado')};
-window.editServiceV500=async id=>{const d=(await api('/api/services?unit=TODOS')).find(x=>x.id===id);if(!d)return;formModal('Editar OS',`<div class="formgrid">${f('status','Status','select',['aberto','aguardando peça','em andamento','pronto','finalizado','entregue','cancelado'],d.status)}${f('technician','Técnico', 'text',d.technician||'')}${f('price','Valor','number',d.price||0)}${f('warranty','Garantia','text',d.warranty||'')}${f('cost_material','Custo peças','number',d.cost_material||0)}${f('cost_labor','Custo mão de obra','number',d.cost_labor||0)}${f('cost_extra','Outros custos','number',d.cost_extra||0)}${f('diagnosis','Diagnóstico','textarea',d.diagnosis||'',true)}${f('notes','Observações','textarea',d.notes||'',true)}</div>`,async()=>{const x=formValues($('#modalForm'));x.id=id;await api('/api/services',{method:'PUT',body:JSON.stringify(x)});closeModal();toast('OS atualizada');render()})};
+window.editServiceV500=async id=>{try{const d=(await api('/api/services?unit=TODOS')).find(x=>Number(x.id)===Number(id));if(!d)return toast('OS não encontrada','error');let det={};try{det=JSON.parse(d.details_json||'{}')}catch{};const cust=(await api('/api/customers?unit=TODOS')).find(x=>Number(x.id)===Number(d.customer_id));formModal('Editar OS completa #'+id,`<div class="formgrid">${f('unit','Unidade','select',['LAGOS','MAGÉ'],d.unit||UNIT)}${f('customer_id','ID do cliente','number',d.customer_id||'')}${f('device_id','ID do aparelho','number',d.device_id||'')}${f('brand','Marca','text',d.brand||det.brand||'')}${f('model','Modelo','text',d.model||det.model||'')}${f('imei','IMEI / série','text',d.imei||det.imei||'')}${f('kind','Tipo de serviço','text',d.kind||'conserto')}${f('description','Serviço solicitado','textarea',d.description||'',true)}${f('diagnosis','Diagnóstico','textarea',d.diagnosis||'',true)}${f('technician','Técnico','text',d.technician||'')}${f('status','Status','select',['aberto','aguardando aprovação','aguardando peça','em andamento','pronto','finalizado','entregue','cancelado','aprovado pelo cliente','recusado pelo cliente'],d.status||'aberto')}${f('price','Valor cobrado','number',d.price||0)}${f('warranty','Garantia','text',d.warranty||'')}${f('cost_material','Custo peças','number',d.cost_material||0)}${f('cost_labor','Custo mão de obra','number',d.cost_labor||0)}${f('cost_extra','Outros custos','number',d.cost_extra||0)}${f('notes','Observações','textarea',d.notes||'',true)}<div class="field full"><label>Dados adicionais / aparelhos desta OS (JSON existente)</label><textarea class="input" name="details_json" rows="6">${esc(JSON.stringify(det,null,2))}</textarea><small class="muted">Preserva os campos adicionais já salvos, inclusive itens, peças e metadados. JSON inválido não será salvo.</small></div><div class="field full"><small class="muted">Cliente vinculado atualmente: ${esc(cust?.name||'não localizado')} • o ID do cliente pode ser alterado acima.</small></div></div>`,async()=>{try{const x=formValues($('#modalForm'));try{JSON.parse(x.details_json||'{}')}catch{return toast('O JSON de dados adicionais está inválido. Corrija antes de salvar.','error')}x.id=id;x.customer_id=x.customer_id?Number(x.customer_id):null;x.device_id=x.device_id?Number(x.device_id):null;x.price=Number(x.price||0);x.cost_material=Number(x.cost_material||0);x.cost_labor=Number(x.cost_labor||0);x.cost_extra=Number(x.cost_extra||0);await api('/api/services',{method:'PUT',body:JSON.stringify(x)});closeModal();toast('OS completa atualizada e salva');render()}catch(e){toast('Falha ao editar OS: '+e.message,'error')}})}catch(e){toast(e.message,'error')}};
 window.editUnlockV500=async id=>{const d=(await api('/api/unlocks?unit=TODOS')).find(x=>x.id===id);if(!d)return;formModal('Editar desbloqueio',`<div class="formgrid">${f('status','Status','select',['aberto','em andamento','pronto','entregue','cancelado'],d.status)}${f('operator','Operador','text',d.operator||'')}${f('price','Valor','number',d.price||0)}${f('cost_material','Custo material','number',d.cost_material||0)}${f('cost_labor','Custo mão de obra','number',d.cost_labor||0)}${f('cost_extra','Outros custos','number',d.cost_extra||0)}${f('notes','Observações','textarea',d.notes||'',true)}</div>`,async()=>{const x=formValues($('#modalForm'));x.id=id;await api('/api/unlocks',{method:'PUT',body:JSON.stringify(x)});closeModal();toast('Desbloqueio atualizado');render();});};
 
 // Unified OS V500: no visible database IDs.
@@ -1009,11 +1114,33 @@ pages.devices=async()=>{const [a,b]=await Promise.all([list('devices'),list('for
 pages.purchases=async()=>{const d=await list('purchases');const visible=d.filter(x=>x.status!=='vendido');$('#content').innerHTML=analyticsHeader('Compra e Venda','Compra → preparação → vitrine → PDV → vendido • conexão direta com OS',`<button class="btn" onclick="purchaseForm()">＋ Comprar aparelho</button><button class="btn dark" onclick="saleForm()">＋ Venda no PDV</button>`)+`<div class="cards"><div class="metric"><div class="label">EM PREPARAÇÃO</div><div class="value">${visible.filter(x=>x.status==='em preparação').length}</div></div><div class="metric"><div class="label">VITRINE / PDV</div><div class="value green">${visible.filter(x=>x.status==='vitrine').length}</div></div><div class="metric"><div class="label">RESERVADOS</div><div class="value yellow">${visible.filter(x=>x.status==='reservado').length}</div></div><div class="metric"><div class="label">VENDIDOS</div><div class="value">${d.filter(x=>x.status==='vendido').length}</div></div></div>`+table(visible,[['brand','Marca'],['model','Modelo / descrição'],['imei','IMEI'],['total_cost','Custo',r=>money(r.total_cost)],['suggested_price','Venda',r=>money(r.suggested_price)],['status','Status',r=>badge(r.status)]],r=>`<div class="row-actions"><button class="iconbtn" onclick="editPurchase(${r.id})">📝</button><button class="iconbtn" onclick="openServiceForPurchaseV500(${r.id})">🔧 OS</button><button class="iconbtn" onclick="sendToVitrine(${r.id})">🟡 Vitrine</button><button class="iconbtn danger" onclick="deleteResource('purchases',${r.id})">🗑️</button></div>`) };
 
 // Quotes: real item editing + automatic totals + approved -> OS.
-window.quoteItemsEditorV500=function(items){return `<div class="field full"><label>Itens do orçamento</label><div id="quoteItemsV500">${(items||[]).map(x=>`<div class="item-row"><input class="input qi-desc-v500" value="${esc(x.description||x.name||'')}" placeholder="Serviço / peça"><input class="input qi-qty-v500" type="number" min="1" value="${x.qty||1}"><input class="input qi-total-v500" type="number" step="0.01" min="0" value="${x.total||x.price||0}"><button type="button" class="iconbtn danger" onclick="this.parentElement.remove()">✕</button></div>`).join('')}</div><button type="button" class="btn ghost" onclick="addQuoteItemV500()">＋ Adicionar item</button></div>`};
-window.addQuoteItemV500=function(){const b=$('#quoteItemsV500');if(!b)return;const d=document.createElement('div');d.className='item-row';d.innerHTML='<input class="input qi-desc-v500" placeholder="Serviço / peça"><input class="input qi-qty-v500" type="number" min="1" value="1"><input class="input qi-total-v500" type="number" step="0.01" min="0" value="0"><button type="button" class="iconbtn danger" onclick="this.parentElement.remove()">✕</button>';b.appendChild(d)};
-window.editQuoteV500=async function(id){const q=(await api('/api/quotes?unit=TODOS')).find(x=>x.id===id);if(!q)return;let items=[];try{items=JSON.parse(q.items||'[]')}catch{};formModal('Editar orçamento',`<div class="formgrid">${f('status','Status','select',['aberto','enviado','aprovado','recusado','expirado'],q.status)}${f('valid_until','Validade','date',q.valid_until||'')}${f('warranty_days','Dias de garantia','number',q.warranty_days||0)}${f('travel_enabled','Deslocamento','select',['0','1'],q.travel_enabled?'1':'0')}${f('travel_fee','Taxa de deslocamento','number',q.travel_fee||0)}${quoteItemsEditorV500(items)}${f('conditions','Condições','textarea',q.conditions||'',true)}${f('observations','Observações','textarea',q.observations||'',true)}</div>`,async()=>{const m=$('#modal'),x=formValues(m.querySelector('#modalForm'));x.id=id;x.items=$$('#quoteItemsV500 .item-row').map(r=>({description:r.querySelector('.qi-desc-v500').value,qty:Number(r.querySelector('.qi-qty-v500').value||1),total:Number(r.querySelector('.qi-total-v500').value||0)})).filter(x=>x.description);x.subtotal=x.items.reduce((a,i)=>a+i.total,0);x.total=x.subtotal+(x.travel_enabled==='1'?Number(x.travel_fee||0):0);await api('/api/quotes',{method:'PUT',body:JSON.stringify(x)});closeModal();toast('Orçamento e itens atualizados');render()})};
+window.quoteItemsEditorV500=function(items){const rows=(items&&items.length?items:[{description:'',quality:'',qty:1,total:0}]);return `<div class="field full"><label>Itens do orçamento</label><div id="quoteItemsV500">${rows.map(x=>`<div class="item-row"><input class="input qi-desc-v500" value="${esc(x.description||x.name||'')}" placeholder="Serviço / peça"><input class="input qi-quality-v500" value="${esc(x.quality||'')}" placeholder="Qualidade (opcional)"><input class="input qi-qty-v500" type="number" min="1" value="${x.qty||1}"><input class="input qi-total-v500" type="number" step="0.01" min="0" value="${x.total||x.price||0}"><button type="button" class="iconbtn danger" onclick="this.parentElement.remove()">✕</button></div>`).join('')}</div><button type="button" class="btn ghost" onclick="addQuoteItemV500()">＋ Adicionar item</button></div>`};
+window.addQuoteItemV500=function(){const b=$('#quoteItemsV500');if(!b)return;const d=document.createElement('div');d.className='item-row';d.innerHTML='<input class="input qi-desc-v500" placeholder="Serviço / peça"><input class="input qi-quality-v500" placeholder="Qualidade (opcional)"><input class="input qi-qty-v500" type="number" min="1" value="1"><input class="input qi-total-v500" type="number" step="0.01" min="0" value="0"><button type="button" class="iconbtn danger" onclick="this.parentElement.remove()">✕</button>';b.appendChild(d)};
+window.editQuoteV500=async function(id){const q=(await api('/api/quotes?unit=TODOS')).find(x=>x.id===id);if(!q)return;let items=[];try{items=JSON.parse(q.items||'[]')}catch{};formModal('Editar orçamento',`<div class="formgrid">${f('status','Status','select',['aberto','enviado','aprovado','recusado','expirado'],q.status)}${f('valid_until','Validade','date',q.valid_until||'')}${f('warranty_days','Dias de garantia','number',q.warranty_days||0)}${f('travel_enabled','Deslocamento','select',['0','1'],q.travel_enabled?'1':'0')}${f('travel_fee','Taxa de deslocamento','number',q.travel_fee||0)}${quoteItemsEditorV500(items)}${f('conditions','Condições','textarea',q.conditions||'',true)}${f('observations','Observações','textarea',q.observations||'',true)}</div>`,async()=>{const m=$('#modal'),x=formValues(m.querySelector('#modalForm'));x.id=id;x.items=$$('#quoteItemsV500 .item-row').map(r=>({description:r.querySelector('.qi-desc-v500').value,quality:r.querySelector('.qi-quality-v500').value.trim(),qty:Number(r.querySelector('.qi-qty-v500').value||1),total:Number(r.querySelector('.qi-total-v500').value||0)})).filter(x=>x.description);x.subtotal=x.items.reduce((a,i)=>a+(i.total*i.qty),0);x.total=x.subtotal+(x.travel_enabled==='1'?Number(x.travel_fee||0):0);await api('/api/quotes',{method:'PUT',body:JSON.stringify(x)});closeModal();toast('Orçamento e itens atualizados');render()})};
 window.generateOSFromQuoteV500=async function(id){const q=(await api('/api/quotes?unit=TODOS')).find(x=>x.id===id);if(!q)return;if(q.status!=='aprovado')return toast('Somente orçamentos aprovados podem gerar OS.','error');let items=[];try{items=JSON.parse(q.items||'[]')}catch{};serviceForm({unit:q.unit,customer_id:q.customer_id,device_id:q.device_id,description:items.map(x=>`${x.description} (${x.qty||1}x)`).join(', '),details:{quote_id:id,quote_number:q.number,items}})};
-const _quotesPageV500=pages.quotes;pages.quotes=async()=>{await _quotesPageV500();try{const q=await api('/api/quotes?unit='+encodeURIComponent(UNIT));const box=$('#content');if(box)box.insertAdjacentHTML('beforeend',`<section class="panel" style="margin-top:16px"><div class="panel-head"><h2>Ações avançadas dos orçamentos</h2><span class="badge y">Editar • Excluir • Gerar OS</span></div>${table(q,[['number','Orçamento'],['customer_name','Cliente'],['status','Status',r=>badge(r.status)],['total','Total',r=>money(r.total)],['valid_until','Validade']],r=>`<div class="row-actions"><button class="iconbtn" onclick="editQuoteV500(${r.id})">📝</button><button class="iconbtn" title="Copiar link" onclick="copyQuoteLink('${r.public_token}')">🔗</button><button class="iconbtn" title="WhatsApp" onclick="whatsappQuote(${r.id})">💬</button>${r.status==='aprovado'?`<button class="iconbtn" title="Gerar OS" onclick="generateOSFromQuoteV500(${r.id})">🔧 OS</button>`:''}<button class="iconbtn danger" onclick="deleteResource('quotes',${r.id})">🗑️</button></div>`)}</section>`)}catch{}};
+const _quotesPageV500=pages.quotes;pages.quotes=async()=>{await _quotesPageV500();try{const q=await api('/api/quotes?unit='+encodeURIComponent(UNIT));const box=$('#content');if(box)box.insertAdjacentHTML('beforeend',`<section class="panel" style="margin-top:16px"><div class="panel-head"><h2>Ações avançadas dos orçamentos</h2><span class="badge y">Editar • Excluir • Gerar OS</span></div>${table(q,[['number','Orçamento'],['customer_name','Cliente'],['status','Status',r=>badge(r.status)],['total','Total',r=>money(r.total)],['valid_until','Validade']],r=>`<div class="row-actions"><button class="iconbtn" onclick="editQuoteV500(${r.id})">📝</button><button class="iconbtn" title="Copiar link" onclick="copyQuoteLink('${r.public_token}')">🔗</button><button class="iconbtn" title="WhatsApp" onclick="whatsappQuote(${r.id})">💬</button><button class="iconbtn" title="Enviar mensagem organizada ao Telegram e copiar" onclick="sendClientMessageTelegram('quote',${r.id})">✈️</button>${r.status==='aprovado'?`<button class="iconbtn" title="Gerar OS" onclick="generateOSFromQuoteV500(${r.id})">🔧 OS</button>`:''}<button class="iconbtn danger" onclick="deleteResource('quotes',${r.id})">🗑️</button></div>`)}</section>`)}catch{}};
+window.cancelQuoteV500=async id=>{
+  if(!confirm('Cancelar este orçamento? O registro e o histórico serão preservados.'))return;
+  try{
+    await api('/api/quotes',{method:'PUT',body:JSON.stringify({id,status:'cancelado'})});
+    toast('Orçamento cancelado; histórico preservado');
+    render();
+  }catch(e){toast(e.message,'error')}
+};
+const _quotesPageWithCancelV500=pages.quotes;
+pages.quotes=async()=>{
+  await _quotesPageWithCancelV500();
+  const actionsHeader=[...document.querySelectorAll('#content .panel-head')].find(header=>header.querySelector('h2')?.textContent.includes('Ações avançadas'));
+  const actionsBadge=actionsHeader?.querySelector('.badge');
+  if(actionsBadge)actionsBadge.textContent='Editar • Cancelar • Gerar OS';
+  document.querySelectorAll('#content button[onclick]').forEach(button=>{
+    const match=(button.getAttribute('onclick')||'').match(/deleteResource\('quotes',(\d+)\)/);
+    if(!match)return;
+    button.title='Cancelar orçamento';
+    button.setAttribute('aria-label','Cancelar orçamento');
+    button.textContent='✕';
+  });
+};
 
 // Fiado keeps V300's installment calculator and adds a real CRM & Cobrança view + MDM tab.
 window.fiadoCRMv500=async function(){const d=await api('/api/fiado?unit='+encodeURIComponent(UNIT));const open=d.filter(x=>x.balance>0), overdue=open.filter(x=>x.status==='atrasado');$('#content').innerHTML=analyticsHeader('CRM & Cobrança','Clientes devedores, parcelas, vencimentos e ações de cobrança',`<button class="btn" onclick="fiadoForm()">＋ Nova promissória</button>`)+`<div class="cards"><div class="metric"><div class="label">CLIENTES EM ABERTO</div><div class="value">${new Set(open.map(x=>x.customer_id)).size}</div></div><div class="metric"><div class="label">A RECEBER</div><div class="value yellow">${money(open.reduce((a,x)=>a+Number(x.balance||0),0))}</div></div><div class="metric"><div class="label">VENCIDO</div><div class="value red">${money(overdue.reduce((a,x)=>a+Number(x.balance||0),0))}</div></div><div class="metric"><div class="label">PROMISSÓRIAS</div><div class="value">${d.length}</div></div></div>${table(d,[['customer_name','Cliente'],['description','Serviço / compra'],['installments','Parcelas',r=>`${r.installments||1}x`],['installment_value','Valor parcela',r=>money(r.installment_value)],['balance','Saldo',r=>money(r.balance)],['due_date','Próximo vencimento'],['status','Status',r=>badge(r.status)]],r=>`<div class="row-actions"><button class="iconbtn" onclick="fiadoDetails(${r.id})">👁️</button><button class="iconbtn" onclick="receiveFiado(${r.id},${r.balance})">💰</button><button class="iconbtn" onclick="fiadoWhats(${r.id})">💬</button></div>`)}`};
@@ -1028,8 +1155,8 @@ pages.adb=async()=>{const connected=window.__adbDevice||null;const info=connecte
 function adbHubV500(i){return `<div class="adb-cards-v500"><section class="panel"><h3>Escolha uma frente de trabalho</h3><p class="muted">Cada módulo executa somente operações compatíveis com uma sessão autorizada.</p><div class="adb-front-grid"><button onclick="adbTabV500('diagnostico')"><b>⚡ Diagnóstico Android</b><small>Logs, processos, saúde, sensores, contas e apps em foco.</small></button><button onclick="adbTabV500('laudo')"><b>▤ Laudo para o cliente</b><small>Ficha técnica e laudo imprimível.</small></button><button onclick="adbTabV500('terminal')"><b>▣ Terminal real</b><small>Shell ADB para comandos diagnósticos autorizados.</small></button><button onclick="adbTabV500('controles')"><b>☷ Controles do aparelho</b><small>Wi‑Fi, Bluetooth, reinicialização e modos suportados.</small></button><button onclick="adbTabV500('tela')"><b>🔒 Tela e segurança</b><small>Estado da tela, criptografia e boot.</small></button><button onclick="adbTabV500('galeria')"><b>▧ Galeria e evidências</b><small>Leitura e evidências disponibilizadas pela sessão.</small></button><button onclick="adbTabV500('recuperacao')"><b>♻ Recuperação assistida</b><small>Cache, manutenção e rotinas seguras.</small></button><button onclick="adbTabV500('backup')"><b>▣ Backup técnico</b><small>Exportação de laudo e dados diagnósticos.</small></button></div></section></div><section class="panel adb-note-v500">ⓘ ADB acessa apenas o que o Android autorizado expõe. Senhas e conteúdo protegido não são extraídos automaticamente.</section><section class="panel"><h3>Ficha técnica resumida</h3>${adbSpecGridV500(i)}</section>`}
 function adbSpecGridV500(i){const groups=[['Identificação',[['Marca',i.brand],['Fabricante',i.manufacturer],['Modelo',i.model],['Nome interno',i.device_name],['IMEI',i.imei],['Número de série',i.serial]]],['Software',[['Android',i.android],['Build',i.build],['Build ID',i.build_id],['Tipo de build',i.build_type],['Patch de segurança',i.patch],['Android de fábrica',i.factory_android],['Fingerprint',i.fingerprint],['Idioma',i.language],['Fuso horário',i.timezone]]],['Hardware',[['Processador',i.cpu],['Plataforma',i.platform],['Núcleos',i.cores],['Arquitetura',i.arch],['Placa',i.board],['Hardware',i.hardware],['Bootloader',i.bootloader],['Tela',i.screen],['Densidade',i.dpi],['RAM',i.ram],['RAM disponível',i.ram_free]]],['Armazenamento e bateria',[['Armazenamento total',i.storage],['Em uso',i.used],['Livre',i.free],['Nível da bateria',i.battery],['Saúde',i.battery_health],['Status',i.battery_status],['Temperatura',i.temperature],['Tensão',i.voltage],['Tecnologia',i.technology]]],['Rede e segurança',[['Operadora',i.carrier],['IP Wi‑Fi',i.wifi_ip],['MAC Wi‑Fi',i.wifi_mac],['Modo avião',i.airplane],['Criptografia',i.encryption],['Verified Boot',i.verified_boot],['Bootloader bloqueado',i.boot_locked],['Root detectado',i.root],['Tempo ligado',i.uptime]]]];return groups.map(g=>`<div class="adb-spec-group"><h4>${g[0]}</h4><div class="adb-spec-grid">${g[1].map(x=>`<div><span>${esc(x[0])}</span><b>${esc(x[1]??'—')}</b></div>`).join('')}</div></div>`).join('')}
 window.adbTabV500=function(tab,btn){$$('.adb-tabs-v500 button').forEach(x=>x.classList.remove('active'));if(btn)btn.classList.add('active');const i=window.__adbDevice||{};const b=$('#adbBodyV500');if(!b)return;const cards={diagnostico:`<section class="panel"><div class="panel-head"><h3>Diagnóstico Android</h3><button class="btn" onclick="adbRefreshV500()">↻ Atualizar leitura</button></div><div class="cards"><div class="metric"><div class="label">BATERIA</div><div class="value">${esc(i.battery||'—')}</div></div><div class="metric"><div class="label">TEMPERATURA</div><div class="value">${esc(i.temperature||'—')}</div></div><div class="metric"><div class="label">RAM EM USO</div><div class="value">${esc(i.ram||'—')}</div></div><div class="metric"><div class="label">PROCESSOS LIDOS</div><div class="value">${esc(i.processes||'—')}</div></div></div><div class="grid2"><div class="panel"><h4>Processos</h4><pre>${esc(i.process_list||'Nenhum dado retornado.')}</pre></div><div class="panel"><h4>Contas</h4><pre>${esc(i.accounts||'Nenhum dado retornado.')}</pre></div></div><div class="panel"><h4>Logcat / avisos recentes</h4><pre>${esc(i.logcat||'Nenhum logcat retornado.')}</pre></div></section>`,laudo:`<section class="panel"><h3>Laudo técnico completo</h3>${adbSpecGridV500(i)}<button class="btn" onclick="window.print()">🖨 Imprimir / salvar PDF</button></section>`,controles:`<section class="panel"><h3>Controles de bancada</h3><div class="quick"><button onclick="adbSafeActionV500('Reiniciar normal')">Reiniciar normal</button><button onclick="adbSafeActionV500('Recovery')">Recovery</button><button onclick="adbSafeActionV500('Bootloader / Fastboot')">Bootloader / Fastboot</button><button onclick="adbSafeActionV500('ADB Sideload')">ADB Sideload</button><button onclick="adbSafeActionV500('Wi‑Fi')">Wi‑Fi</button><button onclick="adbSafeActionV500('Bluetooth')">Bluetooth</button></div></section>`,tela:`<section class="panel"><h3>Tela e segurança</h3>${adbSpecGridV500({...i})}<div class="cards"><div class="metric"><div class="label">VERIFIED BOOT</div><div class="value green">${esc(i.verified_boot||'—')}</div></div><div class="metric"><div class="label">ROOT</div><div class="value">${esc(i.root||'—')}</div></div><div class="metric"><div class="label">CRIPTOGRAFIA</div><div class="value">${esc(i.encryption||'—')}</div></div></div></section>`,terminal:`<section class="panel"><h3>Terminal ADB</h3><p class="muted">Console preparado para comandos diagnósticos autorizados.</p><div class="terminal-v500"><div>$ adb shell getprop</div><div>$ adb shell dumpsys battery</div><div>$ adb shell dumpsys meminfo</div><div>$ adb shell pm list packages</div></div><button class="btn" onclick="adbSafeActionV500('Executar leitura diagnóstica')">Executar leitura</button></section>`,galeria:`<section class="panel"><h3>Galeria e evidências</h3><p class="muted">Evidências devem ser disponibilizadas pelo aparelho/sessão autorizada.</p><button class="btn" onclick="adbSafeActionV500('Abrir galeria')">Abrir galeria</button></section>`,recuperacao:`<section class="panel"><h3>Recuperação assistida</h3><div class="quick"><button onclick="adbSafeActionV500('Limpar caches do sistema')">Limpar caches</button><button onclick="adbSafeActionV500('Relatório de armazenamento')">Relatório de armazenamento</button><button onclick="adbSafeActionV500('Otimizar apps')">Otimizar apps</button><button onclick="adbSafeActionV500('Reindexar galeria')">Reindexar galeria</button></div></section>`,backup:`<section class="panel"><h3>Backup técnico</h3><p>Gere o laudo e preserve a ficha técnica para anexar à OS.</p><button class="btn" onclick="window.print()">🖨 Imprimir laudo</button></section>`,ferramentas:`<section class="panel"><h3>Ferramentas do técnico</h3><div class="adb-front-grid"><button onclick="adbSafeActionV500('Recovery')">↻ Modo Recovery</button><button onclick="adbSafeActionV500('Bootloader / Fastboot')">◉ Bootloader / Fastboot</button><button onclick="adbSafeActionV500('ADB Sideload')">⇄ ADB Sideload</button><button onclick="adbSafeActionV500('Reiniciar normal')">↻ Reiniciar normal</button><button onclick="adbSafeActionV500('Limpar lixos')">♻ Limpar lixos</button><button onclick="adbSafeActionV500('Blindar aparelho')">🛡 Blindar aparelho</button><button onclick="adbSafeActionV500('Ativar DNS anti-anúncios')">◎ DNS anti-anúncios</button><button onclick="adbSafeActionV500('Print da tela')">▣ Print da tela</button></div></section>`,hub:adbHubV500(i)};b.innerHTML=cards[tab]||cards.hub};
-window.adbConnectV500=async function(){toast('Conexão USB solicitada. O navegador precisa de uma ponte ADB/WebUSB autorizada para obter dados reais.','info');window.__adbDevice={brand:'Redmi',manufacturer:'Xiaomi',model:'23129RAA4G',device_name:'sapphire',android:'15 (SDK 35)',battery:'16%',temperature:'34.0 °C',verified_boot:'green',boot_locked:'Sim',root:'Não',encryption:'Ativada',ram:'7.4 GB',storage:'226 GB',used:'130 GB',free:'96 GB',carrier:'Claro BR',uptime:'122h 3min'};await pages.adb()};
-window.adbRefreshV500=()=>pages.adb();window.adbSafeActionV500=action=>toast(action+' preparado para execução pela ponte ADB autorizada.');
+window.adbConnectV500=async function(){await window.kvAdbConnect()};
+window.adbRefreshV500=()=>pages.adb();window.adbSafeActionV500=action=>window.kvAdbAction(action);
 
 // Hide internal IDs from the V300 customer selection cards if any legacy renderer remains.
 const _oldCustomerPicker=customerPicker;customerPicker=window.customerPickerV500;
@@ -1038,9 +1165,11 @@ const _oldCustomerPicker=customerPicker;customerPicker=window.customerPickerV500
 window.__pdvCartV502=[];window.__pdvFilterV502='';window.__pdvDiscountV502=0;
 window.addPdvItemV502=function(item){const key='p'+item.purchase_id;const found=window.__pdvCartV502.find(x=>x.key===key);if(found)found.qty=(found.qty||1)+1;else window.__pdvCartV502.push({key,...item,qty:1});renderPdvV502()};window.removePdvItemV502=function(key){window.__pdvCartV502=window.__pdvCartV502.filter(x=>x.key!==key);renderPdvV502()};
 window.renderPdvV502=async function(){const d=await api('/api/purchases?unit='+encodeURIComponent(UNIT));const q=String(window.__pdvFilterV502||'').toLowerCase();const items=d.filter(x=>x.status==='vitrine'&&!x.sold&&(!q||`${x.brand||''} ${x.model||''} ${x.imei||''}`.toLowerCase().includes(q)));const subtotal=window.__pdvCartV502.reduce((s,x)=>s+Number(x.price||0),0);const discount=Math.max(0,Number(window.__pdvDiscountV502||0));const total=Math.max(0,subtotal-discount);$('#content').innerHTML=analyticsHeader('PDV / Vendas','Vitrine integrada • busca • carrinho • cliente • pagamento • baixa automática',`<button class="btn ghost" onclick="window.__pdvCartV502=[];window.__pdvDiscountV502=0;renderPdvV502()">Limpar</button>`)+`<div class="pdv-v502"><section class="panel"><div class="pdv-search"><input class="input" id="pdvSearchV502" value="${esc(window.__pdvFilterV502)}" placeholder="Buscar marca, modelo ou IMEI"><button class="btn" onclick="window.__pdvFilterV502=$('#pdvSearchV502').value;renderPdvV502()">Buscar</button></div><div class="mini-dashboard"><div><span>Vitrine disponível</span><b>${items.length}</b></div><div><span>Itens no carrinho</span><b>${window.__pdvCartV502.length}</b></div><div><span>Total</span><b>${money(total)}</b></div></div><div class="pdv-products">${items.map(x=>`<article class="pdv-card"><div class="vitrine-photo">📱</div><span class="tag">${esc(x.brand||'')} • VITRINE</span><b>${esc(x.model||'Aparelho')}</b><p>${esc((()=>{try{const z=JSON.parse(x.details_json||'{}');return z.description||z.condition||z.color||''}catch{return ''}})())}</p><strong>${money(x.suggested_price||0)}</strong><button class="btn" onclick="addPdvItemV502({purchase_id:${Number(x.id)},brand:'${esc(x.brand||'').replace(/'/g,"\\'")}',model:'${esc(x.model||'').replace(/'/g,"\\'")}',imei:'${esc(x.imei||'').replace(/'/g,"\\'")}',price:${Number(x.suggested_price||0)}})">Adicionar</button></article>`).join('')||'<div class="pdv-empty">Nenhum aparelho na Vitrine. Coloque o aparelho em Vitrine para liberá-lo no PDV.</div>'}</div></section><aside class="panel pdv-cart"><h2>Carrinho</h2>${window.__pdvCartV502.map(x=>`<div class="cart-line"><div><b>${esc(x.brand||'')} ${esc(x.model||'')}</b><small class="muted">${esc(x.imei||'')}</small></div><span>${money(x.price)}</span><button class="iconbtn danger" onclick="removePdvItemV502('${x.key}')">×</button></div>`).join('')||'<p class="muted">Selecione um aparelho da Vitrine.</p>'}${customerPickerV500('pdv_customer_id','Cliente')}<div class="field" style="margin-top:10px"><label>Desconto</label><input class="input" id="pdvDiscountV502" type="number" value="${discount}" oninput="window.__pdvDiscountV502=Number(this.value||0);renderPdvV502()"></div><div class="field" style="margin-top:10px"><label>Pagamento</label><select class="select" id="pdvPaymentV502"><option>PIX</option><option>Dinheiro</option><option>Débito</option><option>Crédito</option><option>Transferência</option><option>Fiado/Crediário</option></select></div><div class="kpi"><span>Subtotal</span><b>${money(subtotal)}</b></div><div class="kpi"><span>Desconto</span><b>${money(discount)}</b></div><div class="kpi"><span>Total</span><b class="yellow">${money(total)}</b></div><button class="btn" style="width:100%;margin-top:12px" onclick="closePdvV502(${total})">Finalizar venda</button></aside></div>`};
-window.closePdvV502=async function(total){if(!window.__pdvCartV502.length)return toast('Adicione um aparelho ao carrinho.','error');const customer=Number($('#pdv_customer_id')?.value||0)||null;const payment=$('#pdvPaymentV502')?.value||'PIX';const subtotal=window.__pdvCartV502.reduce((s,x)=>s+Number(x.price||0),0);const factor=subtotal>0?Math.max(0,Number(total||0))/subtotal:1;for(const x of window.__pdvCartV502){await api('/api/sales',{method:'POST',body:JSON.stringify({unit:UNIT,customer_id:customer,purchase_id:x.purchase_id,items:`${x.brand||''} ${x.model||''}`,total:Number((Number(x.price||0)*factor).toFixed(2)),payment})})}window.__pdvCartV502=[];window.__pdvDiscountV502=0;toast('Venda finalizada • Vitrine/Compra e Venda sincronizadas');await renderPdvV502()};pages.pdv=async()=>{window.__pdvCartV502=window.__pdvCartV502||[];await renderPdvV502();setTimeout(wirePickersV500,40)};
+window.closePdvV502=async function(total){if(!window.__pdvCartV502.length)return toast('Adicione um aparelho ao carrinho.','error');const customer=Number($('#pdv_customer_id')?.value||0)||null;const payment=$('#pdvPaymentV502')?.value||'PIX';try{const result=await api('/api/pdv/checkout',{method:'POST',body:JSON.stringify({unit:UNIT,customer_id:customer,items:window.__pdvCartV502.map(x=>({purchase_id:x.purchase_id})),discount:Number(window.__pdvDiscountV502||0),payment})});window.__pdvCartV502=[];window.__pdvDiscountV502=0;toast(`Venda finalizada • ${result.sale_ids.length} aparelho(s)`);await renderPdvV502()}catch(e){toast(e.message,'error')}};
+window.addPdvItemV502=function(item){if(window.__pdvCartV502.some(x=>x.purchase_id===item.purchase_id))return toast('Este aparelho já está no carrinho.');window.__pdvCartV502.push({key:'p'+item.purchase_id,...item,qty:1});renderPdvV502()};
+pages.pdv=async()=>{window.__pdvCartV502=window.__pdvCartV502||[];await renderPdvV502();setTimeout(wirePickersV500,40)};
 pages.films=async()=>{const q=localStorage.getItem('film_q')||'';const d=await api('/api/films/search?q='+encodeURIComponent(q));const groups={};d.forEach(x=>{const g=x.group_name||x.master_code||'Sem grupo';(groups[g]??=[]).push(x)});$('#content').innerHTML=analyticsHeader('Películas','Busca direta e reversa por aparelho, aliases, código master e grupo. Relações de compatibilidade são referência de bancada e devem ser confirmadas fisicamente.',`<button class="btn" onclick="filmForm()">＋ Cadastrar Compatibilidade</button><button class="btn dark" onclick="filmResearchInfo()">ℹ Critérios</button>`)+`<section class="panel"><div class="pdv-search"><input class="input" id="filmSearchV502" value="${esc(q)}" placeholder="Modelo, apelido, código master ou grupo"><button class="btn" onclick="localStorage.setItem('film_q',$('#filmSearchV502').value);render()">Pesquisar</button><button class="btn ghost" onclick="localStorage.removeItem('film_q');render()">Limpar</button></div><div class="cards"><div class="metric"><div class="label">REGISTROS</div><div class="value">${d.length}</div></div><div class="metric"><div class="label">GRUPOS</div><div class="value">${Object.keys(groups).length}</div></div><div class="metric"><div class="label">MARCAS</div><div class="value">${new Set(d.map(x=>x.brand)).size}</div></div><div class="metric"><div class="label">BUSCA REVERSA</div><div class="value green">ATIVA</div></div></div></section><section class="panel"><div class="table-wrap"><table class="table"><thead><tr><th>Marca</th><th>Aparelho</th><th>Grupo / Master</th><th>Tela</th><th>Confiança</th><th>Ação</th></tr></thead><tbody>${d.map(x=>`<tr><td>${esc(x.brand)}</td><td><b>${esc(x.model)}</b><br><small>${esc(x.aliases||'')}</small></td><td>${esc(x.group_name||'—')}<br><small>${esc(x.master_code||'—')}</small></td><td>${esc(x.screen_size||'—')}</td><td>${badge(x.confidence||'manual')}</td><td><button class="iconbtn" onclick="filmGroupV502('${String(x.group_name||x.master_code||'').replace(/'/g,"\\'")}')">↔ Compatíveis</button></td></tr>`).join('')||'<tr><td colspan="6">Nenhuma compatibilidade encontrada.</td></tr>'}</tbody></table></div></section>`};window.filmGroupV502=async function(group){const d=await api('/api/films/search?q='+encodeURIComponent(group));formModal('Compatibilidade reversa • '+group,`<p class="muted">Modelos cadastrados no mesmo grupo/código. Confirme recorte, borda e sensores antes da aplicação.</p>${table(d,[['brand','Marca'],['model','Modelo'],['master_code','Master'],['screen_size','Tela'],['fit_notes','Observação'],['confidence','Confiança']])}`,async()=>closeModal())};window.filmResearchInfo=function(){formModal('Critérios da base de películas',`<div class="panel"><h3>Critérios</h3><p>O catálogo combina modelo, aliases, grupo/código master, tela, observação de encaixe e confiança. Catálogos públicos apontam que muitos modelos compartilham moldes, mas também mostram exceções; por isso o KV CELL não transforma tamanho de tela sozinho em “compatibilidade 100%”.</p><p><b>Fluxo recomendado:</b> buscar aparelho → ver grupo → comparar recorte/câmera/sensores → marcar confirmação de bancada.</p></div>`,async()=>closeModal())};
-boot=async function(){document.body.innerHTML=`<div class="shell v100-shell"><aside class="sidebar"><div class="brand"><div class="logo-wrap"><div class="logo">KV</div></div><div><b>KV CELL</b><small>ULTIMATE SUPREME • V1000.0</small></div></div><div class="nav"><div class="navtitle">PAINEL</div>${['dashboard'].map(nav).join('')}<div class="navtitle">ATENDIMENTO</div>${['services','agenda','quotes','pricing','adb','guarantees','fiado'].map(nav).join('')}<div class="navtitle">CADASTROS</div>${['customers','radar','technicians','purchases','suppliers'].map(nav).join('')}<div class="navtitle">OPERAÇÃO</div>${['inventory','finance','pdv','devices'].map(nav).join('')}<div class="navtitle">DIGITAL</div>${['films'].map(nav).join('')}<div class="navtitle">SISTEMA</div>${['employees','chat_units','ai','logs','admin','settings'].map(nav).join('')}</div></aside><main class="main"><div class="topbar"><div><b id="crumb">Painel</b><div class="crumb">KV CELL ULTIMATE SUPREME • V1000.0 • LAGOS + MAGÉ</div></div><div class="top-actions"><select id="unit" class="select unit"><option>TODOS</option><option>LAGOS</option><option>MAGÉ</option></select><button class="btn ghost" onclick="openSearch()">⌕ Buscar</button><button class="btn ghost" onclick="logout()">Sair</button></div></div><div id="content"></div></main></div><div id="modal" class="modal"></div><div id="toast" class="toast"></div>`;$('#unit').value=UNIT;$('#unit').onchange=e=>{UNIT=e.target.value;localStorage.setItem('kv_unit',UNIT);render()};render()};
+boot=async function(){document.body.innerHTML=`<div class="shell v100-shell"><aside class="sidebar"><div class="brand"><div class="logo-wrap"><div class="logo">KV</div></div><div><b>KV CELL</b><small>ULTIMATE SUPREME • V1000.0</small></div></div><div class="nav"><div class="navtitle">PAINEL</div>${['dashboard'].map(nav).join('')}<div class="navtitle">ATENDIMENTO</div>${['services','agenda','quotes','adb','guarantees','fiado'].map(nav).join('')}<div class="navtitle">CADASTROS</div>${['customers','radar','technicians','purchases','suppliers'].map(nav).join('')}<div class="navtitle">OPERAÇÃO</div>${['inventory','finance','pdv','devices'].map(nav).join('')}<div class="navtitle">SISTEMA</div>${['chat_units','logs','admin','settings'].map(nav).join('')}</div></aside><main class="main"><div class="topbar"><div><b id="crumb">Painel</b><div class="crumb">KV CELL ULTIMATE SUPREME • V1000.0 • LAGOS + MAGÉ</div></div><div class="top-actions"><select id="unit" class="select unit"><option>TODOS</option><option>LAGOS</option><option>MAGÉ</option></select><button class="btn ghost" onclick="openSearch()">⌕ Buscar</button><button class="btn ghost" onclick="logout()">Sair</button></div></div><div id="content"></div></main></div><div id="modal" class="modal"></div><div id="toast" class="toast"></div>`;$('#unit').value=UNIT;$('#unit').onchange=e=>{UNIT=e.target.value;localStorage.setItem('kv_unit',UNIT);render()};render()};
 
 // Ensure V500 versions of the core action pages win over older V300 definitions.
 const _svcLegacy=pages.services; // retained only for compatibility / rollback within runtime
@@ -1086,6 +1215,7 @@ async function kvBridge(path, opts={}){
     return d;
   }catch(e){
     if(e?.name==='AbortError') throw new Error('Ponte ADB não respondeu em tempo hábil.');
+    if(e instanceof TypeError) throw new Error('Ponte ADB local indisponível. Inicie tools\\INICIAR_KV_CELL_BRIDGE.bat no computador da bancada.');
     throw e;
   }finally{clearTimeout(timer)}
 }
@@ -1135,10 +1265,6 @@ function kvAdbHub(){
     ${kvAdbMetric('RAM',d.ram)}${kvAdbMetric('ARMAZENAMENTO',d.storage)}${kvAdbMetric('VERIFIED BOOT',d.verified_boot,d.verified_boot==='green'?'oktext':'warntext')}
   </div>
   <div class="adb502-shortcuts">
-    <button onclick="kvAdbMDMInstall()"><b>⬇ Instalar KV CELL MDM</b><small>Envia o APK autorizado por ADB.</small></button>
-    <button onclick="kvAdbMDMProvision(prompt('Token do crediário MDM:'))"><b>🔐 Provisionar Device Owner</b><small>Instala + tenta configurar o MDM como proprietário.</small></button>
-  </div>
-  <div class="adb502-shortcuts">
     <button onclick="kvAdbTab('diagnostico')"><b>⚡ Diagnóstico</b><small>Hardware, software, bateria, memória e logs.</small></button>
     <button onclick="kvAdbTab('antivirus')"><b>🛡 Antivírus</b><small>Triagem de apps, permissões e sinais de risco.</small></button>
     <button onclick="kvAdbTab('controles')"><b>☷ Controles</b><small>Reiniciar, Recovery, Bootloader e Sideload.</small></button>
@@ -1167,7 +1293,7 @@ window.kvAdbRefresh=async function(){try{if(!kvAdbSerial())throw new Error('Nenh
 window.kvAdbCommand=async function(key){try{const d=await kvBridge('/command',{method:'POST',body:JSON.stringify({serial:kvAdbSerial(),key})});window.__kvAdbOutput=d.output||'(sem retorno)';kvAdbTab('terminal')}catch(e){toast(e.message,'error')}};
 window.kvAdbAction=async function(action){if(!kvAdbSerial())return toast('Conecte um aparelho primeiro.','error');const labels={normal:'reiniciar normalmente',recovery:'entrar em Recovery',bootloader:'entrar no Bootloader / Fastboot',sideload:'entrar em ADB Sideload'};if(!confirm('Confirmar '+(labels[action]||action)+'?'))return;try{await kvBridge('/action',{method:'POST',body:JSON.stringify({serial:kvAdbSerial(),action})});toast('Comando enviado ao aparelho');window.__kvAdbDevice=null;kvAdbTab('hub')}catch(e){toast(e.message,'error')}};
 window.kvAdbScan=async function(){try{toast('Analisando aplicativos instalados…','info');const d=await kvBridge('/security-scan?serial='+encodeURIComponent(kvAdbSerial()));window.__kvAdbScan=d;kvAdbTab('antivirus');toast('Análise concluída')}catch(e){toast(e.message,'error')}};
-window.kvAdbShot=async function(){try{if(window.__kvWebUsbSession?.adb){const engine=await loadWebUsbEngine();const url=await engine.captureScreenshot(window.__kvWebUsbSession);if(!url)throw new Error('O Android não retornou uma captura válida.');const box=$('#adbShotBox');if(box)box.innerHTML=`<img class="adb502-screenshot" src="${url}" alt="Captura do aparelho"><button class="btn ghost" onclick="kvAdbDownloadShot('${url}')">⇩ Salvar captura</button>`;return toast('Captura ADB realizada','success')}if(!kvAdbSerial())throw new Error('Conecte um aparelho primeiro.');const base=(window.__kvAdbBridge||'').replace(/\/$/,'');const r=await fetch(base+'/screenshot?serial='+encodeURIComponent(kvAdbSerial())+'&t='+Date.now());if(!r.ok)throw new Error('Captura indisponível: conecte via ADB WebUSB ou inicie a ponte local.');const url=URL.createObjectURL(await r.blob());const box=$('#adbShotBox');if(box)box.innerHTML=`<img class="adb502-screenshot" src="${url}" alt="Captura do aparelho"><button class="btn ghost" onclick="kvAdbDownloadShot('${url}')">⇩ Salvar captura</button>`;toast('Captura realizada','success')}catch(e){toast(e.message||'Falha na captura','error')}};
+window.kvAdbShot=async function(){try{if(!kvAdbSerial())throw new Error('Conecte um aparelho ADB autorizado primeiro.');const base=(window.__kvAdbBridge||'').replace(/\/$/,'');const r=await fetch(base+'/screenshot?serial='+encodeURIComponent(kvAdbSerial())+'&t='+Date.now());if(!r.ok)throw new Error('A ponte ADB não conseguiu capturar a tela.');const url=URL.createObjectURL(await r.blob());const box=$('#adbShotBox');if(box)box.innerHTML=`<img class="adb502-screenshot" src="${url}" alt="Captura do aparelho"><button class="btn ghost" onclick="kvAdbDownloadShot('${url}')">⇩ Salvar captura</button>`;toast('Captura real concluída','success')}catch(e){toast(e.message||'Falha na captura','error')}};
 window.kvAdbDownloadShot=function(url){const a=document.createElement('a');a.href=url;a.download='kv-cell-evidencia-'+Date.now()+'.png';a.click()};
 window.kvAdbBackup=function(){const payload={exported_at:new Date().toISOString(),unit:UNIT,device:window.__kvAdbDevice,security_scan:window.__kvAdbScan};const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}));a.download='kv-cell-laudo-adb-'+Date.now()+'.json';a.click();toast('Backup técnico baixado')};
 
@@ -1209,9 +1335,8 @@ window.__kvAdbTab = 'hub';
 function v600UsbButton(){
   return `<div class="adb600-usbrow">
     <button class="btn adb600-primary" onclick="kvAdbConnect()">⚡ Procurar ADB real</button>
-    <button class="btn ghost" onclick="kvUsbSelect()">▣ Selecionar USB</button>
     <button class="btn ghost" onclick="kvAdbBridgeCheck()">↻ Testar ponte</button>
-  </div>`;
+  </div>`
 }
 
 window.kvUsbSelect = async function(){
@@ -1293,7 +1418,7 @@ function adb600Hub(){
   const d=kvAdbDevice();
   return `<div class="adb600-grid">
     <section class="adb600-panel adb600-main">
-      <div class="adb600-paneltitle"><div><small>SESSÃO USB / ADB</small><h2>${d.model?esc(d.model):'Nenhum aparelho conectado'}</h2><p>${d.serial?esc(d.manufacturer||'')+' • '+esc(d.serial):'Use FORÇAR ADB para listar os aparelhos reais da bancada.'}</p></div><span class="adb600-status ${d.serial?'ok':''}">${d.serial?'CONECTADO':'OFFLINE'}</span></div>
+      <div class="adb600-paneltitle"><div><small>SESSÃO ADB LOCAL</small><h2>${d.model?esc(d.model):'Nenhum aparelho conectado'}</h2><p>${d.serial?esc(d.manufacturer||'')+' • '+esc(d.serial):'Use Conectar ADB para consultar os aparelhos reais da bancada.'}</p></div><span class="adb600-status ${d.serial?'ok':''}">${d.serial?'CONECTADO':'OFFLINE'}</span></div>
       ${d.serial?`<div class="adb600-metrics"><div><small>ANDROID</small><b>${kvAdbInfoValue(d.android)}</b></div><div><small>BATERIA</small><b>${kvAdbInfoValue(d.battery)}</b></div><div><small>RAM</small><b>${kvAdbInfoValue(d.ram)}</b></div><div><small>VERIFIED BOOT</small><b>${kvAdbInfoValue(d.verified_boot)}</b></div></div>`:'<div class="adb600-callout">O painel não usa aparelho fictício. Sem ADB real, nenhum dado de telefone será inventado.</div>'}
       <div class="adb600-actions">${v600UsbButton()}</div>
     </section>
@@ -1307,23 +1432,16 @@ function adb600Hub(){
     <button class="adb600-tool" onclick="kvAdbTab('galeria')"><b>▣ Tela</b><span>Captura real da tela do Android.</span></button>
     <button class="adb600-tool" onclick="kvAdbTab('laudo')"><b>▤ Laudo</b><span>Relatório técnico e exportação.</span></button>
   </div>
-  ${d.serial?`<section class="adb600-panel adb600-mdm"><div><small>KV CELL MDM</small><h3>Instalação e provisionamento</h3><p>O APK precisa existir localmente na ponte. O Device Owner é aceito pelo Android somente quando as condições de provisionamento permitem.</p></div><div class="adb600-actions"><button class="btn adb600-primary" onclick="kvAdbMDMInstall()">⬇ Instalar MDM via ADB</button><button class="btn ghost" onclick="kvAdbMDMProvision(prompt('Token do crediário MDM:'))">🔐 Provisionar Device Owner</button></div></section>`:''}`;
+`;
 }
 
 pages.adb = async function(){
-  // IMPORTANTE: a abertura da aba não depende da ponte localhost. O seletor USB do próprio Chrome/Edge deve abrir imediatamente.
-  let usb=[]; try{ if(navigator.usb) usb=await navigator.usb.getDevices(); }catch(e){}
   const d=kvAdbDevice();
-  window.__kvUsbDevices=usb;
-  $('#content').innerHTML=analyticsHeader('ADB & Antivírus','Central de bancada • seletor USB nativo do navegador + ADB autorizado + diagnóstico Android',`<span class="badge y">${d.serial?'APARELHO CONECTADO':'AGUARDANDO USB'}</span>`)+
-  `<div class="adb600-wrap"><div class="adb600-header"><div><span class="badge g">KV CELL • BANCADA</span><h1>ADB & Antivírus</h1><p>O botão abaixo usa o painel nativo do Chrome/Edge para selecionar o USB. A ponte local só é chamada quando você pedir ADB real ou injeção.</p></div><div class="adb600-usbrow"><button class="btn adb600-primary" onclick="kvUsbSelect()">▣ SELECIONAR DISPOSITIVO USB</button><button class="btn ghost" onclick="kvAdbConnect()">⚡ FORÇAR ADB</button><button class="btn ghost" onclick="kvAdbBridgeCheck()">↻ Testar ADB</button></div></div>
-  <section class="adb600-panel adb600-browserusb"><div class="adb600-paneltitle"><div><small>WEBUSB / NAVEGADOR</small><h3>Dispositivos USB autorizados para esta sessão</h3></div><button class="btn ghost" onclick="kvUsbRefresh()">↻ Atualizar</button></div><div id="kvUsbList">${usb.length?usb.map((u,i)=>`<button class="adb600-device ${window.__kvUsbDevice&&window.__kvUsbDevice===u?'active':''}" onclick="kvUsbUseExisting(${i})"><span class="adb600-device-dot online"></span><span><b>${esc([u.manufacturerName,u.productName].filter(Boolean).join(' ')||'Dispositivo USB')}</b><small>VID ${String(u.vendorId||0).padStart(4,'0')} • PID ${String(u.productId||0).padStart(4,'0')}</small></span><strong>USB</strong></button>`).join(''):`<div class="adb600-empty">Nenhum USB autorizado ainda. Clique em <b>SELECIONAR DISPOSITIVO USB</b> para abrir o painel nativo do navegador.</div>`}</div></section>
+  $('#content').innerHTML=analyticsHeader('ADB & Antivírus','Central de bancada • ADB autorizado pelo computador local • diagnóstico Android',`<span class="badge y">${d.serial?'APARELHO CONECTADO':'AGUARDANDO ADB'}</span>`)+
+  `<div class="adb600-wrap"><div class="adb600-header"><div><span class="badge g">KV CELL • BANCADA</span><h1>ADB & Antivírus</h1><p>Conecte por meio da ponte local e do Android Debug Bridge instalado no computador da bancada. Selecionar USB no navegador, sem estabelecer ADB, não é apresentado como conexão.</p></div><div class="adb600-usbrow"><button class="btn adb600-primary" onclick="kvAdbConnect()">⚡ Conectar ADB real</button><button class="btn ghost" onclick="kvAdbBridgeCheck()">↻ Testar ponte</button></div></div>
   <div class="adb600-tabs">${[['hub','Visão geral'],['diagnostico','Diagnóstico'],['antivirus','Antivírus'],['controles','Controles'],['terminal','Terminal'],['tela','Tela'],['recuperacao','Recuperação'],['galeria','Evidências'],['laudo','Laudo']].map(t=>`<button class="${window.__kvAdbTab===t[0]?'active':''}" onclick="kvAdbTab('${t[0]}')">${t[1]}</button>`).join('')}</div><div id="adb600Body"></div></div>`;
   kvAdbTab(window.__kvAdbTab||'hub');
 };
-window.kvUsbRefresh=async function(){try{window.__kvUsbDevices=navigator.usb?await navigator.usb.getDevices():[];await pages.adb()}catch(e){toast(e.message,'error')}};
-window.kvUsbUseExisting=async function(i){const u=(window.__kvUsbDevices||[])[i];if(!u)return;window.__kvUsbDevice=u;toast('USB selecionado • '+([u.manufacturerName,u.productName].filter(Boolean).join(' ')||'Dispositivo'));await pages.adb()};
-
 window.kvAdbTab=function(tab){
   window.__kvAdbTab=tab;
   const b=$('#adb600Body'); if(!b)return;
@@ -1386,11 +1504,11 @@ pages.mdm=async()=>{
 boot=async function(){
   document.body.innerHTML=`<div class="shell v100-shell"><aside class="sidebar"><div class="brand"><div class="logo-wrap"><div class="logo">KV</div></div><div><b>KV CELL</b><small>ULTIMATE SUPREME • V1000.0</small></div></div><div class="nav">
     <div class="navtitle">PAINEL</div>${['dashboard'].map(nav).join('')}
-    <div class="navtitle">ATENDIMENTO</div>${['services','agenda','quotes','pricing','adb','guarantees','fiado','mdm'].map(nav).join('')}
+    <div class="navtitle">ATENDIMENTO</div>${['services','agenda','quotes','adb','guarantees','fiado'].map(nav).join('')}
     <div class="navtitle">CADASTROS</div>${['customers','radar','technicians','purchases','suppliers'].map(nav).join('')}
     <div class="navtitle">OPERAÇÃO</div>${['inventory','finance','pdv','devices'].map(nav).join('')}
-    <div class="navtitle">DIGITAL</div>${['films','referrals'].map(nav).join('')}
-    <div class="navtitle">SISTEMA</div>${['employees','chat_units','ai','logs','admin','settings'].map(nav).join('')}
+    <div class="navtitle">DIGITAL</div>${['films'].map(nav).join('')}
+    <div class="navtitle">SISTEMA</div>${['chat_units','logs','admin','settings'].map(nav).join('')}
   </div></aside><main class="main"><div class="topbar"><div><b id="crumb">Painel</b><div class="crumb">KV CELL OS PREMIUM • V700 • LAGOS + MAGÉ</div></div><div class="top-actions"><select id="unit" class="select unit"><option>TODOS</option><option>LAGOS</option><option>MAGÉ</option></select><button class="btn ghost" onclick="openSearch()">⌕ Buscar</button><button class="btn ghost" onclick="logout()">Sair</button></div></div><div id="content"></div></main></div><div id="modal" class="modal"></div><div id="toast" class="toast"></div>`;
   $('#unit').value=UNIT;
   $('#unit').onchange=e=>{UNIT=e.target.value;localStorage.setItem('kv_unit',UNIT);render()};
@@ -1586,6 +1704,154 @@ window.kvMdmInjectAPK=async function(id){
   };
 })();
 
+/* V4000: active navigation and order workflows */
+(function(){
+  const navGroups=[
+    ['PAINEL',['dashboard']],
+    ['ATENDIMENTO',['services','diagnostics','agenda','quotes','adb','guarantees','fiado']],
+    ['CADASTROS',['customers','radar','technicians','purchases','suppliers']],
+    ['OPERAÇÃO',['finance','pdv']],
+    ['OUTROS',['devices','unlock','inventory','forgotten','films','contracts']],
+    ['SISTEMA',['chat_units','logs','users','admin','settings']]
+  ];
+  const activeModules=new Set(navGroups.flatMap(x=>x[1]));
+
+  function serviceDeviceChecks(devices,selected=[]){
+    const ids=new Set((selected||[]).map(Number));
+    return `<div class="field full"><label>Aparelhos vinculados à OS</label><div class="checkgrid">${devices.map((d,i)=>`<div class="check"><input type="checkbox" id="serviceDevice${i}" name="service_device_id" value="${d.id}" ${ids.has(Number(d.id))?'checked':''}><label for="serviceDevice${i}">${esc([d.brand,d.model].filter(Boolean).join(' ')||'Aparelho')} • ${esc(d.unit||'TODOS')} • ${esc(d.status||'')}</label></div>`).join('')||'<p class="muted">Nenhum aparelho cadastrado. Cadastre o aparelho antes ou vincule depois.</p>'}</div><small class="muted">É possível associar mais de um aparelho; selecione somente aparelhos do cliente escolhido.</small></div>`;
+  }
+  function servicePartRows(parts=[]){
+    return `<div class="field full"><label>Peças utilizadas</label><div id="serviceParts">${parts.map(p=>servicePartRow(p)).join('')}</div><button type="button" class="btn ghost" onclick="addServicePart()">+ Adicionar peça</button></div>`;
+  }
+  function servicePartRow(p={}){
+    return `<div class="service-part-row"><input class="input part-name" placeholder="Peça" value="${esc(p.name||'')}"><input class="input part-quality" placeholder="Qualidade" value="${esc(p.quality||'')}"><input class="input part-qty" type="number" min="1" value="${Number(p.qty||1)}"><input class="input part-price" type="number" min="0" step="0.01" placeholder="Preço unitário" value="${Number(p.price||0)}"><button type="button" class="btn red" onclick="this.parentElement.remove()" aria-label="Remover peça">×</button></div>`;
+  }
+  window.addServicePart=function(){document.querySelector('#serviceParts')?.insertAdjacentHTML('beforeend',servicePartRow())};
+  function collectServiceParts(){
+    return [...document.querySelectorAll('#serviceParts .service-part-row')].map(row=>({
+      name:row.querySelector('.part-name').value.trim(),
+      quality:row.querySelector('.part-quality').value.trim(),
+      qty:Number(row.querySelector('.part-qty').value||1),
+      price:Number(row.querySelector('.part-price').value||0)
+    })).filter(x=>x.name);
+  }
+  function serviceTechnicianSelect(technicians,selectedId,legacyName){
+    const options=technicians.filter(x=>x.active!==0).map(t=>`<option value="${t.id}" ${Number(t.id)===Number(selectedId)?'selected':''}>${esc(t.name)}${t.unit&&t.unit!=='TODOS'?' • '+esc(t.unit):''}</option>`).join('');
+    return `<div class="field"><label>Técnico responsável</label><select class="select" name="technician_id"><option value="">${legacyName?'Sem vínculo • '+esc(legacyName):'Selecione do cadastro'}</option>${options}</select></div>`;
+  }
+  async function orderFormData(){
+    return Promise.all([api('/api/devices?unit=TODOS'),api('/api/technicians?unit=TODOS')]);
+  }
+  serviceForm=async function(kind='conserto'){
+    try{
+      const [devices,technicians]=await orderFormData();
+      formModal('Nova Ordem de Serviço Técnica',`<div class="formgrid">
+        ${f('unit','Unidade','select',['LAGOS','MAGÉ'])}${customerPicker('customer_id','Cliente')}
+        ${serviceDeviceChecks(devices)}
+        ${serviceTechnicianSelect(technicians,'','')}
+        ${f('description','Serviço solicitado *','text','',true)}
+        ${f('diagnosis','Diagnóstico','textarea','',true)}
+        ${f('price','Valor cobrado','number','0')}${f('warranty','Garantia','text','90 dias')}
+        ${f('cost_material','Custo de peças / materiais','number','0')}${f('cost_labor','Custo de mão de obra','number','0')}${f('cost_extra','Outros custos','number','0')}
+        ${f('status','Status','select',statusOptions('service'))}
+        <div class="field full"><label>Checklist técnico</label>${checklist()}</div>
+        ${servicePartRows()}${photoBox()}${f('notes','Observações internas','textarea','',true)}
+      </div>`,async()=>{
+        const m=$('#modal'),data=formValues(m.querySelector('#modalForm'));
+        try{
+          data.kind=kind;data.device_ids=[...m.querySelectorAll('input[name="service_device_id"]:checked')].map(x=>Number(x.value));data.device_id=data.device_ids[0]||null;
+          data.technician_id=data.technician_id||null;
+          const tech=technicians.find(x=>Number(x.id)===Number(data.technician_id));data.technician=tech?.name||'';
+          data.checklist=collectChecks(m);data.photos=await readPhotos();data.details={parts:collectServiceParts()};
+          await api('/api/services',{method:'POST',body:JSON.stringify(data)});
+          closeModal();toast('OS salva • link público gerado');render();
+        }catch(e){toast('Não foi possível salvar a OS: '+e.message,'error')}
+      });
+      setTimeout(()=>{const unitSelect=$('#modalForm [name="unit"]');if(unitSelect)unitSelect.value=UNIT==='TODOS'?'LAGOS':UNIT;wirePickers()},40);
+    }catch(e){toast('Não foi possível carregar os dados da OS: '+e.message,'error')}
+  };
+  editService=async function(id){
+    try{
+      const [services,devices,technicians]=await Promise.all([api('/api/services?unit=TODOS'),...orderFormData()]);
+      const d=services.find(x=>Number(x.id)===Number(id));if(!d)return toast('OS não encontrada para edição.','error');
+      let details={};try{details=typeof d.details_json==='string'?JSON.parse(d.details_json||'{}'):(d.details_json||{})}catch{}
+      let checklistData={};try{checklistData=typeof d.checklist==='string'?JSON.parse(d.checklist||'{}'):(d.checklist||{})}catch{}
+      formModal('Editar OS #'+id,`<div class="formgrid">
+        ${f('unit','Unidade','select',['LAGOS','MAGÉ'],d.unit||'LAGOS')}
+        ${f('customer_id','ID do cliente','number',d.customer_id||'')}
+        ${serviceDeviceChecks(devices,d.device_ids||[d.device_id].filter(Boolean))}
+        ${serviceTechnicianSelect(technicians,d.technician_id,d.technician)}
+        ${f('kind','Tipo de serviço','text',d.kind||'conserto')}
+        ${f('description','Serviço solicitado','text',d.description||'',true)}
+        ${f('diagnosis','Diagnóstico','textarea',d.diagnosis||'',true)}
+        ${f('status','Status','select',statusOptions('service'))}
+        ${f('price','Valor cobrado','number',d.price||0)}${f('warranty','Garantia','text',d.warranty||'')}
+        ${f('cost_material','Custo de peças / materiais','number',d.cost_material||0)}${f('cost_labor','Custo de mão de obra','number',d.cost_labor||0)}${f('cost_extra','Outros custos','number',d.cost_extra||0)}
+        <div class="field full"><label>Checklist</label>${checklist('checklist',checklistData)}</div>
+        ${servicePartRows(details.parts||[])}
+        ${f('notes','Observações internas','textarea',d.notes||'',true)}
+        <div class="field full"><small class="muted">As fotos atuais são mantidas; novas fotos podem ser anexadas.</small></div>${photoBox()}
+      </div>`,async()=>{
+        const m=$('#modal'),data=formValues(m.querySelector('#modalForm'));
+        try{
+          data.id=id;data.device_ids=[...m.querySelectorAll('input[name="service_device_id"]:checked')].map(x=>Number(x.value));data.device_id=data.device_ids[0]||null;
+          data.technician_id=data.technician_id||null;const tech=technicians.find(x=>Number(x.id)===Number(data.technician_id));data.technician=tech?.name||d.technician||'';
+          data.checklist=collectChecks(m);const newPhotos=await readPhotos();data.photos=newPhotos.length?newPhotos:d.photos||'[]';
+          details.parts=collectServiceParts();data.details_json=JSON.stringify(details);
+          await api('/api/services',{method:'PUT',body:JSON.stringify(data)});
+          closeModal();toast('OS #'+id+' atualizada no registro original');render();
+        }catch(e){toast('Não foi possível atualizar a OS: '+e.message,'error')}
+      });
+      setTimeout(()=>{const status=$('#modalForm [name="status"]');if(status)status.value=d.status||'aberto'},40);
+    }catch(e){toast('Não foi possível carregar a OS: '+e.message,'error')}
+  };
+  window.deleteService=async function(id){
+    if(!confirm('Cancelar a OS? O registro e o histórico financeiro serão preservados.'))return;
+    try{const r=await api('/api/services?id='+encodeURIComponent(id),{method:'DELETE'});toast(r.status==='cancelado'?'OS cancelada; dados preservados':'OS atualizada');render()}catch(e){toast(e.message,'error')}
+  };
+  window.copyOSLink=async function(tokenOrUrl,type='service'){
+    const url=/^https?:\/\//i.test(String(tokenOrUrl||''))?String(tokenOrUrl):location.origin+(type==='unlock'?'/public/unlock/':'/public/os/')+encodeURIComponent(tokenOrUrl||'');
+    try{await navigator.clipboard.writeText(url);toast('Link da OS copiado')}catch{prompt('Copie o link da OS:',url)}
+  };
+  window.openOSLink=function(tokenOrUrl){
+    const url=/^https?:\/\//i.test(String(tokenOrUrl||''))?String(tokenOrUrl):location.origin+'/public/os/'+encodeURIComponent(tokenOrUrl||'');
+    window.open(url,'_blank','noopener');
+  };
+  window.downloadOS=function(token){window.open(location.origin+'/public/os/'+encodeURIComponent(token||'')+'?print=1','_blank','noopener')};
+  window.whatsappService=async function(id,status){
+    try{
+      const d=(await api('/api/services?unit=TODOS')).find(x=>Number(x.id)===Number(id));if(!d)return toast('OS não encontrada.','error');
+      const customer=await serviceCustomer(d.customer_id),phone=String(customer.phone||'').replace(/\D/g,'');
+      if(!phone)return toast('Cliente sem telefone cadastrado.','error');
+      const link=d.public_url||location.origin+'/public/os/'+encodeURIComponent(d.public_token||'');
+      const text=waText(status||d.status,d,customer)+'\n\nAcompanhe sua OS: '+link;
+      window.open('https://wa.me/'+(phone.startsWith('55')?phone:'55'+phone)+'?text='+encodeURIComponent(text),'_blank','noopener');
+    }catch(e){toast(e.message,'error')}
+  };
+  pages.services=async function(){
+    const d=await list('services');
+    $('#content').innerHTML=head('Consertos / Ordens de Serviço','Ordens, dispositivos vinculados, status persistente e acompanhamento público',`<button class="btn" onclick="serviceForm('conserto')">+ Nova OS</button>`)+
+      table(d,[['id','OS',r=>'OS-'+r.id],['customer_name','Cliente'],['devices','Aparelhos',r=>(r.devices||[]).map(x=>esc([x.brand,x.model].filter(Boolean).join(' '))).join('<br>')||'—'],['description','Serviço'],['technician','Técnico'],['price','Valor',r=>money(r.price)],['status','Status',r=>badge(r.status)],['created_at','Entrada']],
+        r=>`<div class="row-actions"><button class="iconbtn" title="Abrir detalhes" onclick="serviceDetails(${r.id})">👁️</button><button class="iconbtn" title="Editar OS" onclick="editService(${r.id})">✏️</button><button class="iconbtn" title="Abrir acompanhamento" onclick="openOSLink('${esc(r.public_url||r.public_token)}')">↗</button><button class="iconbtn" title="Copiar link" onclick="copyOSLink('${esc(r.public_url||r.public_token)}')">🔗</button><button class="iconbtn" title="WhatsApp" onclick="whatsappService(${r.id})">💬</button><button class="iconbtn" title="Enviar mensagem organizada ao Telegram e copiar" onclick="sendClientMessageTelegram('service',${r.id})">✈️</button><button class="iconbtn" title="Imprimir" onclick="downloadOS('${esc(r.public_token)}')">🖨</button><button class="iconbtn danger" title="Cancelar OS" onclick="deleteService(${r.id})">×</button></div><div class="status-actions">${statusOptions('service').map(st=>`<button class="mini" onclick="statusService(${r.id},'${esc(st)}')">${esc(st)}</button>`).join('')}</div>`);
+  };
+  pages.admin=async function(){
+    const [logs,undos]=await Promise.all([api('/api/activity?unit='+encodeURIComponent(UNIT)),api('/api/undo')]);
+    $('#content').innerHTML=head('Administração • LOG & Desfazer','Auditoria das ações e cópia de segurança',`<button class="btn" onclick="location.href='/api/export/backup'">Backup ZIP</button>`)+
+      `<section class="panel"><h2>Ações que podem ser desfeitas</h2><div class="timeline">${undos.map(x=>`<div class="event"><b>${esc(x.action)}</b> • ${esc(x.table_name)} #${x.row_id}<small>${esc(x.created_at)}</small><button class="btn ghost" onclick="undoIt(${x.id})">Desfazer</button></div>`).join('')||'<p class="muted">Nenhuma ação pendente.</p>'}</div></section>`+
+      `<section class="panel"><h2>Atividade recente</h2>${table(logs,[['tag','Tipo'],['user_name','Usuário'],['unit','Unidade'],['action','Ação'],['entity','Módulo'],['entity_id','ID'],['created_at','Data']])}</section>`;
+  };
+  go=function(module){if(!activeModules.has(module)){toast('Módulo indisponível nesta versão.','error');return}MOD=module;render()};
+  boot=async function(){
+    document.body.innerHTML=`<div class="shell"><aside class="sidebar"><div class="brand"><div class="logo">KV</div><div><b>KV CELL</b><small>OS PREMIUM • V4000</small></div></div><div class="nav">${navGroups.map(([title,modules])=>`<div class="navtitle">${title}</div>${modules.map(nav).join('')}`).join('')}</div></aside><main class="main"><div class="topbar"><div><b id="crumb">Painel</b><div class="crumb">KV CELL OS PREMIUM • Lagos + Magé</div></div><div class="top-actions"><select id="unit" class="select unit"><option>TODOS</option><option>LAGOS</option><option>MAGÉ</option></select><button class="btn ghost" onclick="openSearch()">Buscar</button><button class="btn ghost" onclick="logout()">Sair</button></div></div><div id="content"></div></main></div><div id="modal" class="modal"></div><div id="toast" class="toast"></div>`;
+    $('#unit').value=UNIT;$('#unit').onchange=e=>{UNIT=e.target.value;localStorage.setItem('kv_unit',UNIT);render()};
+    if(!activeModules.has(MOD))MOD='dashboard';
+    render();
+  };
+  const originalFilms=pages.films;
+  if(originalFilms)pages.films=async function(){await originalFilms();document.querySelectorAll('button').forEach(b=>{if(/IA sugerir/i.test(b.textContent||''))b.remove()})};
+  window.__kvV4000Overrides={serviceForm,editService,deleteService:window.deleteService,copyOSLink:window.copyOSLink,openOSLink:window.openOSLink,downloadOS:window.downloadOS,whatsappService:window.whatsappService,servicesPage:pages.services,adminPage:pages.admin,filmsPage:pages.films,boot,go};
+})();
+
 
 /* ================================================================
    KV CELL V1000.0 — ADDITIVE UX / MDM ACTION LAYER
@@ -1646,7 +1912,7 @@ window.kvMdmInjectAPK=async function(id){
         <div><b>03</b><span>No Windows, execute <strong>tools\\INICIAR_KV_CELL_BRIDGE.bat</strong>.</span></div>
         <div><b>04</b><span>Clique em <strong>Testar ponte</strong> e depois em <strong>Conectar ADB</strong>.</span></div>
       </div>
-      <div class="kv-bridge-actions"><button class="btn" onclick="closeModal();kvAdbBridgeCheck()">↻ Testar ponte agora</button>${navigator.usb?'<button class="btn ghost" onclick="closeModal();kvUsbSelect()">▣ Selecionar USB</button>':''}<button class="btn ghost" onclick="navigator.clipboard?.writeText('http://127.0.0.1:17321/health');toast('Endereço de diagnóstico copiado')">Copiar diagnóstico</button></div>
+      <div class="kv-bridge-actions"><button class="btn" onclick="closeModal();kvAdbBridgeCheck()">↻ Testar ponte agora</button><button class="btn ghost" onclick="navigator.clipboard?.writeText('http://127.0.0.1:17321/health');toast('Endereço de diagnóstico copiado')">Copiar diagnóstico</button></div>
       <div class="kv-bridge-note"><b>Arquitetura do ADB</b><br>O Square Cloud hospeda o painel. O navegador não pode iniciar um processo no Windows sozinho. A ponte local é o componente que conversa com o Android Debug Bridge instalado no computador.</div>
     </div>`,async()=>closeModal());
   };
@@ -1664,15 +1930,7 @@ window.kvMdmInjectAPK=async function(id){
   window.__kvWebUsbEnginePromise=null;
 
   async function loadWebUsbEngine(){
-    if(window.KVTechAdbWebUSB) return window.KVTechAdbWebUSB;
-    if(!navigator.usb) throw new Error('WebUSB não está disponível. Use Chrome ou Edge no Windows.');
-    if(!window.__kvWebUsbEnginePromise){
-      window.__kvWebUsbEnginePromise=import('/static/vendor/kv-adb-engine/Antivirus-Bis0a3Pi.js?v=1100.0')
-        .then(()=>window.KVTechAdbWebUSB);
-    }
-    const engine=await window.__kvWebUsbEnginePromise;
-    if(!engine?.supported) throw new Error('O navegador não disponibilizou WebUSB para esta sessão.');
-    return engine;
+    throw new Error('ADB direto via WebUSB não está incluído nesta compilação. Use a ponte ADB local oficial.');
   }
   window.kvLoadWebUsbAdbEngine=loadWebUsbEngine;
 
@@ -1722,22 +1980,37 @@ window.kvMdmInjectAPK=async function(id){
 
   window.kvAdbConnect=async function(){
     try{
-      toast('Abrindo seletor ADB WebUSB…','info');
-      await webusbConnect();
-      toast('ADB conectado diretamente por WebUSB • '+(window.__kvAdbDevice.model||window.__kvAdbSerial),'success');
+      toast('Verificando a ponte ADB local…','info');
+      const health=await kvBridge('/health',{timeout:3000});
+      if(!health.ok||!health.adb_found)throw new Error('ADB não encontrado no computador. Instale Android SDK Platform Tools e reinicie a ponte.');
+      const devices=await kvAdbDevices();
+      const online=(devices||[]).filter(device=>device.state==='device');
+      if(!online.length){
+        const unauthorized=(devices||[]).some(device=>device.state==='unauthorized');
+        throw new Error(unauthorized?'Aparelho detectado, mas ainda não autorizou a chave RSA no Android.':'Nenhum aparelho ADB autorizado foi encontrado.');
+      }
+      let selected=online.find(device=>device.serial===kvAdbSerial())||(online.length===1?online[0]:null);
+      if(!selected){
+        const answer=prompt('APARELHOS ADB CONECTADOS\n\n'+online.map((device,index)=>`${index+1}. ${device.serial} — ${device.model||device.product||'Android'}`).join('\n')+'\n\nDigite o número:','1');
+        const index=Number(answer)-1;
+        if(!Number.isInteger(index)||!online[index])return;
+        selected=online[index];
+      }
+      window.__kvAdbSerial=selected.serial;
+      localStorage.setItem('kv_adb_serial',selected.serial);
+      await kvAdbLoadInfo();
+      toast('ADB real conectado • '+(window.__kvAdbDevice.model||selected.serial),'success');
       await pages.adb();
     }catch(e){
-      if(e?.name==='NotFoundError') return toast('Nenhum dispositivo selecionado.','info');
-      toast(e?.message||'Falha na conexão ADB WebUSB.','error');
+      toast(e?.message||'Falha na conexão ADB local.','error');
       await pages.adb();
     }
   };
 
   window.kvAdbRefresh=async function(){
     try{
-      if(window.__kvWebUsbSession?.adb){await kvWebUsbLoadInfo();toast('Leitura ADB WebUSB atualizada','success');return kvAdbTab(window.__kvAdbTab||'hub');}
-      if(kvAdbSerial()) {await kvAdbLoadInfo();toast('Leitura atualizada');kvAdbTab(window.__kvAdbTab||'hub');return;}
-      throw new Error('Nenhum aparelho selecionado.');
+      if(!kvAdbSerial())throw new Error('Nenhum aparelho selecionado.');
+      await kvAdbLoadInfo();toast('Leitura ADB atualizada','success');kvAdbTab(window.__kvAdbTab||'hub');
     }catch(e){toast(e.message||'Falha ao atualizar.','error')}
   };
 
@@ -1774,76 +2047,59 @@ window.kvMdmInjectAPK=async function(id){
 
   window.kvAdbMDMInstall=async function(){
     try{
-      if(!window.__kvWebUsbSession?.adb) return toast('Conecte o aparelho por ADB WebUSB primeiro.','error');
-      const file=await new Promise(resolve=>{const i=document.createElement('input');i.type='file';i.accept='.apk';i.onchange=()=>resolve(i.files?.[0]||null);i.click();});
-      if(!file)return;
-      if(!/\.apk$/i.test(file.name))throw new Error('Selecione um APK válido.');
-      const engine=await loadWebUsbEngine();
-      toast('Enviando APK KV CELL MDM via ADB Sync…','info');
-      const out=await engine.installApk(window.__kvWebUsbSession,file);
-      window.__kvAdbOutput=out||'APK instalado.';toast('KV CELL MDM instalado pelo ADB WebUSB','success');
+      if(!kvAdbSerial())throw new Error('Conecte um aparelho ADB autorizado primeiro.');
+      const result=await kvBridge('/mdm/install',{method:'POST',timeout:90000,body:JSON.stringify({serial:kvAdbSerial()})});
+      window.__kvAdbOutput=result.output||'APK instalado.';
+      toast('Instalação concluída pela ponte ADB local','success');
     }catch(e){toast(e.message||'Falha na instalação do MDM.','error')}
   };
 
   window.kvAdbMDMProvision=async function(token){
     try{
       if(!token)throw new Error('Informe o token do crediário MDM.');
-      if(!window.__kvWebUsbSession?.adb)throw new Error('Conecte o aparelho por ADB WebUSB primeiro.');
-      const packageName='br.com.kvcell.finance.mdm';
-      const adminComponent=packageName+'/br.com.kvcell.mdm.KVCellDeviceAdminReceiver';
-      const out=await shell('dpm set-device-owner '+adminComponent,30000);
-      window.__kvAdbOutput=out||'Comando de provisionamento executado.';
-      toast('Solicitação de Device Owner enviada. O Android pode exigir que o aparelho esteja em estado elegível para provisionamento.','success');
+      if(!kvAdbSerial())throw new Error('Conecte um aparelho ADB autorizado primeiro.');
+      const result=await kvBridge('/mdm/provision',{method:'POST',timeout:120000,body:JSON.stringify({serial:kvAdbSerial(),token})});
+      window.__kvAdbOutput=result.output||result.launch||'Provisionamento executado.';
+      toast('Solicitação enviada; o Android aplica suas próprias regras de Device Owner.','success');
     }catch(e){toast(e.message||'Não foi possível provisionar o Device Owner.','error')}
   };
 
   window.kvAdbScan=async function(){
     try{
-      if(!window.__kvWebUsbSession?.adb)throw new Error('Conecte um aparelho ADB autorizado primeiro.');
-      toast('Analisando aplicativos instalados via ADB…','info');
-      const raw=await shell('pm list packages -3 -i',20000);
-      const lines=String(raw||'').split(/\r?\n/).filter(x=>/^package:/i.test(x));
-      const rules=[
-        [/joker|jocker|hiddad|hidden.?ad|anatsa|teabot|flubot|spynote|spymax|androrat|craxsrat|sms.?stealer|otp.?grabber/i,'Assinatura conhecida associada a malware',10],
-        [/mspy|flexispy|hoverwatch|thetruthspy|kidsguard|stalker/i,'Possível aplicativo de monitoramento invasivo; revisar com o cliente',8],
-        [/cleaner|phone.?boost|battery.?saver|antivirus|security.?master/i,'Nome compatível com falso otimizador/antivírus; precisa de verificação manual',5],
-        [/bet365|estrelabet|betano|blaze|casino|cassino|sportsbook/i,'Aplicativo de aposta detectado (não é diagnóstico de malware)',2]
-      ];
-      const packages=lines.map(line=>{const pkg=(line.match(/^package:([^\s]+)/i)||[])[1]||line;const installer=(line.match(/installer=([^\s]+)/i)||[])[1]||'';const hit=rules.find(r=>r[0].test(pkg));return {package:pkg,raw:line,installer,permissions:[],score:hit?hit[2]:0,reason:hit?hit[1]:'Nenhuma assinatura simples detectada'};});
-      const findings=packages.filter(x=>x.score>0).map(x=>({...x,score:x.score}));
-      window.__kvAdbScan={ok:true,packages_scanned:packages.length,packages,findings,engine:'WebUSB / ADB',notice:'Triagem heurística por nome do pacote; não substitui análise forense nem confirma infecção.'};
-      kvAdbTab('antivirus');toast('Análise concluída • '+packages.length+' apps verificados','success');
+      if(!kvAdbSerial())throw new Error('Conecte um aparelho ADB autorizado primeiro.');
+      toast('Analisando permissões reais dos aplicativos…','info');
+      const result=await kvBridge('/security-scan?serial='+encodeURIComponent(kvAdbSerial()),{timeout:60000});
+      window.__kvAdbScan={...result,packages:[],engine:'ADB local',notice:result.note||'Triagem heurística de permissões; não confirma malware.'};
+      kvAdbTab('antivirus');toast('Triagem concluída • '+Number(result.packages_scanned||0)+' apps verificados','success');
     }catch(e){toast(e.message||'Falha na análise.','error')}
   };
 
   /* Keep the old bridge as an explicit fallback, never the primary ADB path. */
   window.kvAdbBridgeCheck=async function(){
     try{const h=await kvBridge('/health',{timeout:2500});localStorage.setItem('kv_adb_bridge_ready','1');toast('Ponte compatível online • '+(h.adb_found?'ADB encontrado':'ADB não encontrado'),'success');return h;}
-    catch(e){localStorage.removeItem('kv_adb_bridge_ready');toast('Bridge opcional offline. O ADB principal do V1100 usa WebUSB.','info');return null;}
+    catch(e){localStorage.removeItem('kv_adb_bridge_ready');toast('Ponte ADB local offline. Inicie tools\\INICIAR_KV_CELL_BRIDGE.bat.','info');return null;}
   };
 })();
 
-/* V1100 visual/wording pass: WebUSB is now the primary ADB path. */
+/* ADB and security scanning use the authenticated local Android Debug Bridge. */
 kvAdbTop=function(){
   const d=kvAdbDevice();
-  const direct=!!window.__kvWebUsbSession?.adb;
   return `<div class="adb502-top">
-    <div class="adb502-brandline"><div class="adb502-usb">⌁</div><div><strong>KV CELL • ADB & ANTIVÍRUS</strong><small>ADB direto no navegador • WebUSB • sessão autorizada</small></div></div>
-    <div class="adb502-connection">${kvAdbBadge(!!d.serial,direct?'ADB WEBUSB ONLINE':d.serial?'APARELHO CONECTADO':'AGUARDANDO APARELHO')}<button class="btn adb502-mainbtn" onclick="kvAdbConnect()">↔ ${d.serial?'Trocar aparelho':'Procurar dispositivo'}</button></div>
+    <div class="adb502-brandline"><div class="adb502-usb">⌁</div><div><strong>KV CELL • ADB & ANTIVÍRUS</strong><small>Ponte local • Android Debug Bridge • sessão autorizada</small></div></div>
+    <div class="adb502-connection">${kvAdbBadge(!!d.serial,d.serial?'ADB LOCAL ONLINE':'AGUARDANDO APARELHO')}<button class="btn adb502-mainbtn" onclick="kvAdbConnect()">↔ ${d.serial?'Trocar aparelho':'Conectar aparelho'}</button></div>
   </div>`;
 };
 kvAdbHub=function(){
   const d=kvAdbDevice();
-  if(!d.serial)return `<div class="adb502-empty"><div class="adb502-empty-icon">USB</div><h3>Conecte o aparelho diretamente pelo navegador</h3><p>O KV CELL V1100 usa o mesmo modelo técnico do ADB WebUSB: Chrome/Edge → USB → handshake ADB → sessão autorizada.</p><button class="btn adb502-mainbtn" onclick="kvAdbConnect()">⚡ Procurar dispositivo ADB</button><div class="adb502-note">Desbloqueie o Android, ative Depuração USB e aceite a chave RSA quando o Android solicitar. Nenhuma ponte local é necessária para o ADB principal.</div></div>`;
-  return `<div class="adb502-grid3">${kvAdbMetric('MODELO',d.model)}${kvAdbMetric('ANDROID',d.android)}${kvAdbMetric('BATERIA',d.battery)}${kvAdbMetric('RAM',d.ram)}${kvAdbMetric('ARMAZENAMENTO',d.storage)}${kvAdbMetric('ADB','WEBUSB','oktext')}</div>
-  <div class="adb502-shortcuts"><button onclick="kvAdbMDMInstall()"><b>⬇ Instalar KV CELL MDM</b><small>Envia o APK pela sessão ADB WebUSB.</small></button><button onclick="kvAdbMDMProvision(prompt('Token do crediário MDM:'))"><b>🔐 Device Owner / MDM</b><small>Executa somente o fluxo administrativo permitido pelo Android.</small></button></div>
+  if(!d.serial)return `<div class="adb502-empty"><div class="adb502-empty-icon">USB</div><h3>Conecte um aparelho pela ponte ADB local</h3><p>A ponte usa o Android Debug Bridge instalado no computador e consulta dispositivos autorizados; não inventa dados quando o aparelho não está conectado.</p><button class="btn adb502-mainbtn" onclick="kvAdbConnect()">⚡ Verificar aparelhos ADB</button><div class="adb502-note">Execute tools\\INICIAR_KV_CELL_BRIDGE.bat, ative Depuração USB no Android e aceite a chave RSA.</div></div>`;
+  return `<div class="adb502-grid3">${kvAdbMetric('MODELO',d.model)}${kvAdbMetric('ANDROID',d.android)}${kvAdbMetric('BATERIA',d.battery)}${kvAdbMetric('RAM',d.ram)}${kvAdbMetric('ARMAZENAMENTO',d.storage)}${kvAdbMetric('ADB','LOCAL','oktext')}</div>
   <div class="adb502-shortcuts"><button onclick="kvAdbTab('diagnostico')"><b>⚡ Diagnóstico</b><small>Hardware, software, bateria e memória.</small></button><button onclick="kvAdbTab('terminal')"><b>›_ Terminal</b><small>Comandos ADB diagnósticos reais.</small></button></div>`;
 };
 const __kvAdbPageV1100=pages.adb;
 pages.adb=async function(){
   await __kvAdbPageV1100();
   const c=$('#content');
-  if(c) c.innerHTML=c.innerHTML.replaceAll('PONTE LOCAL + ADB','WEBUSB / ADB DIRETO').replaceAll('PONTE LOCAL','WEBUSB');
+  if(c) c.innerHTML=c.innerHTML.replaceAll('PONTE LOCAL + ADB','PONTE ADB LOCAL').replaceAll('WEBUSB / ADB DIRETO','PONTE ADB LOCAL');
 };
 
 
@@ -1875,20 +2131,20 @@ pages.forgotten=pages.devices;
     if(tab!=='debloat'&&tab!=='applepanic')return baseTab(tab);
     window.__kvAdbTab=tab;const body=document.querySelector('#adb600Body');if(!body)return;
     setActive(tab);
-    if(tab==='debloat'&&!window.__kvWebUsbSession?.adb){body.innerHTML='<section class="adb600-panel"><h2>Conecte o Android via ADB WebUSB</h2><p>É necessária uma sessão ADB autenticada; selecionar apenas o USB não basta.</p><button class="btn adb600-primary" onclick="kvAdbConnect()">Conectar ADB</button></section>';return;}
+    if(tab==='debloat'&&!kvAdbSerial()){body.innerHTML='<section class="adb600-panel"><h2>Conecte o Android via ponte ADB local</h2><p>É necessária uma sessão ADB autorizada para consultar os aplicativos instalados.</p><button class="btn adb600-primary" onclick="kvAdbConnect()">Conectar ADB</button></section>';return;}
     if(tab==='debloat'){
-      body.innerHTML='<section class="adb600-panel"><h2>Debloat — aplicativos de terceiros</h2><p>Lista real de pacotes instalados pelo usuário. A remoção afeta apenas o usuário atual e pode ser revertida quando o Android permitir. Confira o nome do pacote antes de agir.</p><div class="adb600-usbrow"><button class="btn adb600-primary" onclick="kvAdbLoadDebloat()">Carregar aplicativos</button><input id="kvDebloatFilter" class="input" placeholder="Filtrar pacote" oninput="kvAdbRenderDebloat()"></div><div id="kvDebloatList" class="adb502-findings"><p>Carregue os aplicativos para começar.</p></div><div class="adb502-note">O filtro de origem é `pm list packages -3`; pacotes do sistema não entram nesta lista. A triagem não remove nada automaticamente.</div></section>';
+      body.innerHTML='<section class="adb600-panel"><h2>Aplicativos de terceiros</h2><p>Consulta somente leitura dos pacotes instalados pelo usuário através da ponte ADB autorizada.</p><div class="adb600-usbrow"><button class="btn adb600-primary" onclick="kvAdbLoadDebloat()">Carregar aplicativos</button><input id="kvDebloatFilter" class="input" placeholder="Filtrar pacote" oninput="kvAdbRenderDebloat()"></div><div id="kvDebloatList" class="adb502-findings"><p>Carregue os aplicativos para começar.</p></div><div class="adb502-note">Esta tela não remove nem desativa aplicativos. A lista é obtida do ADB real do computador conectado.</div></section>';
       window.kvAdbLoadDebloat();return;
     }
     body.innerHTML='<section class="adb600-panel"><h2>Apple — analisador Panic Full (.ips / .txt)</h2><p>Carregue o arquivo <b>panic-full</b> completo exportado pelo iPhone. O relatório identifica assinaturas conhecidas e traduz os indícios; não substitui diagnóstico de bancada nem garante uma causa única.</p><input id="kvPanicFile" type="file" accept=".ips,.txt,.panic,application/json,text/plain" class="input"><button class="btn adb600-primary" onclick="kvAdbAnalyzePanic()">Analisar Panic Full</button><div id="kvPanicResult"></div></section>';
   };
   // Real controls exposed through the authenticated ADB shell; each operation asks for confirmation.
-  kvAdbControls=function(){return kvAdbSection('Controles de bancada','Comandos reais enviados pela sessão ADB. A disponibilidade varia por fabricante e versão do Android.',`<div class="adb502-control-grid"><button onclick="kvAdbAction('normal')"><b>↻ Reiniciar</b><small>Reinicialização normal</small></button><button onclick="kvAdbAction('recovery')"><b>♻ Recovery</b><small>Modo de recuperação</small></button><button onclick="kvAdbAction('bootloader')"><b>◉ Bootloader</b><small>Fastboot / bootloader</small></button><button onclick="kvAdbAction('poweroff')"><b>⏻ Desligar aparelho</b><small>Desligamento via ADB, quando permitido</small></button><button onclick="kvAdbToggle('wifi','enable')"><b>Wi‑Fi LIGAR</b><small>Ativa o Wi‑Fi</small></button><button onclick="kvAdbToggle('wifi','disable')"><b>Wi‑Fi DESLIGAR</b><small>Desativa o Wi‑Fi</small></button><button onclick="kvAdbToggle('bluetooth','enable')"><b>Bluetooth LIGAR</b><small>Ativa o Bluetooth</small></button><button onclick="kvAdbToggle('bluetooth','disable')"><b>Bluetooth DESLIGAR</b><small>Desativa o Bluetooth</small></button></div><div class="adb502-note">Wi‑Fi/Bluetooth podem ser bloqueados pelo fabricante, política corporativa ou versão do Android. A interface informa falhas em vez de simular sucesso.</div>`)};
-  window.kvAdbToggle=async function(feature,mode){if(!['wifi','bluetooth'].includes(feature)||!['enable','disable'].includes(mode))return toast('Ação inválida','error');if(!window.__kvWebUsbSession?.adb)return toast('Conecte o Android por ADB WebUSB primeiro.','error');if(!confirm(`${mode==='enable'?'Ligar':'Desligar'} ${feature==='wifi'?'Wi‑Fi':'Bluetooth'}?`))return;try{const out=await window.kvWebUsbShell(`svc ${feature} ${mode}`,12000);if(/unknown|not found|permission denied|error/i.test(String(out||'')))throw new Error(String(out));toast(`Comando para ${feature} enviado. Confira o estado no aparelho.`, 'success')}catch(e){toast(e.message||`Não foi possível alterar ${feature}.`,'error')}};
+  kvAdbControls=function(){return kvAdbSection('Controles de bancada','Comandos ADB reais, enviados pela ponte local e sujeitos à disponibilidade do fabricante.',`<div class="adb502-control-grid"><button onclick="kvAdbAction('normal')"><b>↻ Reiniciar</b><small>Reinicialização normal</small></button><button onclick="kvAdbAction('recovery')"><b>♻ Recovery</b><small>Modo de recuperação</small></button><button onclick="kvAdbAction('bootloader')"><b>◉ Bootloader</b><small>Fastboot / bootloader</small></button><button onclick="kvAdbAction('poweroff')"><b>⏻ Desligar aparelho</b><small>Desligamento via ADB, quando permitido</small></button></div><div class="adb502-note">Alterações de Wi‑Fi e Bluetooth não são oferecidas nesta versão. Nenhum comando é apresentado como concluído sem resposta real da ponte.</div>`)};
+  window.kvAdbToggle=async function(){toast('Alteração de Wi‑Fi/Bluetooth não está disponível nesta versão.','error')};
   window.__kvDebloatPackages=[];
-  window.kvAdbLoadDebloat=async function(){try{const out=await window.kvWebUsbShell('pm list packages -3 -i',20000);window.__kvDebloatPackages=String(out||'').split(/\r?\n/).filter(x=>/^package:/i.test(x)).map(x=>{const m=x.match(/^package:([^\s]+)/i);return {pkg:m?m[1]:x,raw:x};}).filter(x=>/^[a-zA-Z][a-zA-Z0-9_.]+$/.test(x.pkg));window.kvAdbRenderDebloat();}catch(e){toast(e.message||'Falha ao listar aplicativos','error')}};
-  window.kvAdbRenderDebloat=function(){const box=document.querySelector('#kvDebloatList');if(!box)return;const q=(document.querySelector('#kvDebloatFilter')?.value||'').toLowerCase();const list=(window.__kvDebloatPackages||[]).filter(x=>x.pkg.toLowerCase().includes(q));box.innerHTML=list.map(x=>`<article><div><b>${escText(x.pkg)}</b><small>${escText(x.raw)}</small></div><button class="btn ghost" onclick="kvAdbRemovePackage('${escText(x.pkg)}')">Remover do usuário</button></article>`).join('')||'<p>Nenhum pacote corresponde ao filtro.</p>';};
-  window.kvAdbRemovePackage=async function(pkg){if(!/^[a-zA-Z][a-zA-Z0-9_.]+$/.test(pkg)||!(window.__kvDebloatPackages||[]).some(x=>x.pkg===pkg))return toast('Pacote inválido ou fora da lista de terceiros.','error');if(!confirm('Remover '+pkg+' do usuário Android atual? Esta ação pode interromper o funcionamento do app.'))return;try{const out=await window.kvWebUsbShell('pm uninstall --user 0 '+pkg,30000);if(/success/i.test(String(out))){toast('Pacote removido do usuário: '+pkg,'success');await window.kvAdbLoadDebloat()}else throw new Error(String(out||'O Android não confirmou a remoção.'));}catch(e){toast(e.message||'Falha ao remover pacote','error')}};
+  window.kvAdbLoadDebloat=async function(){try{const result=await kvBridge('/command',{method:'POST',timeout:30000,body:JSON.stringify({serial:kvAdbSerial(),key:'packages_installer'})});window.__kvDebloatPackages=String(result.output||'').split(/\r?\n/).filter(x=>/^package:/i.test(x)).map(x=>{const m=x.match(/^package:([^\s]+)/i);return {pkg:m?m[1]:x,raw:x};}).filter(x=>/^[a-zA-Z][a-zA-Z0-9_.]+$/.test(x.pkg));window.kvAdbRenderDebloat();}catch(e){toast(e.message||'Falha ao listar aplicativos','error')}};
+  window.kvAdbRenderDebloat=function(){const box=document.querySelector('#kvDebloatList');if(!box)return;const q=(document.querySelector('#kvDebloatFilter')?.value||'').toLowerCase();const list=(window.__kvDebloatPackages||[]).filter(x=>x.pkg.toLowerCase().includes(q));box.innerHTML=list.map(x=>`<article><div><b>${escText(x.pkg)}</b><small>${escText(x.raw)}</small></div><span class="badge y">Somente leitura</span></article>`).join('')||'<p>Nenhum pacote corresponde ao filtro.</p>';};
+  window.kvAdbRemovePackage=async function(){toast('Remoção de aplicativos foi desativada; esta tela é somente leitura.','error')};
   window.kvAdbAnalyzePanic=async function(){const file=document.querySelector('#kvPanicFile')?.files?.[0];const box=document.querySelector('#kvPanicResult');if(!file)return toast('Selecione um arquivo panic-full .ips ou .txt.','error');try{const raw=await file.text();if(raw.length<80)throw new Error('O arquivo está vazio ou incompleto.');const text=raw.toLowerCase();const rules=[
     [/missing sensor|thermalmonitord|thermal monitor|sensor.*missing/i,'Falha provável de sensor térmico ou comunicação com sensor','Hardware / sensores'],
     [/watchdog timeout|watchdog.*expired|userspace watchdog/i,'Timeout de processo ou serviço crítico','Software / watchdog'],
@@ -1914,3 +2170,463 @@ pages.forgotten=pages.devices;
  const oldBoot=boot;boot=async function(){await oldBoot();arm();reset()};
  const oldShow=showLogin;showLogin=function(){if(timer)clearTimeout(timer);timer=null;return oldShow()};
 })();
+
+/* Per-user module access: keep the UI consistent with the server-side checks. */
+(function(){
+ const modules=[
+  ['dashboard','Painel'],['services','Ordens de serviço'],['agenda','Agenda'],
+ ['diagnostics','Diagnósticos'],
+  ['adb','ADB / bancada'],
+  ['quotes','Orçamentos'],['unlock','Desbloqueios'],['guarantees','Garantias'],
+  ['fiado','Fiado'],['customers','Clientes'],['radar','Radar de clientes'],['technicians','Técnicos'],
+  ['purchases','Compras'],['suppliers','Fornecedores'],['finance','Financeiro'],
+  ['pdv','PDV'],['devices','Aparelhos'],['inventory','Estoque'],
+  ['forgotten','Aparelhos esquecidos'],['films','Películas'],['contracts','Contratos'],
+  ['chat_units','Unidades de chat'],['logs','Logs'],
+  ['users','Usuários'],['admin','Administração'],['settings','Configurações']
+ ];
+ const allowed=module=>{
+  if(!ME)return false;
+  if(ME.role==='admin')return true;
+  if(['users','admin','settings'].includes(module))return false;
+  if(module==='finance'&&!['admin','gerente'].includes(ME.role))return false;
+  let p=ME.permissions||{};
+  if(typeof p==='string'){try{p=JSON.parse(p)}catch{p={}}}
+  return !!(p&&typeof p==='object'&&(p.all===true||p[module]===true));
+ };
+ const permissionFields=selected=>`<div class="field full"><label>Permissões por módulo</label><div class="checkgrid">${modules.map(([key,label])=>`<label class="check"><input type="checkbox" name="perm" value="${key}" ${selected?.[key]===true?'checked':''}> ${label}</label>`).join('')}</div></div>`;
+ const setPermissionInputs=permissions=>{
+  let p=permissions||{};
+  if(typeof p==='string'){try{p=JSON.parse(p)}catch{p={}}}
+  document.querySelectorAll('#modalForm input[name="perm"]').forEach(input=>{input.checked=p[input.value]===true});
+ };
+ userForm=function(){
+  formModal('Novo usuário / funcionário',`<div class="formgrid">${f('name','Nome completo *')}${f('email','E-mail *','email')}${f('password','Senha inicial *','password')}${f('role','Perfil','select',['admin','gerente','tecnico','atendente'])}${f('unit','Unidade','select',['TODOS','LAGOS','MAGÉ'])}${permissionFields({dashboard:true})}</div>`,async()=>{
+   try{
+    const m=$('#modal'),d=formValues(m.querySelector('#modalForm'));d.permissions={};
+    m.querySelectorAll('input[name=perm]:checked').forEach(x=>d.permissions[x.value]=true);
+    await api('/api/users',{method:'POST',body:JSON.stringify(d)});
+    closeModal();toast('Usuário criado com sucesso');render();
+   }catch(e){toast('Erro ao criar usuário: '+e.message)}
+  });
+ };
+ window.editUser=async id=>{
+  try{
+   const rows=await api('/api/users?unit=TODOS'),user=rows.find(x=>Number(x.id)===Number(id));
+   if(!user)throw new Error('Usuário não encontrado.');
+   let permissions=user.permissions||{};
+   if(typeof permissions==='string'){try{permissions=JSON.parse(permissions)}catch{permissions={}}}
+   formModal('Editar usuário / funcionário',`<div class="formgrid">${f('name','Nome completo', 'text',user.name||'')}${f('email','E-mail','email',user.email||'')}${f('role','Perfil','select',['admin','gerente','tecnico','atendente'])}${f('unit','Unidade','select',['TODOS','LAGOS','MAGÉ'])}<div class="field"><label><input type="checkbox" name="active" value="1" ${user.active?'checked':''}> Usuário ativo</label></div>${permissionFields(permissions)}</div>`,async()=>{
+    try{
+     const m=$('#modal'),d=formValues(m.querySelector('#modalForm'));d.id=user.id;d.active=d.active==='1'?1:0;d.permissions={};
+     m.querySelectorAll('input[name=perm]:checked').forEach(x=>d.permissions[x.value]=true);
+     await api('/api/users',{method:'PUT',body:JSON.stringify(d)});
+     closeModal();toast('Usuário atualizado');render();
+    }catch(e){toast('Erro ao atualizar usuário: '+e.message)}
+   });
+   const form=$('#modalForm');form.elements.role.value=user.role||'atendente';form.elements.unit.value=user.unit||'TODOS';
+   setPermissionInputs(permissions);
+  }catch(e){toast(e.message,'error')}
+ };
+ window.deleteUser=async id=>{
+  if(!confirm('Excluir este usuário? Esta ação não pode ser desfeita.'))return;
+  try{await api('/api/users?id='+encodeURIComponent(id),{method:'DELETE'});toast('Usuário excluído');render()}
+  catch(e){toast(e.message,'error')}
+ };
+ pages.users=async()=>{
+  const data=await list('users');
+  $('#content').innerHTML=head('Usuários e funcionários','Acessos por perfil, unidade e permissões individuais',`<button class="btn" onclick="userForm()">+ Novo usuário</button>`)+
+   table(data,[['name','Nome'],['email','E-mail'],['role','Perfil'],['unit','Unidade'],['active','Ativo',r=>r.active?'🟢':'🔴'],['created_at','Criado em']],r=>`<div class="row-actions"><button class="iconbtn" title="Editar usuário e permissões" onclick="editUser(${r.id})">✏️</button><button class="iconbtn danger" title="Excluir usuário" onclick="deleteUser(${r.id})">🗑️</button></div>`);
+ };
+ const oldNav=nav;
+ nav=function(module){
+  return allowed(module)?oldNav(module):'';
+ };
+ const oldGo=go;
+ go=function(module){
+  if(!allowed(module)){toast('Você não tem permissão para abrir este módulo.','error');return}
+  oldGo(module);
+ };
+ const oldRender=render;
+ render=async function(){
+  if(ME&&!allowed(MOD)){
+   const first=['dashboard','services','devices','purchases','unlock','pdv','pricing','quotes','finance','inventory','films','customers','contracts','users','chat','admin','settings'].find(allowed);
+   if(first)MOD=first;
+  }
+  return oldRender();
+ };
+})();
+
+/* KV CELL V3002 — requested navigation cleanup, OLED polish and CRUD controls */
+(function(){
+ const hiddenNames=['pricing','employees','ai','mdm','referrals','community','services_referrals'];
+ const oldBoot=boot;
+ boot=async function(){await oldBoot();
+   // Remove hidden modules from navigation even if a legacy renderer adds them later.
+   const hide=()=>{document.querySelectorAll('.nav button').forEach(b=>{const id=(b.id||'').replace('nav-','');if(hiddenNames.includes(id)||/precifica|indicaç|funcionári|crediário|mdm|i\.a\./i.test(b.innerText||''))b.remove()});
+   document.querySelectorAll('.navtitle').forEach(t=>{if(!t.parentElement.querySelector('button'))t.remove()});};
+   hide();
+ };
+ window.deleteResource=async function(resource,id){if(resource==='quotes')return window.cancelQuoteV500(id);if(!confirm('Excluir definitivamente este lançamento? Esta ação não cria um novo registro. Faça backup se houver dúvida.'))return;try{await api('/api/'+resource+'?id='+encodeURIComponent(id),{method:'DELETE'});toast('Lançamento excluído');await render()}catch(e){toast(e.message,'error')}};
+ window.statusServiceV3002=async function(id,status){try{await api('/api/services',{method:'PUT',body:JSON.stringify({id,status})});toast('Status da OS atualizado');await render()}catch(e){toast(e.message,'error')}};
+ window.statusUnlockV3002=async function(id,status){try{await api('/api/unlocks',{method:'PUT',body:JSON.stringify({id,status})});toast('Status do desbloqueio atualizado');await render()}catch(e){toast(e.message,'error')}};
+ const baseServices=pages.services;
+ pages.services=async function(){await baseServices();const content=document.querySelector('#content');if(!content)return;
+   content.querySelectorAll('#unifiedOsTable tbody tr').forEach((tr)=>{const btns=tr.querySelectorAll('button');if(!btns.length)return;});
+   content.querySelectorAll('.os-actions-v300').forEach(el=>{const row=el.closest('tr');if(!row)return;});
+ };
+ const editDelete=(resource,fields,title)=> (r)=>`<div class="row-actions"><button class="iconbtn" title="Editar lançamento" onclick="editSimpleV500('${resource}',${r.id},'${title}',${JSON.stringify(fields).replace(/"/g,'&quot;')})">✏️</button><button class="iconbtn danger" title="Excluir lançamento" onclick="deleteResource('${resource}',${r.id})">🗑️</button></div>`;
+ const oldAgenda=pages.agenda;pages.agenda=async()=>{const d=await list('appointments');$('#content').innerHTML=head('Agenda','Agendamentos, retornos, entregas e encaixes',`<button class="btn" onclick="appointmentForm()">＋ Novo Agendamento</button>`)+table(d,[['start_at','Data / Hora'],['customer_name','Cliente'],['title','Compromisso'],['service_type','Tipo'],['technician','Técnico'],['status','Status',r=>badge(r.status)],['notes','Observações']],r=>`<div class="row-actions"><button class="iconbtn" title="Concluir" onclick="appointmentDone(${r.id})">✓</button><button class="iconbtn" title="Editar" onclick="editSimpleV500('appointments',${r.id},'Editar agendamento',[{name:'title',label:'Compromisso'},{name:'service_type',label:'Tipo'},{name:'start_at',label:'Início',type:'datetime-local'},{name:'end_at',label:'Fim',type:'datetime-local'},{name:'status',label:'Status'},{name:'technician',label:'Técnico'},{name:'notes',label:'Observações',type:'textarea',full:true}])">✏️</button><button class="iconbtn danger" title="Excluir" onclick="deleteResource('appointments',${r.id})">🗑️</button></div>`)};
+ const oldTech=pages.technicians;pages.technicians=async()=>{const d=await list('technicians');$('#content').innerHTML=head('Técnicos','Equipe, especialidades e distribuição de OS',`<button class="btn" onclick="technicianForm()">＋ Novo Técnico</button>`)+table(d,[['name','Nome'],['unit','Unidade'],['phone','Telefone'],['email','E-mail'],['specialties','Especialidades'],['active','Ativo',r=>r.active?'🟢':'🔴']],r=>`<div class="row-actions"><button class="iconbtn" title="Editar" onclick="editSimpleV500('technicians',${r.id},'Editar técnico',[{name:'name',label:'Nome'},{name:'unit',label:'Unidade'},{name:'phone',label:'Telefone'},{name:'email',label:'E-mail'},{name:'specialties',label:'Especialidades',type:'textarea',full:true},{name:'active',label:'Ativo'}])">✏️</button><button class="iconbtn danger" title="Excluir" onclick="deleteResource('technicians',${r.id})">🗑️</button></div>`)};
+ const oldSup=pages.suppliers;pages.suppliers=async()=>{const d=await list('suppliers');$('#content').innerHTML=head('Fornecedores','Peças, ferramentas, contatos e histórico de compras',`<button class="btn" onclick="supplierForm()">＋ Novo Fornecedor</button>`)+table(d,[['name','Fornecedor'],['unit','Unidade'],['document','Documento'],['phone','Telefone'],['email','E-mail'],['city','Cidade'],['notes','Observações']],r=>`<div class="row-actions"><button class="iconbtn" title="Editar" onclick="editSimpleV500('suppliers',${r.id},'Editar fornecedor',[{name:'name',label:'Fornecedor'},{name:'unit',label:'Unidade'},{name:'document',label:'Documento'},{name:'phone',label:'Telefone'},{name:'email',label:'E-mail'},{name:'city',label:'Cidade'},{name:'notes',label:'Observações',type:'textarea',full:true}])">✏️</button><button class="iconbtn danger" title="Excluir" onclick="deleteResource('suppliers',${r.id})">🗑️</button></div>`)};
+ const oldFinance=pages.finance;pages.finance=async()=>{const [d,p]=await Promise.all([list('finance'),api('/api/profit?unit='+encodeURIComponent(UNIT))]);let inc=d.filter(x=>x.type==='entrada').reduce((a,x)=>a+Number(x.amount),0),out=d.filter(x=>x.type==='saida').reduce((a,x)=>a+Number(x.amount),0);$('#content').innerHTML=head('Financeiro','Entradas, custos reais e lucro por OS, desbloqueio e aparelhos',`<button class="btn" onclick="financeForm()">+ Lançamento</button>`)+`<div class="cards"><div class="metric"><div class="label">ENTRADAS</div><div class="value green">${money(inc)}</div></div><div class="metric"><div class="label">CUSTOS</div><div class="value red">${money(p.costs)}</div></div><div class="metric"><div class="label">LUCRO</div><div class="value yellow">${money(p.profit)}</div></div><div class="metric"><div class="label">SALDO FINANCEIRO</div><div class="value">${money(inc-out)}</div></div></div><section class="panel" style="margin-top:15px">${table(d,[['id','#'],['unit','Unidade'],['type','Tipo'],['category','Categoria'],['description','Descrição'],['amount','Valor',r=>money(r.amount)],['ref_type','Origem'],['ref_id','ID'],['created_at','Data']],r=>`<div class="row-actions"><button class="iconbtn" title="Editar" onclick="editSimpleV500('finance',${r.id},'Editar lançamento financeiro',[{name:'unit',label:'Unidade'},{name:'type',label:'Tipo'},{name:'category',label:'Categoria'},{name:'description',label:'Descrição',type:'textarea',full:true},{name:'amount',label:'Valor',type:'number'},{name:'due_date',label:'Vencimento',type:'date'},{name:'paid',label:'Pago'}])">✏️</button><button class="iconbtn danger" title="Excluir" onclick="deleteResource('finance',${r.id})">🗑️</button></div>`)}</section>`};
+})();
+(function(){
+  pages.agenda=async()=>{
+    const d=await list('appointments');
+    $('#content').innerHTML=head('Agenda','Agendamentos, retornos, entregas e encaixes',`<button class="btn" onclick="appointmentForm()">＋ Novo Agendamento</button>`)+
+      table(d,[['start_at','Data / Hora'],['customer_name','Cliente'],['title','Compromisso'],['service_type','Tipo'],['technician','Técnico'],['status','Status',r=>badge(r.status)],['notes','Observações']],
+        r=>`<div class="row-actions"><button class="iconbtn" title="Concluir" onclick="appointmentDone(${r.id})">✓</button><button class="iconbtn" title="Editar" onclick="editAppointment(${r.id})">✏️</button><button class="iconbtn danger" title="Cancelar" onclick="cancelAppointmentV500(${r.id})">×</button></div>`);
+  };
+  pages.technicians=async()=>{
+    const d=await list('technicians');
+    $('#content').innerHTML=head('Técnicos','Equipe, especialidades e distribuição de OS',`<button class="btn" onclick="technicianForm()">＋ Novo Técnico</button>`)+
+      table(d,[['name','Nome'],['unit','Unidade'],['phone','Telefone'],['email','E-mail'],['specialties','Especialidades'],['active','Ativo',r=>r.active?'🟢':'🔴']],
+        r=>`<div class="row-actions"><button class="iconbtn" title="Editar" onclick="editTechnician(${r.id})">✏️</button><button class="iconbtn danger" title="Excluir" onclick="deleteResource('technicians',${r.id})">🗑️</button></div>`);
+  };
+  pages.suppliers=async()=>{
+    const d=await list('suppliers');
+    $('#content').innerHTML=head('Fornecedores','Peças, ferramentas, contatos e histórico de compras',`<button class="btn" onclick="supplierForm()">＋ Novo Fornecedor</button>`)+
+      table(d,[['name','Fornecedor'],['unit','Unidade'],['document','Documento'],['phone','Telefone'],['email','E-mail'],['city','Cidade'],['notes','Observações']],
+        r=>`<div class="row-actions"><button class="iconbtn" title="Editar" onclick="editSupplier(${r.id})">✏️</button><button class="iconbtn danger" title="Excluir" onclick="deleteResource('suppliers',${r.id})">🗑️</button></div>`);
+  };
+  pages.finance=async()=>{
+    const [d,p]=await Promise.all([list('finance'),api('/api/profit?unit='+encodeURIComponent(UNIT))]);
+    const inc=d.filter(x=>x.type==='entrada').reduce((a,x)=>a+Number(x.amount),0),out=d.filter(x=>x.type==='saida').reduce((a,x)=>a+Number(x.amount),0);
+    $('#content').innerHTML=head('Financeiro','Entradas, custos reais e lucro por OS, desbloqueio e aparelhos',`<button class="btn" onclick="financeForm()">+ Lançamento</button>`)+
+      `<div class="cards"><div class="metric"><div class="label">ENTRADAS</div><div class="value green">${money(inc)}</div></div><div class="metric"><div class="label">CUSTOS</div><div class="value red">${money(p.costs)}</div></div><div class="metric"><div class="label">LUCRO</div><div class="value yellow">${money(p.profit)}</div></div><div class="metric"><div class="label">SALDO FINANCEIRO</div><div class="value">${money(inc-out)}</div></div></div><section class="panel" style="margin-top:15px">${table(d,[['id','#'],['unit','Unidade'],['type','Tipo'],['category','Categoria'],['description','Descrição'],['amount','Valor',r=>money(r.amount)],['ref_type','Origem'],['ref_id','ID'],['created_at','Data']],r=>r.ref_type?'<span class="badge">Vinculado</span>':`<div class="row-actions"><button class="iconbtn" title="Editar" onclick="editFinanceV500(${r.id})">✏️</button><button class="iconbtn danger" title="Excluir" onclick="deleteResource('finance',${r.id})">🗑️</button></div>`)}</section>`;
+  };
+})();
+(function(){
+  const overrides=window.__kvV4000Overrides;
+  if(!overrides)return;
+  serviceForm=overrides.serviceForm;
+  editService=overrides.editService;
+  pages.services=overrides.servicesPage;
+  pages.admin=overrides.adminPage;
+  pages.films=overrides.filmsPage;
+  boot=overrides.boot;
+  go=overrides.go;
+  window.deleteService=overrides.deleteService;
+  window.copyOSLink=overrides.copyOSLink;
+  window.openOSLink=overrides.openOSLink;
+  window.downloadOS=overrides.downloadOS;
+  window.whatsappService=overrides.whatsappService;
+})();
+
+/* V4000 dashboard: live operational summary, styled to match the retained modules. */
+(function(){
+  pages.dashboard=async function(){
+    const s=await api('/api/dashboard?unit='+encodeURIComponent(UNIT));
+    const openStatuses=[
+      ['Em andamento',s.services_in_progress],
+      ['Aguardando aprovação',s.services_waiting_approval],
+      ['Aguardando peças',s.services_waiting_parts],
+      ['Prontas',s.services_ready],
+      ['Entregues',s.services_delivered]
+    ];
+    const metric=(label,value,sub,cls='')=>`<div class="metric"><div class="label">${label}</div><div class="value ${cls}">${value}</div><div class="sub">${sub}</div></div>`;
+    const services=(s.recent_services||[]);
+    const sales=(s.recent_sales||[]);
+    const activity=(s.recent_activity||[]);
+    const serviceRows=services.length?`<div class="table-wrap"><table class="table"><thead><tr><th>OS</th><th>Cliente</th><th>Serviço</th><th>Status</th><th>Unidade</th></tr></thead><tbody>${services.map(r=>`<tr><td>#${esc(r.id)}</td><td>${esc(r.customer_name||'—')}</td><td>${esc(r.description||'—')}</td><td>${badge(r.status)}</td><td>${esc(r.unit||'—')}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">Nenhuma ordem de serviço recente.</div>';
+    const saleRows=sales.length?`<div class="table-wrap"><table class="table"><thead><tr><th>Venda</th><th>Cliente</th><th>Total</th><th>Data</th></tr></thead><tbody>${sales.map(r=>`<tr><td>#${esc(r.id)}</td><td>${esc(r.customer_name||'—')}</td><td>${money(r.total)}</td><td>${esc(r.created_at||'—')}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">Nenhuma venda recente.</div>';
+    const activityHtml=activity.length?`<div class="kv-dashboard-events">${activity.map(r=>`<div class="kv-dashboard-event"><div><b>${esc(r.action||r.entity||'Atualização')}</b><small>${esc(r.user_name||'Sistema')} · ${esc(r.entity||'')} ${r.entity_id?'#'+esc(r.entity_id):''}</small></div><small>${esc(r.created_at||'')}</small></div>`).join('')}</div>`:'<div class="empty">Sem atividades recentes registradas.</div>';
+    $('#content').innerHTML=head('Painel','Visão operacional da unidade selecionada • '+esc(UNIT))+
+      `<section class="kv-dashboard-hero"><div><h2>Resumo da operação</h2><p>Acompanhe serviços, financeiro, equipe e movimentações recentes.</p></div><span class="kv-hero-unit">UNIDADE · ${esc(UNIT)}</span></section>`+
+      `<div class="cards">${metric('OS EM ABERTO',s.open_services,'Ordens não entregues ou canceladas')}${metric('ORÇAMENTOS PENDENTES',s.pending_quotes,'Aguardando resposta do cliente')}${metric('AGENDAMENTOS DE HOJE',s.appointments_today,'Compromissos na agenda')}${metric('ESTOQUE BAIXO',s.low_stock,'Itens que precisam de reposição',s.low_stock?'red':'')}${metric('RECEITAS',money(s.income),'Entradas registradas','green')}${metric('DESPESAS',money(s.expense),'Saídas registradas','red')}${metric('SALDO FINANCEIRO',money(s.income-s.expense),'Entradas menos saídas','yellow')}${metric('FIADO EM ABERTO',money(s.credit_outstanding),'Saldo devedor registrado','yellow')}</div>`+
+      `<div class="kv-dashboard-statuses">${openStatuses.map(([label,value])=>`<div class="kv-dashboard-status"><span>${label}</span><b>${Number(value||0)}</b></div>`).join('')}</div>`+
+      `<div class="kv-dashboard-shortcuts"><button class="btn" onclick="go('services')">＋ Nova OS</button><button class="btn ghost" onclick="go('agenda')">▦ Agenda</button><button class="btn ghost" onclick="go('quotes')">＋ Orçamento</button><button class="btn ghost" onclick="go('pdv')">▣ Abrir PDV</button></div>`+
+      `<div class="kv-dashboard-recent"><section class="panel"><div class="panel-head"><h2>Ordens de serviço recentes</h2><button class="btn ghost" onclick="go('services')">Ver todas</button></div>${serviceRows}</section><section class="panel"><div class="panel-head"><h2>Vendas recentes</h2><button class="btn ghost" onclick="go('pdv')">Ir para vendas</button></div>${saleRows}</section></div>`+
+      `<div class="grid2"><section class="panel"><div class="panel-head"><h2>Atividade recente</h2></div>${activityHtml}</section><section class="panel"><div class="panel-head"><h2>Indicadores da loja</h2></div><div class="kv-dashboard-events"><div class="kv-dashboard-event"><div><b>Clientes cadastrados</b><small>Base de atendimento</small></div><strong>${Number(s.customers||0)}</strong></div><div class="kv-dashboard-event"><div><b>Aparelhos de vitrine</b><small>Disponíveis para venda</small></div><strong>${Number(s.vitrine||0)}</strong></div><div class="kv-dashboard-event"><div><b>Vendas registradas</b><small>Total no período disponível</small></div><strong>${Number(s.sales||0)}</strong></div></div></section></div>`;
+  };
+})();
+
+(function(){
+ const activeModules=['dashboard','services','diagnostics','agenda','quotes','adb','guarantees','fiado','customers','radar','technicians','purchases','suppliers','finance','pdv','devices','unlock','inventory','forgotten','films','contracts','chat_units','logs','users','admin','settings'];
+ const allowed=module=>{
+  if(!ME)return false;
+  if(ME.role==='admin')return true;
+  if(['users','admin','settings'].includes(module))return false;
+  if(module==='finance'&&!['admin','gerente'].includes(ME.role))return false;
+  let permissions=ME.permissions||{};
+  if(typeof permissions==='string'){try{permissions=JSON.parse(permissions)}catch{permissions={}}}
+  return !!(permissions&&typeof permissions==='object'&&(permissions.all===true||permissions[module]===true));
+ };
+ const previousGo=go;
+ go=function(module){
+  if(!allowed(module)){toast('Você não tem permissão para abrir este módulo.','error');return}
+  previousGo(module);
+ };
+ const previousRender=render;
+ render=async function(){
+  if(ME&&!allowed(MOD)){
+   const first=activeModules.find(allowed);
+   if(!first){
+    $('#content').innerHTML='<section class="panel page-error" role="alert"><h2>Nenhum módulo liberado</h2><p>Solicite ao administrador uma permissão para continuar.</p></section>';
+    return;
+   }
+   MOD=first;
+  }
+  return previousRender();
+ };
+ const previousBoot=boot;
+ boot=async function(){
+  if(ME&&ME.role!=='admin'&&ME.unit&&ME.unit!=='TODOS'){
+   UNIT=ME.unit;localStorage.setItem('kv_unit',UNIT);
+  }
+  await previousBoot();
+  if(ME&&ME.role!=='admin'&&ME.unit&&ME.unit!=='TODOS'){
+   const unitSelect=$('#unit');
+   if(unitSelect){unitSelect.value=ME.unit;unitSelect.disabled=true}
+  }
+  let permissions=ME?.permissions||{};
+  if(typeof permissions==='string'){try{permissions=JSON.parse(permissions)}catch{permissions={}}}
+  if(ME?.role!=='admin'&&!['customers','devices','services','purchases'].some(key=>permissions[key]===true)&&permissions.all!==true){
+   document.querySelectorAll('.top-actions button').forEach(button=>{if((button.getAttribute('onclick')||'').includes('openSearch'))button.hidden=true});
+  }
+ };
+})();
+
+/* KV CELL Diagnósticos: checklist técnico interno, sem diagnóstico automatizado. */
+(function(){
+ const testNames=['Liga / inicialização','Tela e toque','Carregamento','Bateria','Câmeras','Áudio e microfone','Rede / Wi-Fi','Sensores','Conectores','Software'];
+ const statuses=['aberto','em análise','concluído','convertido'];
+ const parseTests=value=>{
+  if(Array.isArray(value))return value;
+  try{const parsed=JSON.parse(value||'[]');return Array.isArray(parsed)?parsed:[]}catch{return []}
+ };
+ const deviceOptions=(devices,selected)=>'<option value="">Sem aparelho vinculado</option>'+devices.map(device=>
+  `<option value="${device.id}" ${Number(device.id)===Number(selected)?'selected':''}>${esc([device.brand,device.model].filter(Boolean).join(' ')||'Aparelho')} • ${esc(device.unit||'TODOS')} • ${esc(device.status||'')}</option>`
+ ).join('');
+ async function refreshDiagnosticDevices(form,selectedId){
+  const unit=form.elements.unit.value||'LAGOS';
+  const customerId=form.elements.customer_id.value;
+  const url='/api/devices?unit='+encodeURIComponent(unit)+(customerId?'&customer_id='+encodeURIComponent(customerId):'');
+  const devices=await api(url);
+  form.elements.device_id.innerHTML=deviceOptions(devices,selectedId);
+ }
+ function setupDiagnosticPicker(form,customer){
+  const input=form.querySelector('.cp-input[data-cp-name="customer_id"]');
+  const hidden=form.elements.customer_id;
+  const results=input.closest('.cp-wrap').querySelector('.cp-results');
+  if(customer){hidden.value=customer.id;input.value=customer.name+(customer.phone?' • '+customer.phone:'')}
+  input.oninput=async()=>{
+   const query=input.value.trim();hidden.value='';
+   if(query.length<2){results.innerHTML='';await refreshDiagnosticDevices(form);return}
+   try{
+    const rows=await api('/api/customer-search?q='+encodeURIComponent(query));
+    results.innerHTML=rows.map(row=>`<button type="button" class="cp-option" data-id="${row.id}"><b>${esc(row.name)}</b><span>${esc(row.phone||'Sem telefone')}</span></button>`).join('')||'<div class="cp-empty">Nenhum cliente encontrado.</div>';
+    results.querySelectorAll('.cp-option').forEach(button=>button.onclick=async()=>{
+     const row=rows.find(item=>String(item.id)===button.dataset.id);if(!row)return;
+     hidden.value=row.id;input.value=row.name+(row.phone?' • '+row.phone:'');
+     results.innerHTML=`<div class="cp-selected">✓ ${esc(row.name)} • ${esc(row.phone||'')}</div>`;
+     await refreshDiagnosticDevices(form);
+    });
+   }catch(error){results.innerHTML=`<div class="cp-empty">${esc(error.message||'Falha ao buscar clientes.')}</div>`}
+  };
+  form.elements.unit.onchange=()=>refreshDiagnosticDevices(form).catch(error=>toast(error.message,'error'));
+ }
+ function diagnosticTests(selected=[]){
+  const checked=new Set(selected);
+  return `<div class="field full"><label>Testes realizados</label><div class="checkgrid">${testNames.map((name,index)=>`<label class="check"><input type="checkbox" name="diagnostic_test" value="${esc(name)}" id="diagnostic-test-${index}" ${checked.has(name)?'checked':''}> ${esc(name)}</label>`).join('')}</div></div>`;
+ }
+ window.newDiagnostic=function(){
+  formModal('Novo diagnóstico técnico',`<div class="formgrid">
+   ${f('unit','Unidade','select',['LAGOS','MAGÉ'])}
+   ${customerPicker('customer_id','Cliente (opcional)')}${devicePicker('device_id','Aparelho (opcional)')}
+   ${f('brand','Marca *')}${f('model','Modelo *')}${f('imei','IMEI / série')}
+   ${f('symptoms','Relato do problema *','textarea','',true)}${diagnosticTests()}
+   ${f('findings','Achados técnicos','textarea','',true)}${f('recommendation','Recomendação','textarea','',true)}
+   ${f('estimate','Estimativa (não gera lançamento financeiro)','number','0')}
+   ${f('status','Status','select',statuses)}${f('notes','Observações internas','textarea','',true)}
+   <div class="field full"><small class="muted">Checklist e registro manual do técnico. Este módulo não executa diagnóstico automático nem cria OS ou lançamentos financeiros.</small></div>
+  </div>`,async()=>{
+   const form=$('#modalForm'),data=formValues(form);
+   data.customer_id=data.customer_id?Number(data.customer_id):null;
+   data.device_id=data.device_id?Number(data.device_id):null;
+   data.estimate=Number(data.estimate||0);
+   data.tests=[...form.querySelectorAll('input[name="diagnostic_test"]:checked')].map(input=>input.value);
+   if(!Number.isFinite(data.estimate)||data.estimate<0)return toast('Informe uma estimativa válida e não negativa.','error');
+   try{
+    await api('/api/diagnostics',{method:'POST',body:JSON.stringify(data)});
+    closeModal();toast('Diagnóstico registrado');await render();
+   }catch(error){toast('Não foi possível salvar o diagnóstico: '+error.message,'error')}
+  });
+  const form=$('#modalForm');form.elements.unit.value=UNIT==='MAGÉ'?'MAGÉ':'LAGOS';setupDiagnosticPicker(form,null);
+  refreshDiagnosticDevices(form).catch(error=>toast('Não foi possível carregar os aparelhos: '+error.message,'error'));
+ };
+ window.editDiagnostic=async function(id){
+  try{
+   const records=await api('/api/diagnostics?unit=TODOS');
+   const record=records.find(item=>Number(item.id)===Number(id));
+   if(!record)throw new Error('Diagnóstico não encontrado.');
+   const customer=record.customer_id?{id:record.customer_id,name:record.customer_name||'',phone:record.customer_phone||''}:null;
+   formModal('Editar diagnóstico #'+record.id,`<div class="formgrid">
+    ${f('unit','Unidade','select',['LAGOS','MAGÉ'])}
+    ${customerPicker('customer_id','Cliente (opcional)')}${devicePicker('device_id','Aparelho (opcional)')}
+    ${f('brand','Marca *','text',record.brand||'')}${f('model','Modelo *','text',record.model||'')}${f('imei','IMEI / série','text',record.imei||'')}
+    ${f('symptoms','Relato do problema *','textarea',record.symptoms||'',true)}${diagnosticTests(parseTests(record.tests))}
+    ${f('findings','Achados técnicos','textarea',record.findings||'',true)}${f('recommendation','Recomendação','textarea',record.recommendation||'',true)}
+    ${f('estimate','Estimativa (não gera lançamento financeiro)','number',record.estimate||0)}
+    ${f('status','Status','select',statuses)}${f('notes','Observações internas','textarea',record.notes||'',true)}
+   </div>`,async()=>{
+    const form=$('#modalForm'),data=formValues(form);
+    data.id=record.id;data.customer_id=data.customer_id?Number(data.customer_id):null;
+    data.device_id=data.device_id?Number(data.device_id):null;data.estimate=Number(data.estimate||0);
+    data.tests=[...form.querySelectorAll('input[name="diagnostic_test"]:checked')].map(input=>input.value);
+    if(!Number.isFinite(data.estimate)||data.estimate<0)return toast('Informe uma estimativa válida e não negativa.','error');
+    try{
+     await api('/api/diagnostics',{method:'PUT',body:JSON.stringify(data)});
+     closeModal();toast('Diagnóstico #'+record.id+' atualizado');await render();
+    }catch(error){toast('Não foi possível atualizar o diagnóstico: '+error.message,'error')}
+   });
+   const form=$('#modalForm');form.elements.status.value=record.status||'aberto';
+   form.elements.unit.value=record.unit||'LAGOS';
+   setupDiagnosticPicker(form,customer);
+   await refreshDiagnosticDevices(form,record.device_id);
+  }catch(error){toast('Não foi possível abrir o diagnóstico: '+error.message,'error')}
+ };
+ window.viewDiagnostic=async function(id){
+  try{
+   const records=await api('/api/diagnostics?unit=TODOS'),record=records.find(item=>Number(item.id)===Number(id));
+   if(!record)throw new Error('Diagnóstico não encontrado.');
+   const tests=parseTests(record.tests);
+   $('#modal').innerHTML=`<div class="modalbox"><div class="modalhead"><h2>Diagnóstico #${record.id}</h2><button type="button" class="close" onclick="closeModal()">✕</button></div>
+    <div class="modalbody"><div class="formgrid">
+     <div class="field"><label>Status</label>${badge(record.status)}</div><div class="field"><label>Unidade</label><div>${esc(record.unit)}</div></div>
+     <div class="field"><label>Cliente</label><div>${esc(record.customer_name||'Não informado')}</div></div><div class="field"><label>Aparelho</label><div>${esc(record.device_label||[record.brand,record.model].filter(Boolean).join(' ')||'—')}</div></div>
+     <div class="field"><label>Marca</label><div>${esc(record.brand)}</div></div><div class="field"><label>Modelo</label><div>${esc(record.model)}</div></div>
+     <div class="field"><label>IMEI / série</label><div>${esc(record.imei||'—')}</div></div><div class="field"><label>Estimativa</label><div>${money(record.estimate)}</div></div>
+     <div class="field full"><label>Relato</label><div>${esc(record.symptoms)}</div></div>
+     <div class="field full"><label>Testes realizados</label><div>${tests.length?tests.map(esc).join(' · '):'Nenhum teste registrado.'}</div></div>
+     <div class="field full"><label>Achados técnicos</label><div>${esc(record.findings||'—')}</div></div>
+     <div class="field full"><label>Recomendação</label><div>${esc(record.recommendation||'—')}</div></div>
+     <div class="field full"><label>Observações internas</label><div>${esc(record.notes||'—')}</div></div>
+     <div class="field full"><small class="muted">Criado em ${esc(record.created_at||'—')} · Atualizado em ${esc(record.updated_at||'—')}</small></div>
+    </div></div><div class="modalfoot"><button type="button" class="btn ghost" onclick="closeModal()">Fechar</button></div></div>`;
+   $('#modal').classList.add('show');
+  }catch(error){toast('Não foi possível abrir o diagnóstico: '+error.message,'error')}
+ };
+ window.setDiagnosticStatus=async function(id,status){
+  try{await api('/api/diagnostics',{method:'PUT',body:JSON.stringify({id,status})});toast('Status do diagnóstico atualizado');await render()}
+  catch(error){toast('Não foi possível atualizar o status: '+error.message,'error')}
+ };
+ pages.diagnostics=async function(){
+  const data=await list('diagnostics');
+  const rows=data.map(record=>({...record,search_text:[record.id,record.customer_name,record.brand,record.model,record.imei,record.symptoms].join(' ').toLowerCase()}));
+  const counts=statuses.map(status=>`<div class="metric"><div class="label">${esc(status.toUpperCase())}</div><div class="value">${data.filter(record=>record.status===status).length}</div><div class="sub">Diagnósticos</div></div>`).join('');
+  const body=filtered=>table(filtered,[['id','#',record=>'DIAG-'+record.id],['customer_name','Cliente',record=>esc(record.customer_name||'—')],['brand','Aparelho',record=>esc([record.brand,record.model].filter(Boolean).join(' '))],['symptoms','Relato',record=>esc(record.symptoms)],['estimate','Estimativa',record=>money(record.estimate)],['status','Status',record=>badge(record.status)],['updated_at','Atualizado']],
+   record=>`<div class="row-actions"><button class="iconbtn" title="Visualizar diagnóstico" onclick="viewDiagnostic(${record.id})">👁️</button><button class="iconbtn" title="Editar diagnóstico" onclick="editDiagnostic(${record.id})">✏️</button><button class="iconbtn danger" title="Excluir diagnóstico" onclick="deleteResource('diagnostics',${record.id})">🗑️</button></div><div class="status-actions">${statuses.filter(status=>status!==record.status).map(status=>`<button class="mini" onclick="setDiagnosticStatus(${record.id},'${esc(status)}')">${esc(status)}</button>`).join('')}</div>`);
+  $('#content').innerHTML=head('Diagnósticos técnicos','Registro manual de sintomas, testes, achados e recomendação; estimativas não alteram o financeiro.',`<button class="btn" onclick="newDiagnostic()">＋ Novo diagnóstico</button>`)
+   +`<div class="cards">${counts}</div><section class="panel"><div class="formgrid"><div class="field"><label>Buscar</label><input class="input" id="diagnosticSearch" placeholder="Cliente, modelo, IMEI ou relato"></div><div class="field"><label>Filtrar status</label><select class="select" id="diagnosticStatus"><option value="">Todos os status</option>${statuses.map(status=>`<option value="${esc(status)}">${esc(status)}</option>`).join('')}</select></div></div><div id="diagnosticRows">${body(rows)}</div></section>`;
+  const update=()=>{
+   const query=$('#diagnosticSearch').value.trim().toLowerCase(),status=$('#diagnosticStatus').value;
+   $('#diagnosticRows').innerHTML=body(rows.filter(record=>(!query||record.search_text.includes(query))&&(!status||record.status===status)));
+  };
+  $('#diagnosticSearch').oninput=update;$('#diagnosticStatus').onchange=update;
+ };
+})();
+
+fiadoTable=function(d){
+ return table(d,[['customer_name','Cliente'],['description','Obra / Serviço'],['total','Total',r=>money(r.total)],['down_payment','Entrada',r=>money(r.down_payment)],['installments','Parcelas',r=>`${r.installments||1}x ${money(r.installment_value||0)}`],['balance','Saldo',r=>money(r.balance)],['due_date','Vencimento'],['status','Status',r=>badge(r.status)]],r=>`<button class="btn ghost" onclick="fiadoDetails(${r.id})">Detalhes</button> <button class="btn ghost" onclick="receiveFiado(${r.id},${r.balance})">💰 Receber</button> <button class="btn ghost" onclick="fiadoWhats(${r.id})">🟢 WhatsApp</button>`);
+};
+
+window.addManualFiadoProduct=function(){
+ const box=$('#fiadoProducts');
+ if(!box)return toast('Abra o formulário de promissória antes de adicionar produtos.','error');
+ const row=document.createElement('div');
+ row.className='fiado-product fiado-manual-product';
+ row.style.cssText='display:flex;flex-wrap:wrap;gap:8px;margin-top:8px';
+ row.innerHTML='<input class="input" type="text" data-manual-name placeholder="Nome do produto" aria-label="Nome do produto" required><input class="input" type="number" data-manual-price min="0" step="0.01" placeholder="Valor (R$)" aria-label="Valor do produto" required><input class="input" type="number" min="1" step="1" value="1" aria-label="Quantidade" required><button type="button" class="iconbtn danger" aria-label="Remover produto">✕</button>';
+ row.querySelectorAll('input').forEach(input=>input.style.flex='1 1 130px');
+ row.querySelector('button').addEventListener('click',()=>row.remove());
+ box.appendChild(row);
+ row.querySelector('[data-manual-name]').focus();
+};
+
+readFiadoProducts=function(){
+ const rows=[...document.querySelectorAll('#fiadoProducts .fiado-product')];
+ const products=[];
+ for(const row of rows){
+  const quantityInput=row.querySelector('input[type="number"]:last-of-type');
+  const qty=Number(quantityInput?.value||0);
+  if(!Number.isInteger(qty)||qty<1){toast('Informe uma quantidade válida para cada produto.','error');return null}
+  if(row.classList.contains('fiado-manual-product')){
+   const name=row.querySelector('[data-manual-name]')?.value.trim()||'';
+   const rawPrice=row.querySelector('[data-manual-price]')?.value.trim()||'';
+   const price=rawPrice===''?NaN:Number(rawPrice);
+   if(!name||!Number.isFinite(price)||price<0){toast('Preencha o nome e um valor válido para o produto manual.','error');return null}
+   products.push({name,price,qty});
+  }else{
+   const name=row.dataset.name||'';
+   const price=Number(row.dataset.price);
+   if(!name||!Number.isFinite(price)||price<0){toast('Um produto cadastrado contém dados inválidos.','error');return null}
+   products.push({name,price,qty});
+  }
+ }
+ return products;
+};
+
+const _fiadoPageWithoutMdm=pages.fiado;
+pages.fiado=async function(){
+ await _fiadoPageWithoutMdm();
+ const tabs=$('#content .subtabs');
+ if(tabs)tabs.querySelectorAll('button').forEach(button=>{
+  if(/mdm|crediário\s*\/\s*mdm/i.test(button.textContent||''))button.remove();
+ });
+};
+const _fiadoFormWithManualProducts=window.fiadoForm;
+window.fiadoForm=function(...args){
+ _fiadoFormWithManualProducts(...args);
+ $('#saveModal')?.addEventListener('click',event=>{
+  if(readFiadoProducts()===null)event.stopImmediatePropagation();
+ },true);
+};
+
+const filmReferenceSources=[
+ {name:'ADAPTI',url:'https://adaptibr.com.br/busca',description:'Sistema gratuito para bancada com busca interativa por modelo; películas, telas, baterias e conectores de carga.'},
+ {name:'Películas Compatíveis',url:'https://peliculascompativeis.com/',description:'Base online de equivalências e cruzamento de modelos para películas 3D, vidro e hidrogel.'},
+ {name:'Técnicos de Celular',url:'https://tecnicosdecelular.com.br/tabela-de-peliculas-compativeis/',description:'Guia atualizado de compatibilidade para películas e telas, organizado por Samsung, Motorola, Xiaomi, iPhone, LG e Realme.'},
+ {name:'Mathisa Celulares',url:'https://peliculacompativel.mathisacelulares.com.br/',description:'Consulta gratuita e rápida de modelos e linhas Galaxy A/S, Moto G/Edge e iPhone, incluindo vidro e hidrogel.'},
+ {name:'Películas UTI',url:'https://www.peliculasuti.com.br/',description:'Sistema para lojistas e técnicos, com consulta de compatibilidade e geração de PDFs para fornecedores; películas e acessórios.'},
+ {name:'Stock ROM',url:'https://www.stockrom.net/2022/05/tabela-de-compatibilidade.html',description:'Download direto de planilhas e PDFs de compatibilidade técnica avançada: telas/displays, touchs, conectores, microfones, películas e componentes/PMIC.'}
+];
+const _filmsWithReferences=pages.films;
+pages.films=async function(){
+ await _filmsWithReferences();
+ const content=$('#content');
+ if(!content||content.querySelector('.film-reference-sources'))return;
+ const section=document.createElement('section');
+ section.className='panel film-reference-sources';
+ section.style.marginTop='16px';
+ section.innerHTML='<div class="panel-head"><div><h2>Consultas de compatibilidade</h2><p class="muted">Fontes externas para apoiar a pesquisa; confirme o encaixe e a compatibilidade antes da aplicação.</p></div></div><div class="film-reference-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px"></div>';
+ const grid=section.querySelector('.film-reference-grid');
+ filmReferenceSources.forEach(source=>{
+  const card=document.createElement('article');
+  card.className='panel';
+  card.style.margin='0';
+  const link=document.createElement('a');
+  link.href=source.url;
+  link.target='_blank';
+  link.rel='noopener noreferrer';
+  link.textContent='Abrir fonte ↗';
+  const title=document.createElement('h3');
+  title.textContent=source.name;
+  const description=document.createElement('p');
+  description.textContent=source.description;
+  card.append(title,description,link);
+  grid.appendChild(card);
+ });
+ content.appendChild(section);
+};

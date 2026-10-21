@@ -1,5 +1,4 @@
-# KV CELL OS PREMIUM - intentionally dependency-free for Square Cloud.
-# Uses Python standard library only: sqlite3, http.server, zipfile, json.
+# QR generation is required; cryptography enables optional encrypted blob sync.
 
 cryptography>=43,<47
 

@@ -171,9 +171,30 @@ body{background:radial-gradient(900px 450px at 70% -10%,rgba(255,212,0,.08),tran
 /* V1101.2: numbered click-pattern and expanded parts editor */
 .pattern-dot span{position:absolute;inset:0;display:grid;place-items:center;font-size:12px;font-weight:900;color:#111;z-index:2;pointer-events:none}.pattern-dot:not(.selected) span{color:#ffd400}.pattern-dot.pattern-start{outline:3px solid #6ff0a5;outline-offset:3px}.pattern-dot.pattern-start:after{content:'INÍCIO';position:absolute;left:50%;top:-20px;transform:translateX(-50%);font-size:8px;color:#6ff0a5;font-weight:900;white-space:nowrap}.pattern-dot.pattern-end{border-color:#ffbd59}.pattern-mode-actions{display:flex;justify-content:center;gap:8px;flex-wrap:wrap}.item-row{grid-template-columns:minmax(120px,1fr) minmax(100px,130px) 60px minmax(100px,130px) minmax(120px,150px) 40px!important}.film-external-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px;border-bottom:1px solid #292929}.film-external-row p{margin:5px 0 0;color:#aaa;font-size:12px}@media(max-width:800px){.item-row{grid-template-columns:1fr 1fr!important}.film-external-row{align-items:flex-start;flex-direction:column}}
 
-/* V2000.1: responsive multi-device OS editor and stronger KV CELL focus */
-.multi-device-panel{padding:14px;border:1px solid #3b3400;border-radius:14px;background:linear-gradient(135deg,rgba(255,212,0,.06),rgba(0,0,0,.2))}
-.multi-device-panel>label{font-weight:900;color:#ffd400}
-.os-device-row{display:grid;grid-template-columns:1fr 1.2fr 1.2fr 1.2fr auto;gap:8px;margin:10px 0;align-items:center}
-.os-device-row .input{min-width:0}
-@media(max-width:760px){.os-device-row{grid-template-columns:1fr 1fr}.os-device-row .iconbtn{grid-column:1/-1;justify-self:end}.multi-device-panel .btn{width:100%}}
+/* KV CELL V1111.1 — live polish, hover feedback, and responsive motion */
+:root{--kv-live-glow:0 0 18px rgba(255,212,0,.15)}
+.btn,.iconbtn,.mini,.sidebar button,.panel,.metric,.card,.table-wrap{transition:background .18s ease,border-color .18s ease,box-shadow .22s ease,transform .18s ease,filter .18s ease}
+.btn:hover,.iconbtn:hover,.mini:hover{transform:translateY(-1px);box-shadow:var(--kv-live-glow)}
+.btn:active,.iconbtn:active,.mini:active{transform:translateY(0) scale(.98)}
+.panel:hover,.metric:hover,.card:hover{border-color:rgba(255,212,0,.32);box-shadow:0 12px 34px rgba(0,0,0,.25),0 0 0 1px rgba(255,212,0,.04)}
+.status-actions{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}
+.status-actions .mini{font-size:10px;padding:6px 8px;text-transform:capitalize}
+.status-actions .mini.active{background:#ffd400;color:#080808;border-color:#ffd400;box-shadow:0 0 12px rgba(255,212,0,.2)}
+/* MDM screen/actions removed from the visible interface; legacy database tables are retained to protect deployed data. */
+.adb600-mdm{display:none!important}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
+
+/* V3001 — OLED/LED visual polish */
+:root{--kv-yellow:#ffd400;--kv-glow:rgba(255,212,0,.22)}
+body{background:#050505;background-image:radial-gradient(ellipse at 72% -15%,rgba(255,212,0,.07),transparent 45%)}
+.panel,.metric,.card,.table-wrap{transition:transform .22s ease,border-color .22s ease,box-shadow .22s ease;will-change:transform}
+.panel:hover,.metric:hover,.card:hover{border-color:rgba(255,212,0,.35);box-shadow:0 12px 36px rgba(0,0,0,.28),0 0 18px rgba(255,212,0,.045)}
+.btn,.iconbtn,.nav button,.mini{transition:transform .16s ease,filter .16s ease,box-shadow .16s ease,border-color .16s ease}
+.btn:hover,.iconbtn:hover,.nav button:hover,.mini:hover{filter:brightness(1.12);transform:translateY(-1px);box-shadow:0 0 16px rgba(255,212,0,.12)}
+.btn:active,.iconbtn:active{transform:translateY(0) scale(.98)}
+.status-actions{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}.status-actions .mini{border-color:#4b4300;background:#141200;color:#ffe45c;border-radius:8px}
+.edit-json{white-space:pre-wrap;max-height:150px;overflow:auto;background:#090909;border:1px solid #303030;border-radius:10px;padding:10px;color:#d8d8d8}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+
+/* KV CELL V3002 OLED interface polish */
+:root{color-scheme:dark;--kv-yellow:#ffd400;--kv-panel:#0c0c0c;--kv-line:#292929}html{scroll-behavior:smooth}body{background:radial-gradient(ellipse at 70% -20%,#242000 0%,#080808 45%,#030303 100%)}.shell{background:#050505}.sidebar{background:linear-gradient(180deg,#090909,#030303);border-right:1px solid #292400}.logo,.logo-wrap .logo{box-shadow:0 0 18px #ffd40025,0 0 2px #ffd400 inset}.nav button{transition:background .22s ease,border-color .22s ease,transform .22s ease,box-shadow .22s ease}.nav button:hover{transform:translateX(3px);background:linear-gradient(90deg,#211d00,#101010);border-color:#6e6000;box-shadow:0 0 20px #ffd4000b}.nav button.active{box-shadow:inset 3px 0 #ffd400,0 0 24px #ffd4000c;background:linear-gradient(90deg,#211d00,#0b0b0b)}.panel,.metric,.card,.table-wrap{transition:border-color .2s ease,box-shadow .2s ease,transform .2s ease}.panel:hover,.metric:hover{border-color:#403900;box-shadow:0 10px 32px #0008,0 0 22px #ffd40008}.btn,.iconbtn,.status-chip{transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease,filter .18s ease}.btn:hover,.iconbtn:hover{transform:translateY(-2px);box-shadow:0 6px 22px #0008,0 0 14px #ffd40012;filter:brightness(1.08)}.btn.primary,.btn:not(.ghost):not(.dark){box-shadow:0 0 16px #ffd40010}.table tbody tr{transition:background .18s ease}.table tbody tr:hover{background:#171500}.badge{box-shadow:0 0 12px #ffd4000a}.modal.show .modalbox{animation:kvModalIn .22s cubic-bezier(.2,.8,.2,1)}.toast.show{animation:kvToastIn .2s ease-out}@keyframes kvModalIn{from{opacity:0;transform:translateY(12px) scale(.985)}to{opacity:1;transform:translateY(0) scale(1)}}@keyframes kvToastIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}.iconbtn.danger,.btn.danger{border-color:#5c2525;color:#ff9c9c}.row-actions{display:flex;gap:6px;flex-wrap:wrap}.os-actions-v300{min-width:230px}.os-status-actions,.os-status-buttons{display:flex;gap:5px;flex-wrap:wrap;margin-top:7px}.os-status-actions button,.os-status-buttons button{font-size:10px;padding:6px 8px;border:1px solid #393300;background:#121100;color:#f4d84a;border-radius:8px;cursor:pointer}.os-status-actions button:hover,.os-status-buttons button:hover{border-color:#ffd400;box-shadow:0 0 12px #ffd40015}@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}

@@ -1,5 +1,29 @@
 # KV CELL OS PREMIUM — ULTIMATE SUPREME V1101.2
 
+## V4000.0 release notes
+
+The active application release is V4000.0. The older version sections below are retained as project history; they do not mean that the retired AI/MDM features are active in this release.
+
+- OS public tracking links use the stored public token, include a canonical URL when `PUBLIC_BASE_URL` is configured, and retain compatibility with legacy numeric OS IDs.
+- OS edits update the existing row. Device associations and status history are stored additively in SQLite tables and backfilled from legacy OS records at startup.
+- Public OS pages show customer-facing status/device information but not internal OS notes. Public quote decisions persist; duplicate and expired decisions are rejected.
+- Retired AI and MDM API/public routes are disabled and their navigation entries are omitted. Historical records/tables are not dropped. ADB controls remain separate and require a real, authorized ADB/WebUSB connection.
+- User management and backup export are administrator-only; finance reads/writes require an administrator or manager. New user passwords must contain at least eight characters. Other resource permissions still need a full backend enforcement pass.
+- Before deployment, back up the persistent SQLite directory and set `KVCELL_DATA_DIR`. Set `PUBLIC_BASE_URL` to the external HTTPS origin when running behind a proxy so newly created OS links use the correct hostname.
+- The production public origin for this package is `https://kvcell.squareweb.app`. The Support tab inside the panel contains the WhatsApp, Instagram, flow-builder, catalog-sharing and Square Cloud setup guide.
+- Install dependencies with `pip install -r requirements.txt`; start locally with `python app.py` or use the existing Square Cloud `Procfile` / `start.sh`.
+- The V4000 integration test uses isolated temporary databases: `python tools/smoke_test.py`. The test report records exactly what this environment verifies and what still requires the production host or a physical Android device.
+
+The V4000 deployment template is `.env.example`. Do not commit a real `.env`, database, API key, or encryption key.
+
+> Deployment note: only the V4000 runtime behavior described at the beginning
+> of this file is active. The V500/V810/V1000 sections below are historical
+> notes kept for migration context; their older MDM/AI instructions must not be
+> used as evidence that those retired routes are enabled. Upload the contents
+> of this project directory (or the generated V4000 ZIP contents) to the GitHub
+> repository used by SquareCloud, configure the variables from `.env.example`,
+> and keep `KVCELL_DATA_DIR` on persistent storage.
+
 ## V1101.2 — ajustes específicos solicitados
 - Oculta da navegação as abas Comunidade e Catálogo Digital, sem apagar os dados ou APIs legados.
 - Mantém uma única aba Aparelhos para registros de bancada e esquecidos/abandonados.
