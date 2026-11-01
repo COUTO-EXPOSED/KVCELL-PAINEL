@@ -1,7 +1,7 @@
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 let UNIT=localStorage.getItem('kv_unit')||'TODOS', MOD='dashboard', ME=null;
-const icons={dashboard:'⌂',services:'🔧',diagnostics:'🧪',devices:'📱',purchases:'🛒',unlock:'🔓',pdv:'▣',pricing:'💲',quotes:'🧾',finance:'💰',inventory:'📦',forgotten:'🗃️',customers:'👥',contracts:'📜',users:'👤',chat:'💬',chat_units:'↔',ai:'🤖',logs:'☷',admin:'🛡️',settings:'⚙️'};
-const names={dashboard:'Painel',services:'Consertos / OS',diagnostics:'Diagnósticos',devices:'Aparelhos',purchases:'Compras',unlock:'Desbloqueios',pdv:'PDV',pricing:'Precificação',quotes:'Orçamentos',finance:'Financeiro',inventory:'Estoque',forgotten:'Esquecidos',customers:'Clientes',contracts:'Termos',users:'Usuários',chat:'Chat',chat_units:'Unidades',ai:'I.A.',logs:'Logs',admin:'Administração',settings:'Configurações'};
+const icons={dashboard:'⌂',services:'🔧',diagnostics:'🧪',devices:'📱',purchases:'🛒',unlock:'🔓',pdv:'▣',pricing:'💲',quotes:'🧾',finance:'💰',inventory:'📦',forgotten:'🗃️',customers:'👥',contracts:'📜',users:'👤',chat:'💬',chat_units:'↔',ai:'🤖',logs:'☷',admin:'🛡️',settings:'⚙️',bot:'🤖'};
+const names={dashboard:'Painel',services:'Consertos / OS',diagnostics:'Diagnósticos',devices:'Aparelhos',purchases:'Compras',unlock:'Desbloqueios',pdv:'PDV',pricing:'Precificação',quotes:'Orçamentos',finance:'Financeiro',inventory:'Estoque',forgotten:'Esquecidos',customers:'Clientes',contracts:'Termos',users:'Usuários',chat:'Chat',chat_units:'Unidades',ai:'I.A.',logs:'Logs',admin:'Administração',settings:'Configurações',bot:'Bot Telegram'};
 async function api(url,opt={}){let r=await fetch(url,{headers:{'Content-Type':'application/json',...(opt.headers||{})},...opt});let d;try{d=await r.json()}catch{d={}}if(r.status===401){showLogin();throw Error('Sessão expirada')}if(!r.ok){const msg=d.reply||d.error||'Erro';throw Error(msg)}return d}
 window.copyTelegramMessage=async function(){const text=$('#telegramClientMessage')?.value;if(!text)return;try{await navigator.clipboard.writeText(text);toast('Texto copiado para enviar ao cliente')}catch{const area=$('#telegramClientMessage');area.focus();area.select();toast('Texto selecionado; copie manualmente')}} ;
 window.sendClientMessageTelegram=async function(kind,id){
@@ -23,7 +23,7 @@ function toast(s){let t=$('#toast');t.textContent=s;t.classList.add('show');setT
 function showLogin(){ME=null;document.body.innerHTML=`<div class="login"><div class="login-card"><div class="login-logo">KV</div><h1>KV CELL OS PREMIUM</h1><p>Gestão completa da assistência técnica • Lagos + Magé</p><form id="lf"><div class="field"><label>E-mail</label><input class="input" name="email" autocomplete="username"></div><div class="field"><label>Senha</label><input class="input" name="password" type="password" autocomplete="current-password"></div><button class="btn">Entrar no sistema</button></form><p style="margin-top:16px" class="muted">Credenciais definidas pelo administrador.</p></div></div>`;$('#lf').onsubmit=async e=>{e.preventDefault();try{let d=await api('/api/login',{method:'POST',body:JSON.stringify(formValues(e.target))});ME=d.user;boot()}catch(x){toast(x.message)}}}
 function boot(){document.body.innerHTML=`<div class="shell"><aside class="sidebar"><div class="brand"><div class="logo">KV</div><div><b>KV CELL</b><small>OS PREMIUM • 2026</small></div></div><div class="nav"><div class="navtitle">OPERAÇÃO</div>${['dashboard','services','devices','purchases','unlock','pdv'].map(m=>nav(m)).join('')}<div class="navtitle">GESTÃO</div>${['pricing','quotes','finance','inventory','customers','contracts'].map(m=>nav(m)).join('')}<div class="navtitle">ADMIN</div>${['users','chat','admin','settings'].map(m=>nav(m)).join('')}</div></aside><main class="main"><div class="topbar"><div><b id="crumb">Painel</b><div class="crumb">KV CELL OS PREMIUM • controle da operação</div></div><div class="top-actions"><select id="unit" class="select unit"><option>TODOS</option><option>LAGOS</option><option>MAGÉ</option></select><button class="btn ghost" onclick="openSearch()">⌕ Buscar</button><button class="btn ghost" onclick="logout()">Sair</button></div></div><div id="content"></div></main></div><div id="modal" class="modal"></div><div id="toast" class="toast"></div>`;$('#unit').value=UNIT;$('#unit').onchange=e=>{UNIT=e.target.value;localStorage.setItem('kv_unit',UNIT);render()};render()}
 function nav(m){return `<button id="nav-${m}" onclick="go('${m}')"><span class="ico">${icons[m]}</span><span>${names[m]}</span></button>`}
-function go(m){MOD=m;render()}
+function go(m){if(m==='bot'){location.href='/bot_kv';return}MOD=m;render()}
 async function render(){if(!ME)return showLogin();$$('.nav button').forEach(x=>x.classList.remove('active'));$('#nav-'+MOD)?.classList.add('active');$('#crumb').textContent=names[MOD]||$('#nav-'+MOD+' span:last-child')?.textContent||'Painel';let fn=pages[MOD]||pages.dashboard;try{await fn()}catch(e){if(!ME||!$('#content'))return;const message=e instanceof TypeError?'Sem comunicação com o servidor. Verifique se a aplicação está iniciada e tente novamente.':(e.message||'Não foi possível carregar esta aba.');$('#content').innerHTML=`<section class="panel page-error" role="alert"><div class="page-error-icon">!</div><h2>Não foi possível abrir ${esc(names[MOD]||MOD)}</h2><p>${esc(message)}</p><div class="row-actions"><button class="btn" onclick="render()">Tentar novamente</button><button class="btn ghost" onclick="go('dashboard')">Voltar ao painel</button></div></section>`;console.error('Falha ao renderizar a aba '+MOD,e)}}
 function money(n){return 'R$ '+Number(n||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})}
 function badge(v){let x=String(v||'');let cls=/pronto|entregue|vitrine|aberto/i.test(x)?'g':/cancel|baixo/i.test(x)?'r':'y';return `<span class="badge ${cls}">${esc(x||'-')}</span>`}
@@ -1712,7 +1712,7 @@ window.kvMdmInjectAPK=async function(id){
     ['CADASTROS',['customers','radar','technicians','purchases','suppliers']],
     ['OPERAÇÃO',['finance','pdv']],
     ['OUTROS',['devices','unlock','inventory','forgotten','films','contracts']],
-    ['SISTEMA',['chat_units','logs','users','admin','settings']]
+    ['SISTEMA',['chat_units','logs','users','admin','settings','bot']]
   ];
   const activeModules=new Set(navGroups.flatMap(x=>x[1]));
 
@@ -2183,12 +2183,12 @@ pages.forgotten=pages.devices;
   ['pdv','PDV'],['devices','Aparelhos'],['inventory','Estoque'],
   ['forgotten','Aparelhos esquecidos'],['films','Películas'],['contracts','Contratos'],
   ['chat_units','Unidades de chat'],['logs','Logs'],
-  ['users','Usuários'],['admin','Administração'],['settings','Configurações']
+  ['users','Usuários'],['admin','Administração'],['settings','Configurações'],['bot','Administração do bot Telegram']
  ];
  const allowed=module=>{
   if(!ME)return false;
   if(ME.role==='admin')return true;
-  if(['users','admin','settings'].includes(module))return false;
+  if(['users','admin','settings','bot'].includes(module))return false;
   if(module==='finance'&&!['admin','gerente'].includes(ME.role))return false;
   let p=ME.permissions||{};
   if(typeof p==='string'){try{p=JSON.parse(p)}catch{p={}}}
