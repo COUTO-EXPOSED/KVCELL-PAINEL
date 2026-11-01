@@ -240,6 +240,11 @@ def migrate_v10():
     c.commit();c.close()
 migrate_v10()
 
+# Integrated Telegram bot: uses its own transactional DB under the persistent data directory.
+os.environ.setdefault('KVCELL_BOT_DATABASE_PATH', DB)
+import bot_module
+bot_module.set_persist_callback(schedule_blob_sync)
+
 def activity(u,tag,action,entity='',entity_id=None,details=''):
     stamp=now()
     try:
@@ -605,7 +610,7 @@ def dashboard(unit):
             'credit_outstanding':float(credit_outstanding or 0),'recent_sales':recent_sales,'recent_services':recent_services,'recent_activity':activity_rows}
 
 class Handler(BaseHTTPRequestHandler):
-    server_version='KV-CELL-PREMIUM/4000.0'
+    server_version='KV-CELL-PREMIUM/4000.1-BOT'
     def log_message(self,*a): pass
     def send(self,status,body,ctype='application/json',headers=None):
         if isinstance(body,str): body=body.encode()
@@ -688,7 +693,7 @@ class Handler(BaseHTTPRequestHandler):
         return False
     def do_GET(self):
         p=urlparse(self.path); path=p.path; qs=parse_qs(p.query)
-        if path=='/api/health': return self.json({'ok':True,'app':'KV CELL OS PRO','version':'4000.0','port':PORT,'time':now()})
+        if path=='/api/health': return self.json({'ok':True,'app':'KV CELL OS PRO','version':'4000.1','port':PORT,'time':now()})
         if path.startswith('/api/ai/') or path=='/api/mdm' or path.startswith('/api/mdm/'):
             return self.json({'error':'Este módulo foi removido da versão ativa.'},404)
         if path.startswith('/public/mdm/'):
@@ -697,7 +702,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.public(path,qs)
         if path.startswith('/catalog/'):
             return self.public('/public'+path,qs)
-        if path=='/': return self.send(200,INDEX,'text/html')
+        if path in ('/','/bot_kv','/bot_kv/'): return self.send(200,INDEX,'text/html')
         if path.startswith('/static/'):
             rel=urllib.parse.unquote(path[len('/static/'):]).lstrip('/')
             fp=os.path.abspath(os.path.join(BASE,'static',rel))
@@ -723,6 +728,13 @@ class Handler(BaseHTTPRequestHandler):
         u=self.require()
         if not u:return
         if not self.authorize_module(u,path):return
+        if path.startswith('/api/bot/'):
+            if u.get('role')!='admin': return self.json({'error':'Somente administrador pode acessar o Bot KV CELL.'},403)
+            try: return self.json(bot_module.api_get(path,qs))
+            except bot_module.BotError as error: return self.json({'error':str(error)},error.status)
+            except Exception as error:
+                print('KV BOT ADMIN GET FAILED:',type(error).__name__,flush=True)
+                return self.json({'error':'Falha ao consultar o módulo do bot.'},500)
         if u.get('role')!='admin' and u.get('unit') not in (None,'','TODOS'):
             qs['unit']=[u['unit']]
         if path=='/api/me': return self.json({'user':u})
@@ -768,6 +780,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send(404,b'Not found','text/plain')
     def do_POST(self):
         p=urlparse(self.path); path=p.path; data=self.body()
+        if path=='/webhooks/asaas':
+            result,status=bot_module.handle_asaas_webhook(data,dict((k.lower(),v) for k,v in self.headers.items()))
+            return self.json(result,status)
         if path.startswith('/api/ai/') or path=='/api/mdm' or path.startswith('/api/mdm/'):
             return self.json({'error':'Este módulo foi removido da versão ativa.'},404)
         if path.startswith('/public/mdm/'):
@@ -788,6 +803,13 @@ class Handler(BaseHTTPRequestHandler):
         u=self.require()
         if not u:return
         if not self.authorize_module(u,path):return
+        if path.startswith('/api/bot/'):
+            if u.get('role')!='admin': return self.json({'error':'Somente administrador pode gerenciar o Bot KV CELL.'},403)
+            try: return self.json(bot_module.api_post(path,data,u.get('name') or u.get('email') or 'Administrador'))
+            except bot_module.BotError as error: return self.json({'error':str(error)},error.status)
+            except Exception as error:
+                print('KV BOT ADMIN POST FAILED:',type(error).__name__,flush=True)
+                return self.json({'error':'Falha ao executar a ação do bot.'},500)
         if u.get('role')!='admin' and u.get('unit') not in (None,'','TODOS'):
             data['unit']=u['unit']
         telegram_match=re.fullmatch(r'/api/telegram/(service|quote)/([0-9]+)',path)
@@ -2385,13 +2407,14 @@ def public_unlock(x,c):
 PUBLIC_CSS='''@font-face{font-family:Poppins;src:url('/static/fonts/pxiEyp8kv8JHgFVrJJfecg.woff2')}@font-face{font-family:Poppins;src:url('/static/fonts/pxiByp8kv8JHgFVrLEj6Z1xlFQ.woff2');font-weight:600}@font-face{font-family:Poppins;src:url('/static/fonts/pxiByp8kv8JHgFVrLGT9Z1xlFQ.woff2');font-weight:700}*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:radial-gradient(circle at 50% -18%,#292400 0,#0a0a0a 35%,#050505 75%);color:#f7f7f7;font-family:Poppins,Inter,Arial,sans-serif}main{max-width:1040px;margin:0 auto;padding:22px}header{display:flex;justify-content:space-between;align-items:center;padding:12px 0 16px;border-bottom:1px solid #292929}header b{font-size:25px;letter-spacing:-.5px;color:#ffd400}header span{font-size:10px;color:#9a9a9a;font-weight:700;letter-spacing:1.2px}.hero{position:relative;overflow:hidden;margin:24px 0;padding:30px;border:1px solid #3c3700;border-radius:24px;background:linear-gradient(135deg,#1b1800 0,#121212 48%,#0c0c0c 100%);box-shadow:0 20px 55px #0008}.hero:after{content:"";position:absolute;width:220px;height:220px;right:-90px;top:-100px;border-radius:50%;background:#ffd40012;filter:blur(5px)}.hero small{position:relative;z-index:1;color:#ffd400;font-size:10px;font-weight:800;letter-spacing:1.5px}.hero h1{position:relative;z-index:1;font-size:42px;line-height:1.1;margin:7px 0;color:#ffd400}.hero p{position:relative;z-index:1;color:#bdbdbd}.grid{display:grid;grid-template-columns:2fr 1fr;gap:16px}.box{background:linear-gradient(145deg,#151515,#0e0e0e);border:1px solid #292929;border-radius:19px;padding:20px;margin:14px 0;box-shadow:0 15px 40px #0006}.box h2,.box h3{margin:0 0 12px;font-size:17px}.box strong{color:#ffd400}table{width:100%;border-collapse:separate;border-spacing:0;margin-top:14px;overflow:hidden;border:1px solid #292929;border-radius:14px}td,th{padding:12px 13px;border-bottom:1px solid #262626;text-align:left}th{background:#1a1a1a;color:#a9a9a9;font-size:11px;text-transform:uppercase;letter-spacing:.6px}tr:last-child td{border-bottom:0}.status{display:inline-flex;align-items:center;gap:7px;padding:8px 12px;border-radius:999px;background:#332f00;color:#ffd400;border:1px solid #655900;font-weight:800;margin:10px 0}.status:before{content:"";width:7px;height:7px;border-radius:50%;background:#ffd400;box-shadow:0 0 10px #ffd400}.actions{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0}.actions button,.actions a,button.pay{border:1px solid #343434;border-radius:13px;padding:13px 18px;font-weight:800;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center}.ok,.pay{background:#ffd400!important;color:#070707!important;border-color:#ffd400!important}.no{background:#222!important;color:#fff!important}.whatsapp{background:#151515;color:#ffd400;border-color:#4d4500!important}.timeline{display:grid;gap:10px}.step{position:relative;padding:14px 16px 14px 42px;background:#101010;border:1px solid #292929;border-radius:14px;color:#8f8f8f}.step:before{content:"";position:absolute;left:17px;top:18px;width:11px;height:11px;border:2px solid #555;border-radius:50%}.step.done{color:#f4f4f4;border-color:#4b4300;background:linear-gradient(90deg,#171500,#101010)}.step.done:before{background:#ffd400;border-color:#ffd400;box-shadow:0 0 12px #ffd40066}.step b{display:block}.step small{display:block;margin-top:4px;color:#777}.notice{padding:14px;border:1px solid #514900;background:#171500;border-radius:13px;color:#d9d9d9}.pix textarea{width:100%;min-height:82px;margin-top:8px;background:#090909;color:#ddd;border:1px solid #333;border-radius:12px;padding:10px}.pix button{margin-top:8px;background:#222;color:#fff;border:1px solid #333;border-radius:10px;padding:10px 14px;font-weight:700}.metric-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.metric{background:#101010;border:1px solid #292929;border-radius:16px;padding:15px}.metric small{display:block;color:#8e8e8e;font-size:10px;font-weight:700}.metric b{display:block;font-size:22px;margin-top:5px}.pill{display:inline-block;padding:5px 9px;border-radius:999px;background:#252525}.pill.ok{background:#123d24;color:#76f0a1}.pill.late{background:#4a1717;color:#ff9b9b}footer{color:#737373;text-align:center;padding:30px 10px;font-size:11px}@media(max-width:700px){.grid{grid-template-columns:1fr}.metric-grid{grid-template-columns:repeat(2,1fr)}main{padding:14px}.hero h1{font-size:30px}header{gap:10px}header span{font-size:8px}}@media(max-width:430px){.metric-grid{grid-template-columns:1fr 1fr}.actions>*{width:100%}}'''
 PUBLIC_CSS+='''@keyframes publicRise{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}.hero{animation:publicRise .55s ease-out both}.box,.metric,.value-card{animation:publicRise .55s ease-out both}.box:nth-of-type(2){animation-delay:.06s}.box:nth-of-type(3){animation-delay:.12s}.box:nth-of-type(4){animation-delay:.18s}.hero:after{animation:publicGlow 7s ease-in-out infinite alternate}@keyframes publicGlow{from{transform:translate(-8px,0) scale(.92);opacity:.5}to{transform:translate(8px,8px) scale(1.08);opacity:1}}.actions a:hover,.actions button:hover{transform:translateY(-2px);box-shadow:0 10px 28px #ffd40020;transition:transform .2s,box-shadow .2s}@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;scroll-behavior:auto!important;transition-duration:.01ms!important}}@media print{.actions,.action-row,.top-actions,.action-card{display:none!important}body{background:#fff!important;color:#111!important}main{max-width:none;padding:8px}.hero,.box,.metric,.value-card{animation:none!important;box-shadow:none;background:#fff!important;border-color:#ddd;color:#111}.hero h1,.box strong,.value-card strong{color:#111!important}header{border-color:#ddd}}'''
 
-INDEX='''<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>KV CELL OS PRO</title><link rel="stylesheet" href="/static/app.css"><link rel="stylesheet" href="/static/v4000.css"><link rel="stylesheet" href="/static/adapti.css"><link rel="stylesheet" href="/static/pro_neon.css"><link rel="stylesheet" href="/static/pro_ref.css"><link rel="stylesheet" href="/static/pro_support.css"><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script></head><body><div id="app"></div><script src="/static/app.js"></script><script src="/static/adapti.js"></script><script src="/static/pro_neon.js"></script></body></html>'''
+INDEX='''<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>KV CELL OS PRO</title><link rel="stylesheet" href="/static/app.css"><link rel="stylesheet" href="/static/v4000.css"><link rel="stylesheet" href="/static/adapti.css"><link rel="stylesheet" href="/static/pro_neon.css"><link rel="stylesheet" href="/static/pro_ref.css"><link rel="stylesheet" href="/static/pro_support.css"><link rel="stylesheet" href="/static/bot.css"><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script></head><body><div id="app"></div><script src="/static/app.js"></script><script src="/static/adapti.js"></script><script src="/static/pro_neon.js"></script></body></html>'''
 
 # KV CELL V810 runtime entrypoint — required by Square Cloud MAIN=app.py
 if __name__ == '__main__':
+    bot_module.start()
     host = os.environ.get('HOST', '0.0.0.0')
     server = ThreadingHTTPServer((host, PORT), Handler)
-    print(f'KV CELL OS PREMIUM V4000.0 listening on {host}:{PORT}', flush=True)
+    print(f'KV CELL OS PREMIUM V4000.1 + TELEGRAM BOT listening on {host}:{PORT}', flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

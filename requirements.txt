@@ -2,4 +2,4 @@
 
 cryptography>=43,<47
 
-qrcode>=7.4,<9
+qrcode[pil]>=7.4,<9

@@ -1,0 +1,21 @@
+KV CELL OS + BOT TELEGRAM — PACOTE ÚNICO
+
+Este ZIP atualiza a aplicação KV CELL OS que já está publicada. NÃO crie uma segunda aplicação para o bot e NÃO envie o ZIP antigo TELEGRAM_IMPLEMENT separadamente.
+
+PAINEL ADMINISTRATIVO DO BOT:
+https://kvcell.squareweb.app/bot_kv
+
+ANTES DO ENVIO:
+1. Faça backup do banco persistente kvcell.db / Square Cloud Blob.
+2. Preserve as variáveis de ambiente atuais do KV CELL OS.
+3. Substitua os arquivos da aplicação atual por este pacote e reinicie.
+4. Configure as novas variáveis do bot no Square Cloud: TELEGRAM_BOT_TOKEN, KVCELL_BOT_LOG_CHAT_ID, ASAAS_API_KEY, ASAAS_WEBHOOK_TOKEN, PARTNER_API_URL, PARTNER_API_USER e PARTNER_API_KEY.
+5. Cadastre no Asaas o webhook https://kvcell.squareweb.app/webhooks/asaas usando o mesmo ASAAS_WEBHOOK_TOKEN.
+6. Entre no OS com o usuário administrador existente e abra /bot_kv.
+7. Teste as integrações e sincronize o catálogo do servidor parceiro antes de liberar serviços aos clientes.
+
+O ZIP não contém tokens, senhas ou chaves reais. O Telegram BotFather fornece o TELEGRAM_BOT_TOKEN; o ID do grupo privado fica em KVCELL_BOT_LOG_CHAT_ID. Não há uma chave numérica separada para o bot.
+
+IMPORTANTE: pare qualquer processo antigo que esteja usando o mesmo token com getUpdates antes de ligar esta versão. Somente uma instância deve fazer polling do mesmo bot.
+
+Consulte BOT_KVCELL_SETUP.md para detalhes das variáveis, funcionamento e limitações da API parceira.
