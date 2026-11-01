@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 import secrets
 import socket
@@ -25,10 +26,11 @@ def free_port():
         return sock.getsockname()[1]
 
 
-def request(opener, base, path, method="GET", data=None):
+def request(opener, base, path, method="GET", data=None, headers=None):
     body = json.dumps(data).encode() if data is not None else None
-    headers = {"Content-Type": "application/json"} if data is not None else {}
-    req = Request(base + path, data=body, headers=headers, method=method)
+    request_headers = {"Content-Type": "application/json"} if data is not None else {}
+    request_headers.update(headers or {})
+    req = Request(base + path, data=body, headers=request_headers, method=method)
     try:
         with opener.open(req, timeout=5) as response:
             payload = response.read()
@@ -52,12 +54,19 @@ def start_server(data_dir):
     env = os.environ.copy()
     env.pop("TELEGRAM_BOT_TOKEN", None)
     env.pop("TELEGRAM_CHAT_ID", None)
+    env.pop("TELEGRAM_TOKEN", None)
+    env.pop("TELEGRAM_GROUP_ID", None)
+    env.pop("TELEGRAM_LOG_CHAT_ID", None)
+    env.pop("ASAAS_API_KEY", None)
+    env.pop("BOT_DATABASE_PATH", None)
     env.update({
         "PORT": str(port),
         "ADMIN_EMAIL": ADMIN_EMAIL,
         "ADMIN_PASSWORD": ADMIN_PASSWORD,
         "KVCELL_DATA_DIR": data_dir,
+        "BOT_DATABASE_PATH": os.path.join(data_dir, "kvcell_bot.db"),
         "PUBLIC_BASE_URL": f"http://127.0.0.1:{port}",
+        "ASAAS_WEBHOOK_TOKEN": "smoke-test-webhook-secret",
     })
     process = subprocess.Popen(
         [PYTHON, os.path.join(ROOT, "app.py")],
@@ -93,6 +102,138 @@ def login(opener, base, email=ADMIN_EMAIL, password=ADMIN_PASSWORD):
         {"email": email, "password": password},
     )
     assert code == 200 and result.get("ok"), f"Login failed: {result}"
+
+
+def run_bot_panel_flows(opener, base, data_dir):
+    code, page = request(opener, base, "/bot_kv")
+    assert code == 200 and "Bot KV CELL" in page
+    code, _ = request(build_opener(), base, "/api/bot/dashboard")
+    assert code == 401, "Bot admin API accepted an anonymous request."
+
+    code, summary = request(opener, base, "/api/bot/dashboard")
+    assert code == 200 and summary["users"] == 0 and summary["services"] == 0
+    code, category = request(opener, base, "/api/bot/categories", "POST", {"name": "QA Services"})
+    assert code == 201, category
+    code, service = request(opener, base, "/api/bot/services", "POST", {
+        "category_id": category["id"], "name": "QA Registration", "kind": "REGISTRO",
+        "cost_usd": 10, "min_add": 0, "margin_cliente": 30, "margin_logista": 40,
+        "margin_unlocker": 20, "fields_json": '[{"name":"imei","label":"IMEI"}]',
+        "active": 1,
+    })
+    assert code == 201, service
+    code, services = request(opener, base, "/api/bot/services")
+    saved = next(item for item in services if item["id"] == service["id"])
+    assert code == 200 and saved["category_name"] == "QA Services"
+    assert abs(saved["usd_rate"] - 5.4) < 0.001
+    code, invalid_service = request(opener, base, "/api/bot/services", "POST", {
+        "category_id": category["id"], "name": "Invalid JSON", "fields_json": "{",
+    })
+    assert code == 400 and "JSON" in invalid_service["error"]
+    code, conflict = request(opener, base, f"/api/bot/categories?id={category['id']}", "DELETE")
+    assert code == 409, conflict
+
+    bot_db = os.path.join(data_dir, "kvcell_bot.db")
+    connection = sqlite3.connect(bot_db)
+    try:
+        connection.execute(
+            "INSERT INTO users(telegram_id,username,name,balance) VALUES(?,?,?,?)",
+            (987654321, "smoke_user", "Smoke User", 0),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    code, adjusted = request(opener, base, "/api/bot/users/987654321/credit", "POST", {
+        "amount": 25, "note": "Crédito de teste",
+    })
+    assert code == 200 and adjusted["balance"] == 25, adjusted
+    code, ledger = request(opener, base, "/api/bot/credit-ledger")
+    assert code == 200 and len(ledger) == 1 and ledger[0]["amount"] == 25
+    code, _ = request(opener, base, "/api/bot/users", "PUT", {
+        "telegram_id": 987654321, "role": "UNLOCKER", "blocked": False,
+    })
+    assert code == 200
+    code, user_rows = request(opener, base, "/api/bot/users?q=smoke_user")
+    assert code == 200 and user_rows[0]["role"] == "UNLOCKER"
+
+    connection = sqlite3.connect(bot_db)
+    try:
+        connection.execute(
+            "INSERT INTO orders(telegram_id,service_id,data_json,price,status) VALUES(?,?,?,?,?)",
+            (987654321, service["id"], '{"imei":"not-returned"}', 3.5, "PENDENTE"),
+        )
+        connection.execute(
+            "INSERT INTO payments(telegram_id,payment_id,amount,credits,status) VALUES(?,?,?,?,?)",
+            (987654321, "pay_smoke", 5, 5, "PENDING"),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    code, orders = request(opener, base, "/api/bot/orders")
+    assert code == 200 and orders[0]["id"] > 0 and "data_json" not in orders[0]
+    order_id = orders[0]["id"]
+    code, order_details = request(opener, base, f"/api/bot/order-details?id={order_id}")
+    assert code == 200 and order_details["data"]["imei"] == "not-returned"
+    code, _ = request(opener, base, f"/api/bot/orders?id={order_id}", "PUT", {"status": "CANCELADO"})
+    assert code == 200
+    code, duplicate_refund = request(opener, base, f"/api/bot/orders?id={order_id}", "PUT", {"status": "CANCELADO"})
+    assert code == 409, duplicate_refund
+    code, user_rows = request(opener, base, "/api/bot/users?q=987654321")
+    assert code == 200 and user_rows[0]["balance"] == 28.5
+
+    payload = {"event": "PAYMENT_RECEIVED", "payment": {"id": "pay_smoke"}}
+    code, _ = request(opener, base, "/webhooks/asaas", "POST", payload, {"asaas-access-token": "wrong"})
+    assert code == 401
+    code, result = request(opener, base, "/webhooks/asaas", "POST", payload, {"asaas-access-token": "smoke-test-webhook-secret"})
+    assert code == 200 and result["ok"]
+    code, _ = request(opener, base, "/webhooks/asaas", "POST", payload, {"asaas-access-token": "smoke-test-webhook-secret"})
+    assert code == 200
+    code, user_rows = request(opener, base, "/api/bot/users?q=987654321")
+    assert code == 200 and user_rows[0]["balance"] == 33.5
+    code, logs = request(opener, base, "/api/bot/logs")
+    assert code == 200 and any("Crédito adicionado" in row["event"] for row in logs)
+    code, settings = request(opener, base, "/api/bot/settings", "PUT", {
+        "settings": {"usd_rate": "5.75", "payment_fee": "1.25", "support_url": "https://t.me/kvcell"},
+    })
+    assert code == 200, settings
+    code, _ = request(opener, base, f"/api/bot/services?id={service['id']}", "DELETE")
+    assert code == 200
+    code, retained_category = request(opener, base, f"/api/bot/categories?id={category['id']}", "DELETE")
+    assert code == 409
+    code, empty_category = request(opener, base, "/api/bot/categories", "POST", {"name": "Empty category"})
+    assert code == 201
+    code, removed_category = request(opener, base, f"/api/bot/categories?id={empty_category['id']}", "DELETE")
+    assert code == 200, removed_category
+
+    non_admin_password = secrets.token_urlsafe(16)
+    connection = sqlite3.connect(os.path.join(data_dir, "kvcell.db"))
+    try:
+        connection.execute(
+            "INSERT INTO users(name,email,password_hash,role,unit,permissions,active,created_at) VALUES(?,?,?,?,?,?,?,?)",
+            ("QA Technician", "qa-tech@example.invalid", hashlib.sha256(non_admin_password.encode()).hexdigest(), "tecnico", "LAGOS", "{}", 1, "2026-01-01"),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    technician = build_opener(HTTPCookieProcessor(CookieJar()))
+    code, _ = request(technician, base, "/api/login", "POST", {
+        "email": "qa-tech@example.invalid", "password": non_admin_password,
+    })
+    assert code == 200
+    code, _ = request(technician, base, "/api/bot/dashboard")
+    assert code == 403, "Non-admin account accessed the bot control panel."
+    code, _ = request(technician, base, f"/api/bot/order-details?id={order_id}")
+    assert code == 403, "Non-admin account accessed sensitive order details."
+    print("Bot admin panel flows: PASS")
+
+
+def run_bot_panel_smoke(data_dir):
+    process, opener, base = start_server(data_dir)
+    try:
+        login(opener, base)
+        run_bot_panel_flows(opener, base, data_dir)
+    finally:
+        stop_server(process)
 
 
 def create_legacy_database(data_dir):
@@ -814,8 +955,10 @@ print('Telegram sender mock: PASS')
 def main():
     with tempfile.TemporaryDirectory(prefix="kvcell_v4000_smoke_") as temp:
         main_data = os.path.join(temp, "main")
+        bot_data = os.path.join(temp, "bot_panel")
         legacy_data = os.path.join(temp, "legacy")
         run_telegram_sender_mock(temp)
+        run_bot_panel_smoke(bot_data)
         service_id, quote_results = run_main_flows(main_data)
         run_legacy_migration(legacy_data)
     print(
@@ -823,6 +966,7 @@ def main():
         f"(OS #{service_id}, multi-device/edit/status/cancel, "
         f"quotes={','.join(quote_results)}, customer CRUD/integrity, "
         "ledger IDs preserved, atomic PDV/stock/fiado, duplicate sale guards, "
+        "bot panel/admin permissions, credits/refunds/webhook idempotency, "
         "legacy migration, auth, Telegram sender mock, retired routes)"
     )
 

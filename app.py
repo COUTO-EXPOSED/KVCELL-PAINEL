@@ -1,4 +1,5 @@
 import os, json, sqlite3, hashlib, secrets, base64, zipfile, io, csv, html, urllib.request, urllib.parse, urllib.error, time, re, threading, shutil, queue, math
+import importlib.util, sys
 from datetime import datetime, date, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import qrcode
@@ -10,7 +11,10 @@ DATA_DIR=os.environ.get('KVCELL_DATA_DIR','/application/data')
 try: os.makedirs(DATA_DIR,exist_ok=True)
 except Exception: DATA_DIR=BASE
 DB=os.path.join(DATA_DIR,'kvcell.db')
+BOT_DB_PATH=os.environ.get('BOT_DATABASE_PATH',os.path.join(DATA_DIR,'kvcell_bot.db'))
 PORT=int(os.environ.get('PORT','80'))
+BOT_RUNTIME={'state':'not_configured','message':'Token do Telegram não configurado.','started_at':None}
+BOT_RUNTIME_MODULE=None
 SESSIONS={}
 SESSION_LAST_ACTIVITY={}
 SESSION_IDLE_SECONDS=30*60
@@ -239,11 +243,6 @@ def migrate_v10():
                    AND NOT EXISTS(SELECT 1 FROM service_status_history h WHERE h.service_id=s.id)""",(now(),))
     c.commit();c.close()
 migrate_v10()
-
-# Integrated Telegram bot: uses its own transactional DB under the persistent data directory.
-os.environ.setdefault('KVCELL_BOT_DATABASE_PATH', DB)
-import bot_module
-bot_module.set_persist_callback(schedule_blob_sync)
 
 def activity(u,tag,action,entity='',entity_id=None,details=''):
     stamp=now()
@@ -487,6 +486,326 @@ def write(sql,args=()):
     schedule_blob_sync()
     return rid
 
+def bot_db():
+    folder=os.path.dirname(os.path.abspath(BOT_DB_PATH))
+    os.makedirs(folder,exist_ok=True)
+    c=sqlite3.connect(BOT_DB_PATH,timeout=15,check_same_thread=False)
+    c.row_factory=sqlite3.Row
+    c.execute('PRAGMA busy_timeout=12000')
+    c.execute('PRAGMA journal_mode=WAL')
+    c.executescript('''
+    CREATE TABLE IF NOT EXISTS users(telegram_id INTEGER PRIMARY KEY,username TEXT,name TEXT,role TEXT DEFAULT 'CLIENTE_FIXO',balance REAL DEFAULT 0,blocked INTEGER DEFAULT 0,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS categories(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT UNIQUE,parent_id INTEGER);
+    CREATE TABLE IF NOT EXISTS services(id INTEGER PRIMARY KEY AUTOINCREMENT,category_id INTEGER,name TEXT,description TEXT,provider_service_id TEXT,kind TEXT DEFAULT 'REGISTRO',cost_usd REAL DEFAULT 0,min_add REAL DEFAULT 0,margin_logista REAL DEFAULT 40,margin_unlocker REAL DEFAULT 30,margin_cliente REAL DEFAULT 30,fields_json TEXT DEFAULT '[]',active INTEGER DEFAULT 1,tutorial_url TEXT,download_url TEXT,before_message TEXT);
+    CREATE TABLE IF NOT EXISTS orders(id INTEGER PRIMARY KEY AUTOINCREMENT,telegram_id INTEGER,service_id INTEGER,data_json TEXT,external_id TEXT,status TEXT DEFAULT 'PENDENTE',result TEXT,price REAL DEFAULT 0,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS payments(id INTEGER PRIMARY KEY AUTOINCREMENT,telegram_id INTEGER,payment_id TEXT UNIQUE,amount REAL,credits REAL,status TEXT DEFAULT 'PENDING',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS content(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT,body TEXT,price REAL DEFAULT 0,url TEXT,active INTEGER DEFAULT 1);
+    CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT);
+    CREATE TABLE IF NOT EXISTS notices(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT,body TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS credit_ledger(id INTEGER PRIMARY KEY AUTOINCREMENT,telegram_id INTEGER,amount REAL,balance_after REAL,note TEXT,actor TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS audit_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,event TEXT,telegram_id INTEGER,details TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+    ''')
+    c.commit()
+    return c
+
+def bot_audit(event,telegram_id=None,details=''):
+    c=bot_db()
+    try:
+        c.execute('INSERT INTO audit_logs(event,telegram_id,details) VALUES(?,?,?)',(str(event)[:80],telegram_id,str(details)[:500]))
+        c.commit()
+    finally:
+        c.close()
+
+def bot_group_notify(message):
+    token=os.environ.get('TELEGRAM_TOKEN','').strip()
+    chat_id=(os.environ.get('TELEGRAM_LOG_CHAT_ID') or os.environ.get('TELEGRAM_GROUP_ID') or '').strip()
+    if not token or not chat_id:
+        return
+    def send():
+        try:
+            payload=json.dumps({'chat_id':chat_id,'text':str(message)[:4000],'disable_web_page_preview':True},ensure_ascii=False).encode()
+            request=urllib.request.Request(f'https://api.telegram.org/bot{token}/sendMessage',data=payload,headers={'Content-Type':'application/json'},method='POST')
+            with urllib.request.urlopen(request,timeout=8) as response:
+                result=json.loads(response.read(65536).decode('utf-8'))
+            if response.status!=200 or not result.get('ok'):
+                raise RuntimeError('Telegram rejeitou o envio do log.')
+        except Exception as error:
+            print('KV CELL BOT AUDIT DELIVERY FAILED:',type(error).__name__,flush=True)
+    threading.Thread(target=send,name='kv-bot-audit',daemon=True).start()
+
+def bot_price(service,role='CLIENTE_FIXO'):
+    rate=float(bot_setting('usd_rate','5.40'))
+    margins={'LOGISTA':'margin_logista','UNLOCKER':'margin_unlocker','CLIENTE_FIXO':'margin_cliente'}
+    cost=max(0,float(service.get('cost_usd') or 0))*rate
+    margin=max(0,float(service.get(margins.get(role,'margin_cliente')) or 0))
+    minimum=max(0,float(service.get('min_add') or 0))
+    fee=max(0,float(bot_setting('payment_fee','0.99')))
+    return round(max(cost*(1+margin/100),cost+minimum)+fee,2)
+
+def bot_setting(key,default=''):
+    c=bot_db()
+    try:
+        row=c.execute('SELECT value FROM settings WHERE key=?',(key,)).fetchone()
+        return row['value'] if row else default
+    finally:
+        c.close()
+
+def bot_config_status():
+    return {
+        'telegram_token':bool(os.environ.get('TELEGRAM_TOKEN','').strip()),
+        'telegram_group':bool((os.environ.get('TELEGRAM_LOG_CHAT_ID') or os.environ.get('TELEGRAM_GROUP_ID') or '').strip()),
+        'asaas_key':bool(os.environ.get('ASAAS_API_KEY','').strip()),
+        'asaas_webhook':bool(os.environ.get('ASAAS_WEBHOOK_TOKEN','').strip()),
+        'partner_url':bool(os.environ.get('PARTNER_API_URL','').strip()),
+        'partner_user':bool(os.environ.get('PARTNER_API_USER','').strip()),
+        'partner_key':bool(os.environ.get('PARTNER_API_KEY','').strip()),
+        'bot_state':dict(BOT_RUNTIME),
+    }
+
+def bot_form_fields(value):
+    try:
+        fields=json.loads(value or '[]')
+    except (TypeError,json.JSONDecodeError):
+        raise ValueError('Os campos do serviço precisam estar em JSON válido.')
+    if not isinstance(fields,list) or len(fields)>20:
+        raise ValueError('Informe uma lista JSON com até 20 campos.')
+    for field in fields:
+        if not isinstance(field,dict) or not re.fullmatch(r'[A-Za-z0-9_-]{1,40}',str(field.get('name',''))):
+            raise ValueError('Cada campo precisa de um nome técnico válido (letras, números, _ ou -).')
+        if not str(field.get('label') or field.get('name')).strip() or len(str(field.get('label') or field.get('name')))>80:
+            raise ValueError('Cada campo precisa de um rótulo entre 1 e 80 caracteres.')
+    return json.dumps(fields,ensure_ascii=False)
+
+def bot_service_values(data):
+    name=str(data.get('name','')).strip()
+    if not name or len(name)>120:
+        raise ValueError('O nome do serviço é obrigatório e deve ter até 120 caracteres.')
+    try:
+        category_id=int(data.get('category_id') or 0)
+        cost=max(0,float(data.get('cost_usd') or 0))
+        minimum=max(0,float(data.get('min_add') or 0))
+        margins=[max(0,float(data.get(key) or 0)) for key in ('margin_logista','margin_unlocker','margin_cliente')]
+    except (TypeError,ValueError):
+        raise ValueError('Custos e margens devem ser números válidos.')
+    if any(not math.isfinite(number) or number>1000000 for number in [cost,minimum,*margins]):
+        raise ValueError('Os valores de custo ou margem estão fora do limite permitido.')
+    fields=bot_form_fields(data.get('fields_json','[]'))
+    category_kind=str(data.get('kind') or 'REGISTRO').upper()
+    if category_kind not in ('REGISTRO','ALUGUEL','CREDITO'):
+        raise ValueError('Tipo de serviço inválido.')
+    is_active=data.get('active',1)
+    if isinstance(is_active,str): is_active=is_active.strip().lower() not in ('0','false','off','')
+    return (category_id,name,str(data.get('description') or '')[:2000],str(data.get('provider_service_id') or '')[:120],category_kind,cost,minimum,*margins,fields,int(bool(is_active)),str(data.get('tutorial_url') or '')[:500],str(data.get('download_url') or '')[:500],str(data.get('before_message') or '')[:1000])
+
+def bot_api_response(handler,method,path,data,query,user):
+    if not path.startswith('/api/bot/'):
+        return False
+    if user.get('role')!='admin':
+        handler.json({'error':'Somente administrador pode acessar o painel do bot.'},403)
+        return True
+    route=path[len('/api/bot/'):]
+    c=bot_db()
+    try:
+        if method=='GET' and route=='dashboard':
+            result={
+                'users':c.execute('SELECT COUNT(*) n FROM users').fetchone()['n'],
+                'active_users':c.execute('SELECT COUNT(*) n FROM users WHERE blocked=0').fetchone()['n'],
+                'services':c.execute('SELECT COUNT(*) n FROM services WHERE active=1').fetchone()['n'],
+                'orders_pending':c.execute("SELECT COUNT(*) n FROM orders WHERE upper(status) IN ('PENDENTE','PROCESSANDO')").fetchone()['n'],
+                'orders_total':c.execute('SELECT COUNT(*) n FROM orders').fetchone()['n'],
+                'payments_pending':c.execute("SELECT COUNT(*) n FROM payments WHERE upper(status)='PENDING'").fetchone()['n'],
+                'credits_received':c.execute("SELECT COALESCE(SUM(credits),0) n FROM payments WHERE upper(status)='RECEIVED'").fetchone()['n'],
+                'bot_state':dict(BOT_RUNTIME),
+                'credentials':bot_config_status(),
+                'logs':[dict(row) for row in c.execute('SELECT * FROM audit_logs ORDER BY id DESC LIMIT 8').fetchall()],
+            }
+            handler.json(result); return True
+        if method=='GET' and route=='categories':
+            handler.json([dict(row) for row in c.execute('SELECT * FROM categories ORDER BY parent_id,name').fetchall()]); return True
+        if method=='GET' and route=='services':
+            handler.json([dict(row) for row in c.execute("SELECT s.*,c.name category_name,CAST(COALESCE((SELECT value FROM settings WHERE key='usd_rate'),'5.40') AS REAL) usd_rate,CAST(COALESCE((SELECT value FROM settings WHERE key='payment_fee'),'0.99') AS REAL) payment_fee FROM services s LEFT JOIN categories c ON c.id=s.category_id ORDER BY s.id DESC LIMIT 1000").fetchall()]); return True
+        if method=='GET' and route=='users':
+            q=str(query.get('q',[''])[0] or '').strip()[:100]
+            pattern='%'+q+'%'
+            handler.json([dict(row) for row in c.execute("SELECT telegram_id,username,name,role,balance,blocked,created_at FROM users WHERE CAST(telegram_id AS TEXT) LIKE ? OR COALESCE(username,'') LIKE ? OR COALESCE(name,'') LIKE ? ORDER BY created_at DESC LIMIT 500",(pattern,pattern,pattern)).fetchall()]); return True
+        if method=='GET' and route=='orders':
+            handler.json([dict(row) for row in c.execute('SELECT o.id,o.telegram_id,o.service_id,o.status,o.price,o.created_at,u.username,u.name,s.name service_name FROM orders o LEFT JOIN users u ON u.telegram_id=o.telegram_id LEFT JOIN services s ON s.id=o.service_id ORDER BY o.id DESC LIMIT 300').fetchall()]); return True
+        if method=='GET' and route=='order-details':
+            order_id=int(query.get('id',['0'])[0] or 0)
+            row=c.execute('SELECT o.id,o.data_json,s.name service_name FROM orders o LEFT JOIN services s ON s.id=o.service_id WHERE o.id=?',(order_id,)).fetchone()
+            if not row:
+                handler.json({'error':'Pedido não encontrado.'},404); return True
+            try: details=json.loads(row['data_json'] or '{}')
+            except json.JSONDecodeError: raise ValueError('Os dados salvos deste pedido estão inválidos.')
+            if not isinstance(details,dict): raise ValueError('Os dados salvos deste pedido têm formato inválido.')
+            actor=str(user.get('email') or user.get('name') or 'admin')[:120]
+            c.execute('INSERT INTO audit_logs(event,details) VALUES(?,?)',('Dados sensíveis do pedido consultados',f'Pedido #{order_id}; administrador: {actor}'))
+            c.commit()
+            handler.json({'id':order_id,'service_name':row['service_name'],'data':details}); return True
+        if method=='GET' and route=='payments':
+            handler.json([dict(row) for row in c.execute('SELECT p.*,u.username,u.name FROM payments p LEFT JOIN users u ON u.telegram_id=p.telegram_id ORDER BY p.id DESC LIMIT 300').fetchall()]); return True
+        if method=='GET' and route=='logs':
+            after=max(0,int(query.get('after',['0'])[0] or 0))
+            handler.json([dict(row) for row in c.execute('SELECT * FROM audit_logs WHERE id>? ORDER BY id DESC LIMIT 100',(after,)).fetchall()]); return True
+        if method=='PUT' and route=='orders':
+            order_id=int(query.get('id',['0'])[0] or 0)
+            status=str(data.get('status') or '').upper()
+            if status not in ('PROCESSANDO','CONCLUIDO','CANCELADO'):
+                raise ValueError('Status de pedido inválido.')
+            c.execute('BEGIN IMMEDIATE')
+            order=c.execute('SELECT o.*,u.balance FROM orders o LEFT JOIN users u ON u.telegram_id=o.telegram_id WHERE o.id=?',(order_id,)).fetchone()
+            if not order:
+                c.rollback(); handler.json({'error':'Pedido não encontrado.'},404); return True
+            previous=str(order['status'] or '').upper()
+            if previous in ('CANCELADO','CONCLUIDO'):
+                c.rollback(); handler.json({'error':'Este pedido já foi finalizado e não pode ser alterado.'},409); return True
+            if status=='CANCELADO':
+                if order['balance'] is None:
+                    c.rollback(); handler.json({'error':'Usuário associado ao pedido não encontrado.'},409); return True
+                balance=round(float(order['balance'] or 0)+float(order['price'] or 0),2)
+                c.execute('UPDATE users SET balance=? WHERE telegram_id=?',(balance,order['telegram_id']))
+                c.execute('INSERT INTO credit_ledger(telegram_id,amount,balance_after,note,actor) VALUES(?,?,?,?,?)',(order['telegram_id'],float(order['price'] or 0),balance,f'Estorno do pedido #{order_id}',str(user.get('email') or user.get('name') or 'admin')[:120]))
+                details=f'Pedido #{order_id} cancelado; estorno de {float(order["price"] or 0):.2f} CRD.'
+            else:
+                details=f'Pedido #{order_id}: {previous or "PENDENTE"} → {status}.'
+            c.execute('UPDATE orders SET status=? WHERE id=?',(status,order_id))
+            c.execute('INSERT INTO audit_logs(event,telegram_id,details) VALUES(?,?,?)',('Pedido atualizado',order['telegram_id'],details))
+            c.commit()
+            bot_group_notify(f'📦 KV CELL • {details}\nUsuário Telegram: {order["telegram_id"]}')
+            if BOT_RUNTIME_MODULE and getattr(BOT_RUNTIME_MODULE,'bot',None):
+                try: BOT_RUNTIME_MODULE.bot.send_message(order['telegram_id'],f'📦 <b>ATUALIZAÇÃO DO PEDIDO #{order_id}</b>\nStatus: {status}'+('\nOs créditos foram devolvidos ao seu saldo.' if status=='CANCELADO' else ''))
+                except Exception as error: print('KV CELL BOT ORDER NOTICE FAILED:',type(error).__name__,flush=True)
+            handler.json({'ok':True,'status':status}); return True
+        if method=='GET' and route=='config':
+            values={row['key']:row['value'] for row in c.execute('SELECT key,value FROM settings').fetchall()}
+            handler.json({'credentials':bot_config_status(),'settings':{'usd_rate':values.get('usd_rate','5.40'),'payment_fee':values.get('payment_fee','0.99'),'support_url':values.get('support_url',''),'telegram_group_id':os.environ.get('TELEGRAM_LOG_CHAT_ID') or os.environ.get('TELEGRAM_GROUP_ID','')},'partner_sync':'A sincronização de catálogo depende do protocolo/documentação do fornecedor; nenhuma chamada de pedido é feita sem validação.'}); return True
+        if method=='POST' and route=='categories':
+            name=str(data.get('name','')).strip()
+            parent_id=int(data['parent_id']) if str(data.get('parent_id') or '').strip() else None
+            if not name or len(name)>80: raise ValueError('O nome da categoria é obrigatório e deve ter até 80 caracteres.')
+            if parent_id is not None and not c.execute('SELECT 1 FROM categories WHERE id=?',(parent_id,)).fetchone(): raise ValueError('Categoria principal não encontrada.')
+            cur=c.execute('INSERT INTO categories(name,parent_id) VALUES(?,?)',(name,parent_id)); c.commit()
+            c.execute('INSERT INTO audit_logs(event,details) VALUES(?,?)',('Categoria criada',f'ID {cur.lastrowid}: {name}')); c.commit()
+            handler.json({'ok':True,'id':cur.lastrowid},201); return True
+        if method=='POST' and route=='services':
+            values=bot_service_values(data)
+            if not c.execute('SELECT 1 FROM categories WHERE id=?',(values[0],)).fetchone(): raise ValueError('Selecione uma categoria existente.')
+            sql='INSERT INTO services(category_id,name,description,provider_service_id,kind,cost_usd,min_add,margin_logista,margin_unlocker,margin_cliente,fields_json,active,tutorial_url,download_url,before_message) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
+            cur=c.execute(sql,values); c.commit()
+            c.execute('INSERT INTO audit_logs(event,details) VALUES(?,?)',('Serviço cadastrado',f'ID {cur.lastrowid}: {values[1]}')); c.commit()
+            handler.json({'ok':True,'id':cur.lastrowid},201); return True
+        if method=='PUT' and route=='services':
+            service_id=int(query.get('id',['0'])[0] or 0)
+            values=bot_service_values(data)
+            if service_id<1 or not c.execute('SELECT 1 FROM services WHERE id=?',(service_id,)).fetchone(): raise ValueError('Serviço não encontrado.')
+            if not c.execute('SELECT 1 FROM categories WHERE id=?',(values[0],)).fetchone(): raise ValueError('Selecione uma categoria existente.')
+            c.execute('UPDATE services SET category_id=?,name=?,description=?,provider_service_id=?,kind=?,cost_usd=?,min_add=?,margin_logista=?,margin_unlocker=?,margin_cliente=?,fields_json=?,active=?,tutorial_url=?,download_url=?,before_message=? WHERE id=?',(*values,service_id))
+            c.execute('INSERT INTO audit_logs(event,details) VALUES(?,?)',('Serviço atualizado',f'ID {service_id}: {values[1]}')); c.commit()
+            handler.json({'ok':True}); return True
+        if method=='DELETE' and route=='services':
+            service_id=int(query.get('id',['0'])[0] or 0)
+            cur=c.execute('UPDATE services SET active=0 WHERE id=?',(service_id,))
+            if cur.rowcount==0: handler.json({'error':'Serviço não encontrado.'},404); return True
+            c.execute('INSERT INTO audit_logs(event,details) VALUES(?,?)',('Serviço desativado',f'ID {service_id}')); c.commit()
+            handler.json({'ok':True}); return True
+        if method=='DELETE' and route=='categories':
+            category_id=int(query.get('id',['0'])[0] or 0)
+            if c.execute('SELECT 1 FROM services WHERE category_id=? LIMIT 1',(category_id,)).fetchone() or c.execute('SELECT 1 FROM categories WHERE parent_id=? LIMIT 1',(category_id,)).fetchone():
+                handler.json({'error':'Esta categoria tem serviços ou subcategorias. Mova os registros antes de removê-la.'},409); return True
+            cur=c.execute('DELETE FROM categories WHERE id=?',(category_id,))
+            if cur.rowcount==0: handler.json({'error':'Categoria não encontrada.'},404); return True
+            c.execute('INSERT INTO audit_logs(event,details) VALUES(?,?)',('Categoria removida',f'ID {category_id}')); c.commit()
+            handler.json({'ok':True}); return True
+        if method=='PUT' and route=='users':
+            telegram_id=int(data.get('telegram_id') or 0)
+            role=str(data.get('role') or 'CLIENTE_FIXO').upper()
+            if role not in ('CLIENTE_FIXO','LOGISTA','UNLOCKER'): raise ValueError('Perfil inválido.')
+            blocked=int(bool(data.get('blocked')))
+            cur=c.execute('UPDATE users SET role=?,blocked=? WHERE telegram_id=?',(role,blocked,telegram_id))
+            if cur.rowcount==0: handler.json({'error':'Usuário do Telegram não encontrado.'},404); return True
+            c.execute('INSERT INTO audit_logs(event,telegram_id,details) VALUES(?,?,?)',('Acesso do usuário atualizado',telegram_id,f'perfil={role}; bloqueado={blocked}')); c.commit()
+            handler.json({'ok':True}); return True
+        if method=='POST' and route.startswith('users/') and route.endswith('/credit'):
+            match=re.fullmatch(r'users/([0-9]+)/credit',route)
+            if not match: handler.json({'error':'Rota de crédito inválida.'},404); return True
+            telegram_id=int(match.group(1))
+            try: amount=round(float(data.get('amount') or 0),2)
+            except (TypeError,ValueError): raise ValueError('Informe um valor válido.')
+            if not math.isfinite(amount) or amount==0 or abs(amount)>100000:
+                raise ValueError('O valor deve ser diferente de zero e não pode exceder R$ 100.000.')
+            note=str(data.get('note') or '').strip()[:200]
+            if not note: raise ValueError('Informe o motivo da movimentação.')
+            c.execute('BEGIN IMMEDIATE')
+            account=c.execute('SELECT balance FROM users WHERE telegram_id=?',(telegram_id,)).fetchone()
+            if not account: c.rollback(); handler.json({'error':'Usuário do Telegram não encontrado.'},404); return True
+            new_balance=round(float(account['balance'] or 0)+amount,2)
+            if new_balance<0: c.rollback(); handler.json({'error':'Saldo insuficiente para retirar esse valor.'},409); return True
+            c.execute('UPDATE users SET balance=? WHERE telegram_id=?',(new_balance,telegram_id))
+            actor=str(user.get('email') or user.get('name') or 'admin')[:120]
+            c.execute('INSERT INTO credit_ledger(telegram_id,amount,balance_after,note,actor) VALUES(?,?,?,?,?)',(telegram_id,amount,new_balance,note,actor))
+            c.execute('INSERT INTO audit_logs(event,telegram_id,details) VALUES(?,?,?)',('Crédito adicionado' if amount>0 else 'Crédito removido',telegram_id,f'{amount:+.2f} CRD; saldo {new_balance:.2f} CRD; motivo: {note}; administrador: {actor}'))
+            c.commit()
+            bot_group_notify(f'💳 KV CELL • movimentação administrativa\nUsuário Telegram: {telegram_id}\nMovimento: {amount:+.2f} CRD\nSaldo: {new_balance:.2f} CRD\nMotivo: {note}\nAdministrador: {actor}')
+            handler.json({'ok':True,'balance':new_balance}); return True
+        if method=='GET' and route=='credit-ledger':
+            handler.json([dict(row) for row in c.execute('SELECT * FROM credit_ledger ORDER BY id DESC LIMIT 300').fetchall()]); return True
+        if method in ('POST','PUT') and route=='settings':
+            allowed={'usd_rate','payment_fee','support_url'}
+            settings=data.get('settings') if method=='PUT' else data
+            if not isinstance(settings,dict): raise ValueError('Configurações inválidas.')
+            for key in allowed:
+                if key not in settings: continue
+                value=str(settings[key]).strip()
+                if key in ('usd_rate','payment_fee'):
+                    try: number=float(value)
+                    except ValueError: raise ValueError(f'{key} deve ser um número válido.')
+                    if not math.isfinite(number) or number<0 or number>100000: raise ValueError(f'{key} está fora do limite permitido.')
+                if key=='support_url' and value and not value.startswith(('https://t.me/','https://wa.me/')): raise ValueError('O suporte deve usar um link HTTPS do Telegram ou WhatsApp.')
+                c.execute('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',(key,value))
+            c.execute('INSERT INTO audit_logs(event,details) VALUES(?,?)',('Configurações atualizadas','Parâmetros comerciais alterados.')); c.commit()
+            handler.json({'ok':True}); return True
+        if method=='POST' and route=='check':
+            checks={}
+            token=os.environ.get('TELEGRAM_TOKEN','').strip()
+            if token:
+                try:
+                    request=urllib.request.Request(f'https://api.telegram.org/bot{token}/getMe')
+                    with urllib.request.urlopen(request,timeout=8) as response: result=json.loads(response.read(65536).decode('utf-8'))
+                    checks['telegram']={'ok':bool(result.get('ok')),'detail':'Bot conectado' if result.get('ok') else 'Telegram não validou o token.'}
+                except Exception as error:
+                    checks['telegram']={'ok':False,'detail':f'Falha na verificação do Telegram ({type(error).__name__}).'}
+            else: checks['telegram']={'ok':False,'detail':'Configure TELEGRAM_TOKEN no ambiente.'}
+            asaas=os.environ.get('ASAAS_API_KEY','').strip()
+            if asaas:
+                try:
+                    request=urllib.request.Request('https://api.asaas.com/v3/myAccount',headers={'access_token':asaas})
+                    with urllib.request.urlopen(request,timeout=8) as response: payload=json.loads(response.read(65536).decode('utf-8'))
+                    checks['asaas']={'ok':bool(payload.get('id')),'detail':'Asaas conectado' if payload.get('id') else 'Asaas não confirmou a conta.'}
+                except urllib.error.HTTPError as error:
+                    checks['asaas']={'ok':False,'detail':f'Asaas respondeu HTTP {error.code}.'}
+                except Exception as error:
+                    checks['asaas']={'ok':False,'detail':f'Falha na verificação do Asaas ({type(error).__name__}).'}
+            else: checks['asaas']={'ok':False,'detail':'Configure ASAAS_API_KEY no ambiente.'}
+            checks['partner']={'ok':False,'detail':'URL/credenciais: '+('configuradas' if all((os.environ.get('PARTNER_API_URL'),os.environ.get('PARTNER_API_USER'),os.environ.get('PARTNER_API_KEY'))) else 'incompletas')+'; catálogo aguardando especificação validada da API.'}
+            c.execute('INSERT INTO audit_logs(event,details) VALUES(?,?)',('Verificação das integrações','Telegram, Asaas e disponibilidade de configuração do parceiro verificados.')); c.commit()
+            handler.json({'checks':checks,'credentials':bot_config_status()}); return True
+        if method=='POST' and route=='webhook':
+            handler.json({'error':'Webhook Asaas tratado pelo endpoint dedicado.'},404); return True
+        handler.json({'error':'Rota do painel do bot não encontrada.'},404)
+        return True
+    except ValueError as error:
+        handler.json({'error':str(error)},400)
+        return True
+    except sqlite3.IntegrityError:
+        handler.json({'error':'Registro duplicado ou inválido.'},409)
+        return True
+    except Exception as error:
+        print('KV CELL BOT ADMIN API ERROR:',type(error).__name__,flush=True)
+        handler.json({'error':'Falha ao processar a operação do painel do bot.'},500)
+        return True
+    finally:
+        c.close()
+
 def sync_reference_finance(c,ref_type,ref_id,unit,entry_type,category,description,amount):
     amount=float(amount or 0)
     existing=c.execute(
@@ -610,7 +929,7 @@ def dashboard(unit):
             'credit_outstanding':float(credit_outstanding or 0),'recent_sales':recent_sales,'recent_services':recent_services,'recent_activity':activity_rows}
 
 class Handler(BaseHTTPRequestHandler):
-    server_version='KV-CELL-PREMIUM/4000.1-BOT'
+    server_version='KV-CELL-PREMIUM/4000.0'
     def log_message(self,*a): pass
     def send(self,status,body,ctype='application/json',headers=None):
         if isinstance(body,str): body=body.encode()
@@ -650,7 +969,7 @@ class Handler(BaseHTTPRequestHandler):
         route=path[5:].strip('/').split('/',1)[0] if path.startswith('/api/') else ''
         direct={
             'me':None,'dashboard':'dashboard','chart':'finance','profit':'finance',
-            'settings':'settings','notifications':'dashboard','mark-notifications':'dashboard',
+            'settings':'settings','bot':'admin','notifications':'dashboard','mark-notifications':'dashboard',
             'export':'admin','search':'search','customer-search':'customers',
             'customer-stats':'customers','films':'films','activity':'logs','audit':'logs',
             'undo':'admin','ai':'admin','fiado':'fiado','fiado-payments':'fiado',
@@ -693,16 +1012,17 @@ class Handler(BaseHTTPRequestHandler):
         return False
     def do_GET(self):
         p=urlparse(self.path); path=p.path; qs=parse_qs(p.query)
-        if path=='/api/health': return self.json({'ok':True,'app':'KV CELL OS PRO','version':'4000.1','port':PORT,'time':now()})
+        if path=='/api/health': return self.json({'ok':True,'app':'KV CELL OS PRO','version':'4000.0','port':PORT,'time':now()})
         if path.startswith('/api/ai/') or path=='/api/mdm' or path.startswith('/api/mdm/'):
             return self.json({'error':'Este módulo foi removido da versão ativa.'},404)
         if path.startswith('/public/mdm/'):
             return self.json({'error':'Este módulo foi removido da versão ativa.'},404)
         if path.startswith('/public/'):
             return self.public(path,qs)
+        if path in ('/bot_kv','/bot_kv/'): return self.send(200,BOT_ADMIN_INDEX,'text/html')
         if path.startswith('/catalog/'):
             return self.public('/public'+path,qs)
-        if path in ('/','/bot_kv','/bot_kv/'): return self.send(200,INDEX,'text/html')
+        if path=='/': return self.send(200,INDEX,'text/html')
         if path.startswith('/static/'):
             rel=urllib.parse.unquote(path[len('/static/'):]).lstrip('/')
             fp=os.path.abspath(os.path.join(BASE,'static',rel))
@@ -727,14 +1047,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(404,b'Not found','text/plain')
         u=self.require()
         if not u:return
+        if bot_api_response(self,'GET',path,{},qs,u): return
         if not self.authorize_module(u,path):return
-        if path.startswith('/api/bot/'):
-            if u.get('role')!='admin': return self.json({'error':'Somente administrador pode acessar o Bot KV CELL.'},403)
-            try: return self.json(bot_module.api_get(path,qs))
-            except bot_module.BotError as error: return self.json({'error':str(error)},error.status)
-            except Exception as error:
-                print('KV BOT ADMIN GET FAILED:',type(error).__name__,flush=True)
-                return self.json({'error':'Falha ao consultar o módulo do bot.'},500)
         if u.get('role')!='admin' and u.get('unit') not in (None,'','TODOS'):
             qs['unit']=[u['unit']]
         if path=='/api/me': return self.json({'user':u})
@@ -780,9 +1094,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send(404,b'Not found','text/plain')
     def do_POST(self):
         p=urlparse(self.path); path=p.path; data=self.body()
-        if path=='/webhooks/asaas':
-            result,status=bot_module.handle_asaas_webhook(data,dict((k.lower(),v) for k,v in self.headers.items()))
-            return self.json(result,status)
+        if path=='/webhooks/asaas': return self.asaas_bot_webhook(data)
         if path.startswith('/api/ai/') or path=='/api/mdm' or path.startswith('/api/mdm/'):
             return self.json({'error':'Este módulo foi removido da versão ativa.'},404)
         if path.startswith('/public/mdm/'):
@@ -802,14 +1114,8 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith('/public/'): return self.send(405,b'','text/plain')
         u=self.require()
         if not u:return
+        if bot_api_response(self,'POST',path,data,parse_qs(p.query),u): return
         if not self.authorize_module(u,path):return
-        if path.startswith('/api/bot/'):
-            if u.get('role')!='admin': return self.json({'error':'Somente administrador pode gerenciar o Bot KV CELL.'},403)
-            try: return self.json(bot_module.api_post(path,data,u.get('name') or u.get('email') or 'Administrador'))
-            except bot_module.BotError as error: return self.json({'error':str(error)},error.status)
-            except Exception as error:
-                print('KV BOT ADMIN POST FAILED:',type(error).__name__,flush=True)
-                return self.json({'error':'Falha ao executar a ação do bot.'},500)
         if u.get('role')!='admin' and u.get('unit') not in (None,'','TODOS'):
             data['unit']=u['unit']
         telegram_match=re.fullmatch(r'/api/telegram/(service|quote)/([0-9]+)',path)
@@ -834,10 +1140,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_PUT(self):
         p=urlparse(self.path); u=self.require()
         if not u:return
+        data=self.body()
+        if bot_api_response(self,'PUT',p.path,data,parse_qs(p.query),u): return
         if not self.authorize_module(u,p.path):return
         if p.path.startswith('/api/ai/') or p.path=='/api/mdm' or p.path.startswith('/api/mdm/'):
             return self.json({'error':'Este módulo foi removido da versão ativa.'},404)
-        data=self.body(); path=p.path
+        path=p.path
         if path.startswith('/api/'):
             try:return self.update_api(path[5:],data,u)
             except sqlite3.IntegrityError as e:return self.json({'error':'Registro inválido ou duplicado: '+str(e)},400)
@@ -1588,6 +1896,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self):
         p=urlparse(self.path); u=self.require()
         if not u:return
+        if bot_api_response(self,'DELETE',p.path,{},parse_qs(p.query),u): return
         if p.path.startswith('/api/ai/') or p.path=='/api/mdm' or p.path.startswith('/api/mdm/'):
             return self.json({'error':'Este módulo foi removido da versão ativa.'},404)
         if not p.path.startswith('/api/'): return self.send(404,b'Not found','text/plain')
@@ -2195,6 +2504,48 @@ class Handler(BaseHTTPRequestHandler):
             cust=one('SELECT * FROM customers WHERE id=?',(x['customer_id'],)) if x['customer_id'] else None
             return self.send(200,public_unlock(x,cust),'text/html')
         self.send(404,b'Not found','text/plain')
+    def asaas_bot_webhook(self,data):
+        configured=os.environ.get('ASAAS_WEBHOOK_TOKEN','').strip()
+        supplied=(self.headers.get('asaas-access-token') or self.headers.get('x-webhook-token') or '').strip()
+        if not configured:
+            return self.json({'ok':False,'error':'Webhook não configurado.'},503)
+        if not secrets.compare_digest(configured,supplied):
+            return self.json({'ok':False,'error':'Não autorizado.'},401)
+        payment=data.get('payment') if isinstance(data,dict) else None
+        event=str(data.get('event') or '') if isinstance(data,dict) else ''
+        payment_id=str((payment or {}).get('id') or '')
+        if event not in ('PAYMENT_RECEIVED','PAYMENT_CONFIRMED') or not payment_id:
+            return self.json({'ok':True,'ignored':True})
+        c=bot_db()
+        try:
+            c.execute('BEGIN IMMEDIATE')
+            row=c.execute('SELECT * FROM payments WHERE payment_id=?',(payment_id,)).fetchone()
+            if not row:
+                c.rollback()
+                return self.json({'ok':True,'ignored':True})
+            if row['status']=='RECEIVED':
+                c.commit()
+                return self.json({'ok':True,'duplicate':True})
+            account=c.execute('SELECT balance FROM users WHERE telegram_id=?',(row['telegram_id'],)).fetchone()
+            if not account:
+                c.rollback()
+                return self.json({'ok':False,'error':'Usuário associado ao pagamento não encontrado.'},409)
+            balance=round(float(account['balance'] or 0)+float(row['credits'] or 0),2)
+            c.execute("UPDATE payments SET status='RECEIVED' WHERE payment_id=?",(payment_id,))
+            c.execute('UPDATE users SET balance=? WHERE telegram_id=?',(balance,row['telegram_id']))
+            c.execute('INSERT INTO credit_ledger(telegram_id,amount,balance_after,note,actor) VALUES(?,?,?,?,?)',(row['telegram_id'],float(row['credits'] or 0),balance,'Recarga PIX confirmada pelo Asaas','Asaas'))
+            c.commit()
+            if BOT_RUNTIME_MODULE and getattr(BOT_RUNTIME_MODULE,'bot',None):
+                try: BOT_RUNTIME_MODULE.bot.send_message(row['telegram_id'],f"✅ <b>RECARGA CONFIRMADA</b>\n💎 +{float(row['credits'] or 0):.2f} CRD")
+                except Exception as error: print('KV CELL BOT PAYMENT NOTICE FAILED:',type(error).__name__,flush=True)
+            bot_group_notify(f'✅ KV CELL • PIX confirmado\nUsuário Telegram: {row["telegram_id"]}\nCréditos: +{float(row["credits"] or 0):.2f} CRD\nSaldo: {balance:.2f} CRD')
+            return self.json({'ok':True})
+        except Exception as error:
+            c.rollback()
+            print('KV CELL ASAAS WEBHOOK ERROR:',type(error).__name__,flush=True)
+            return self.json({'ok':False,'error':'Falha ao registrar pagamento.'},500)
+        finally:
+            c.close()
 
 def public_catalog(slug,handler):
     settings={r['k']:r['v'] for r in rows('SELECT k,v FROM settings')}
@@ -2407,14 +2758,52 @@ def public_unlock(x,c):
 PUBLIC_CSS='''@font-face{font-family:Poppins;src:url('/static/fonts/pxiEyp8kv8JHgFVrJJfecg.woff2')}@font-face{font-family:Poppins;src:url('/static/fonts/pxiByp8kv8JHgFVrLEj6Z1xlFQ.woff2');font-weight:600}@font-face{font-family:Poppins;src:url('/static/fonts/pxiByp8kv8JHgFVrLGT9Z1xlFQ.woff2');font-weight:700}*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:radial-gradient(circle at 50% -18%,#292400 0,#0a0a0a 35%,#050505 75%);color:#f7f7f7;font-family:Poppins,Inter,Arial,sans-serif}main{max-width:1040px;margin:0 auto;padding:22px}header{display:flex;justify-content:space-between;align-items:center;padding:12px 0 16px;border-bottom:1px solid #292929}header b{font-size:25px;letter-spacing:-.5px;color:#ffd400}header span{font-size:10px;color:#9a9a9a;font-weight:700;letter-spacing:1.2px}.hero{position:relative;overflow:hidden;margin:24px 0;padding:30px;border:1px solid #3c3700;border-radius:24px;background:linear-gradient(135deg,#1b1800 0,#121212 48%,#0c0c0c 100%);box-shadow:0 20px 55px #0008}.hero:after{content:"";position:absolute;width:220px;height:220px;right:-90px;top:-100px;border-radius:50%;background:#ffd40012;filter:blur(5px)}.hero small{position:relative;z-index:1;color:#ffd400;font-size:10px;font-weight:800;letter-spacing:1.5px}.hero h1{position:relative;z-index:1;font-size:42px;line-height:1.1;margin:7px 0;color:#ffd400}.hero p{position:relative;z-index:1;color:#bdbdbd}.grid{display:grid;grid-template-columns:2fr 1fr;gap:16px}.box{background:linear-gradient(145deg,#151515,#0e0e0e);border:1px solid #292929;border-radius:19px;padding:20px;margin:14px 0;box-shadow:0 15px 40px #0006}.box h2,.box h3{margin:0 0 12px;font-size:17px}.box strong{color:#ffd400}table{width:100%;border-collapse:separate;border-spacing:0;margin-top:14px;overflow:hidden;border:1px solid #292929;border-radius:14px}td,th{padding:12px 13px;border-bottom:1px solid #262626;text-align:left}th{background:#1a1a1a;color:#a9a9a9;font-size:11px;text-transform:uppercase;letter-spacing:.6px}tr:last-child td{border-bottom:0}.status{display:inline-flex;align-items:center;gap:7px;padding:8px 12px;border-radius:999px;background:#332f00;color:#ffd400;border:1px solid #655900;font-weight:800;margin:10px 0}.status:before{content:"";width:7px;height:7px;border-radius:50%;background:#ffd400;box-shadow:0 0 10px #ffd400}.actions{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0}.actions button,.actions a,button.pay{border:1px solid #343434;border-radius:13px;padding:13px 18px;font-weight:800;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center}.ok,.pay{background:#ffd400!important;color:#070707!important;border-color:#ffd400!important}.no{background:#222!important;color:#fff!important}.whatsapp{background:#151515;color:#ffd400;border-color:#4d4500!important}.timeline{display:grid;gap:10px}.step{position:relative;padding:14px 16px 14px 42px;background:#101010;border:1px solid #292929;border-radius:14px;color:#8f8f8f}.step:before{content:"";position:absolute;left:17px;top:18px;width:11px;height:11px;border:2px solid #555;border-radius:50%}.step.done{color:#f4f4f4;border-color:#4b4300;background:linear-gradient(90deg,#171500,#101010)}.step.done:before{background:#ffd400;border-color:#ffd400;box-shadow:0 0 12px #ffd40066}.step b{display:block}.step small{display:block;margin-top:4px;color:#777}.notice{padding:14px;border:1px solid #514900;background:#171500;border-radius:13px;color:#d9d9d9}.pix textarea{width:100%;min-height:82px;margin-top:8px;background:#090909;color:#ddd;border:1px solid #333;border-radius:12px;padding:10px}.pix button{margin-top:8px;background:#222;color:#fff;border:1px solid #333;border-radius:10px;padding:10px 14px;font-weight:700}.metric-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.metric{background:#101010;border:1px solid #292929;border-radius:16px;padding:15px}.metric small{display:block;color:#8e8e8e;font-size:10px;font-weight:700}.metric b{display:block;font-size:22px;margin-top:5px}.pill{display:inline-block;padding:5px 9px;border-radius:999px;background:#252525}.pill.ok{background:#123d24;color:#76f0a1}.pill.late{background:#4a1717;color:#ff9b9b}footer{color:#737373;text-align:center;padding:30px 10px;font-size:11px}@media(max-width:700px){.grid{grid-template-columns:1fr}.metric-grid{grid-template-columns:repeat(2,1fr)}main{padding:14px}.hero h1{font-size:30px}header{gap:10px}header span{font-size:8px}}@media(max-width:430px){.metric-grid{grid-template-columns:1fr 1fr}.actions>*{width:100%}}'''
 PUBLIC_CSS+='''@keyframes publicRise{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}.hero{animation:publicRise .55s ease-out both}.box,.metric,.value-card{animation:publicRise .55s ease-out both}.box:nth-of-type(2){animation-delay:.06s}.box:nth-of-type(3){animation-delay:.12s}.box:nth-of-type(4){animation-delay:.18s}.hero:after{animation:publicGlow 7s ease-in-out infinite alternate}@keyframes publicGlow{from{transform:translate(-8px,0) scale(.92);opacity:.5}to{transform:translate(8px,8px) scale(1.08);opacity:1}}.actions a:hover,.actions button:hover{transform:translateY(-2px);box-shadow:0 10px 28px #ffd40020;transition:transform .2s,box-shadow .2s}@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;scroll-behavior:auto!important;transition-duration:.01ms!important}}@media print{.actions,.action-row,.top-actions,.action-card{display:none!important}body{background:#fff!important;color:#111!important}main{max-width:none;padding:8px}.hero,.box,.metric,.value-card{animation:none!important;box-shadow:none;background:#fff!important;border-color:#ddd;color:#111}.hero h1,.box strong,.value-card strong{color:#111!important}header{border-color:#ddd}}'''
 
-INDEX='''<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>KV CELL OS PRO</title><link rel="stylesheet" href="/static/app.css"><link rel="stylesheet" href="/static/v4000.css"><link rel="stylesheet" href="/static/adapti.css"><link rel="stylesheet" href="/static/pro_neon.css"><link rel="stylesheet" href="/static/pro_ref.css"><link rel="stylesheet" href="/static/pro_support.css"><link rel="stylesheet" href="/static/bot.css"><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script></head><body><div id="app"></div><script src="/static/app.js"></script><script src="/static/adapti.js"></script><script src="/static/pro_neon.js"></script></body></html>'''
+INDEX='''<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>KV CELL OS PRO</title><link rel="stylesheet" href="/static/app.css"><link rel="stylesheet" href="/static/v4000.css"><link rel="stylesheet" href="/static/adapti.css"><link rel="stylesheet" href="/static/pro_neon.css"><link rel="stylesheet" href="/static/pro_ref.css"><link rel="stylesheet" href="/static/pro_support.css"><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script></head><body><div id="app"></div><script src="/static/app.js"></script><script src="/static/adapti.js"></script><script src="/static/pro_neon.js"></script></body></html>'''
+BOT_ADMIN_INDEX='''<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>Bot KV CELL • Painel Admin</title><link rel="stylesheet" href="/static/bot_kv.css"></head><body><div id="bot-app"></div><div id="toast" role="status"></div><script src="/static/bot_kv.js"></script></body></html>'''
+
+def start_bot_runtime():
+    global BOT_RUNTIME_MODULE,BOT_RUNTIME
+    token=os.environ.get('TELEGRAM_TOKEN','').strip()
+    if not token:
+        BOT_RUNTIME={'state':'not_configured','message':'Token do Telegram não configurado.','started_at':None}
+        return
+    bot_file=os.path.join(BASE,'telegram_bot','main.py')
+    if not os.path.isfile(bot_file):
+        BOT_RUNTIME={'state':'error','message':'Arquivo principal do bot não encontrado.','started_at':None}
+        return
+    BOT_RUNTIME={'state':'connecting','message':'Conectando ao Telegram…','started_at':datetime.now().isoformat(timespec='seconds')}
+    try:
+        os.environ.setdefault('BOT_DATABASE_PATH',BOT_DB_PATH)
+        spec=importlib.util.spec_from_file_location('kvcell_telegram_runtime',bot_file)
+        if not spec or not spec.loader: raise RuntimeError('Não foi possível carregar o módulo do bot.')
+        module=importlib.util.module_from_spec(spec)
+        sys.modules[spec.name]=module
+        spec.loader.exec_module(module)
+        if not getattr(module,'bot',None):
+            BOT_RUNTIME={'state':'error','message':'Não foi possível inicializar o cliente Telegram.','started_at':BOT_RUNTIME['started_at']}
+            return
+        BOT_RUNTIME_MODULE=module
+        def run():
+            global BOT_RUNTIME
+            try:
+                module.bot.get_me()
+                BOT_RUNTIME={'state':'online','message':'Bot conectado ao Telegram e aguardando mensagens.','started_at':BOT_RUNTIME.get('started_at')}
+                module.bot_thread()
+                BOT_RUNTIME={'state':'stopped','message':'O processo do bot foi encerrado.','started_at':BOT_RUNTIME.get('started_at')}
+            except Exception as error:
+                BOT_RUNTIME={'state':'error','message':f'Falha no processo do bot ({type(error).__name__}).','started_at':BOT_RUNTIME.get('started_at')}
+                print('KV CELL TELEGRAM BOT RUNTIME ERROR:',type(error).__name__,flush=True)
+        threading.Thread(target=run,name='kvcell-telegram-bot',daemon=True).start()
+    except Exception as error:
+        BOT_RUNTIME={'state':'error','message':f'Falha ao carregar o bot ({type(error).__name__}).','started_at':BOT_RUNTIME.get('started_at')}
+        print('KV CELL TELEGRAM BOT LOAD ERROR:',type(error).__name__,flush=True)
 
 # KV CELL V810 runtime entrypoint — required by Square Cloud MAIN=app.py
 if __name__ == '__main__':
-    bot_module.start()
+    start_bot_runtime()
     host = os.environ.get('HOST', '0.0.0.0')
     server = ThreadingHTTPServer((host, PORT), Handler)
-    print(f'KV CELL OS PREMIUM V4000.1 + TELEGRAM BOT listening on {host}:{PORT}', flush=True)
+    print(f'KV CELL OS PREMIUM V4000.0 listening on {host}:{PORT}', flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

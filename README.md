@@ -16,6 +16,32 @@ The active application release is V4000.0. The older version sections below are 
 
 The V4000 deployment template is `.env.example`. Do not commit a real `.env`, database, API key, or encryption key.
 
+## Painel administrativo do bot Telegram
+
+O painel do bot fica em `https://kvcell.squareweb.app/bot_kv` e também aparece como **Bot Telegram** no menu do administrador. Ele usa a mesma sessão da conta administradora do painel principal e mantém os dados do bot em um SQLite separado (`BOT_DATABASE_PATH`), sem alterar as tabelas da assistência.
+
+O painel permite criar categorias e serviços, configurar margens por perfil, acompanhar usuários e saldos, bloquear acessos, registrar ajustes de créditos, acompanhar pedidos/pagamentos e observar a auditoria em atualização automática. Cancelar um pedido pendente faz o estorno uma única vez. Cadastros, logins, pedidos, pagamentos e mudanças administrativas são registrados; os dados digitados nos formulários de serviço não são enviados ao grupo de auditoria. Um administrador pode abrir os dados de um pedido individualmente; essa consulta também fica registrada.
+
+Configure estas variáveis no ambiente da Square Cloud antes de iniciar o serviço:
+
+| Variável | Uso |
+|---|---|
+| `TELEGRAM_TOKEN` | Token do bot criado no BotFather. |
+| `TELEGRAM_GROUP_ID` | ID do grupo de controle; adicione o bot ao grupo e permita que envie mensagens. |
+| `TELEGRAM_LOG_CHAT_ID` | Opcional; substitui o grupo de auditoria sem mudar o grupo principal. |
+| `ASAAS_API_KEY` | Chave privada da conta Asaas que criará as cobranças PIX. |
+| `ASAAS_WEBHOOK_TOKEN` | Segredo aleatório compartilhado com o webhook configurado no Asaas. |
+| `PARTNER_API_URL` | Endpoint oficial do servidor parceiro. |
+| `PARTNER_API_USER` | Usuário/chave de acesso do parceiro, se o fornecedor exigir. |
+| `PARTNER_API_KEY` | Chave privada do parceiro. |
+| `BOT_DATABASE_PATH` | Caminho persistente do banco exclusivo do bot; mantenha o padrão `/application/data/kvcell_bot.db`. |
+
+Não cole tokens ou chaves no chat, no código, no navegador ou em commits. Configure segredos somente no painel de variáveis do provedor, reinicie o serviço e abra `/bot_kv` com uma conta administradora já cadastrada no KV CELL. O webhook do Asaas deve apontar para `https://kvcell.squareweb.app/webhooks/asaas` e usar o mesmo `ASAAS_WEBHOOK_TOKEN`.
+
+O arquivo recebido do bot não continha credenciais reais nem a especificação do comando de listagem da API do fornecedor. Por isso, pedidos ficam na fila como **PENDENTE** até serem processados no painel; o cancelamento devolve os créditos. Não é feita sincronização de catálogo nem envio automático de pedidos ao parceiro por tentativa/erro. Solicite ao fornecedor a documentação oficial de autenticação, listagem e payload de pedidos antes de habilitar essa integração.
+
+Para validar a conexão, use **Integrações → Verificar conexões**. Telegram e Asaas são consultados somente após o clique; a chave nunca é exibida. A tela informa a presença/configuração das credenciais do parceiro, mas não declara a API do parceiro como conectada sem uma operação oficial de teste.
+
 > Deployment note: only the V4000 runtime behavior described at the beginning
 > of this file is active. The V500/V810/V1000 sections below are historical
 > notes kept for migration context; their older MDM/AI instructions must not be
