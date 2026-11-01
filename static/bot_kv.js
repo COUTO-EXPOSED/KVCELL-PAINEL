@@ -171,7 +171,7 @@
       ${stat('CRÉDITOS PAGOS', money(data.credits_received), `${data.payments_pending} pagamentos aguardando`, '＄')}
     </div>
     <div class="split-grid"><section class="panel"><div class="panel-heading"><div><h3>Atividade recente</h3><p>Eventos do bot e ações administrativas</p></div><button class="text-button" data-go="logs">Ver auditoria →</button></div><div id="live-events">${logRows(data.logs || [])}</div></section>
-      <section class="panel"><div class="panel-heading"><div><h3>Estado do sistema</h3><p>Presença das integrações configuradas</p></div><button class="text-button" data-go="settings">Abrir integrações →</button></div><div id="health-summary" class="health-list"><div class="health-item"><span>Bot Telegram</span>${statusTag(data.bot_state?.state)}</div><div class="health-item"><span>Asaas</span>${statusTag(data.credentials?.asaas_key ? 'Configurado' : 'Ausente')}</div><div class="health-item"><span>API do parceiro</span>${statusTag(data.credentials?.partner_key && data.credentials?.partner_url ? 'Configuração presente' : 'Ausente')}</div></div><p class="subtle">A API do parceiro só será marcada como conectada depois de uma operação oficial de validação.</p></section>
+      <section class="panel"><div class="panel-heading"><div><h3>Estado do sistema</h3><p>Presença das integrações configuradas</p></div><button class="text-button" data-go="settings">Abrir integrações →</button></div><div id="health-summary" class="health-list"><div class="health-item"><span>Bot Telegram</span>${statusTag(data.bot_state?.state)}</div><div class="health-item"><span>Mercado Pago</span>${statusTag(data.credentials?.mercadopago_key ? 'Configurado' : 'Ausente')}</div><div class="health-item"><span>API do parceiro</span>${statusTag(data.credentials?.partner_key && data.credentials?.partner_url ? 'Configuração presente' : 'Ausente')}</div></div><p class="subtle">A API do parceiro só será marcada como conectada depois de uma operação oficial de validação.</p></section>
     </div>`;
   }
 
@@ -219,7 +219,7 @@
 
   async function payments() {
     const list = await api('/api/bot/payments');
-    root.querySelector('#content').innerHTML = `${pageHead('Pagamentos PIX', 'Histórico das cobranças, créditos liberados e estado de confirmação do Asaas.')}
+    root.querySelector('#content').innerHTML = `${pageHead('Pagamentos PIX', 'Histórico das cobranças, créditos liberados e confirmações do Mercado Pago.')}
       <section class="panel table-panel"><div class="table-wrap"><table><thead><tr><th>Pagamento</th><th>Usuário</th><th>Valor</th><th>Créditos</th><th>Status</th><th>Data</th></tr></thead><tbody>
       ${list.map(item => `<tr><td><b>${esc(item.payment_id)}</b><small>ID interno #${item.id}</small></td><td>${esc(item.name || item.username || '—')}<small>ID ${esc(item.telegram_id)}</small></td><td>${money(item.amount)}</td><td>${Number(item.credits || 0).toFixed(2)} CRD</td><td>${statusTag(item.status)}</td><td>${esc(date(item.created_at))}</td></tr>`).join('') || '<tr><td colspan="6" class="empty-state">Ainda não há pagamentos.</td></tr>'}
       </tbody></table></div></section>`;
@@ -237,8 +237,8 @@
     const credentials = [
       ['Bot Telegram', data.credentials.telegram_token, 'TELEGRAM_TOKEN'],
       ['Grupo de auditoria', data.credentials.telegram_group, 'TELEGRAM_LOG_CHAT_ID ou TELEGRAM_GROUP_ID'],
-      ['Chave Asaas', data.credentials.asaas_key, 'ASAAS_API_KEY'],
-      ['Segredo do webhook', data.credentials.asaas_webhook, 'ASAAS_WEBHOOK_TOKEN'],
+      ['Access Token do Mercado Pago', data.credentials.mercadopago_key, 'MERCADOPAGO_ACCESS_TOKEN'],
+      ['Segredo de assinatura do webhook', data.credentials.mercadopago_webhook, 'MERCADOPAGO_WEBHOOK_SECRET'],
       ['URL do parceiro', data.credentials.partner_url, 'PARTNER_API_URL'],
       ['Usuário do parceiro', data.credentials.partner_user, 'PARTNER_API_USER'],
       ['Chave do parceiro', data.credentials.partner_key, 'PARTNER_API_KEY']
@@ -254,7 +254,7 @@
       <section class="panel"><div class="panel-heading"><div><h3>Parâmetros comerciais</h3><p>Valores usados no cálculo de créditos dos serviços.</p></div></div>
         <form id="settings-form" class="form-grid">
           <label>Cotação USD → BRL<input name="usd_rate" type="number" step="0.01" min="0" value="${esc(values.usd_rate || '5.40')}" required></label>
-          <label>Taxa fixa de pagamento (R$)<input name="payment_fee" type="number" step="0.01" min="0" value="${esc(values.payment_fee || '0.99')}" required></label>
+          <label>Acréscimo fixo no preço (R$)<input name="payment_fee" type="number" step="0.01" min="0" value="${esc(values.payment_fee || '0.99')}" required></label>
           <label class="full">Link de suporte<input name="support_url" type="url" placeholder="https://t.me/..." value="${esc(values.support_url || '')}"></label>
           <label class="full">ID do grupo Telegram<input value="${esc(values.telegram_group_id || '')}" readonly><small>Configurado no ambiente; o ID não é uma credencial secreta.</small></label>
           <button class="button primary">Salvar parâmetros</button>
@@ -275,7 +275,7 @@
         const status = document.querySelector('.hero-state');
         if (status) status.innerHTML = `${statusTag(data.bot_state?.state)}<small>${esc(data.bot_state?.message || '')}</small>`;
         const health = document.querySelector('#health-summary');
-        if (health) health.innerHTML = `<div class="health-item"><span>Bot Telegram</span>${statusTag(data.bot_state?.state)}</div><div class="health-item"><span>Asaas</span>${statusTag(data.credentials?.asaas_key ? 'Configurado' : 'Ausente')}</div><div class="health-item"><span>API do parceiro</span>${statusTag(data.credentials?.partner_key && data.credentials?.partner_url ? 'Configuração presente' : 'Ausente')}</div>`;
+        if (health) health.innerHTML = `<div class="health-item"><span>Bot Telegram</span>${statusTag(data.bot_state?.state)}</div><div class="health-item"><span>Mercado Pago</span>${statusTag(data.credentials?.mercadopago_key ? 'Configurado' : 'Ausente')}</div><div class="health-item"><span>API do parceiro</span>${statusTag(data.credentials?.partner_key && data.credentials?.partner_url ? 'Configuração presente' : 'Ausente')}</div>`;
       }
     } catch (error) {
       console.warn('Atualização ao vivo do painel do bot falhou:', error.message);
@@ -391,7 +391,7 @@
       }
       if (action === 'check-api') {
         const host = root.querySelector('#api-result');
-        host.innerHTML = '<div class="notice">Verificando Telegram e Asaas…</div>';
+        host.innerHTML = '<div class="notice">Verificando Telegram e Mercado Pago…</div>';
         const result = await api('/api/bot/check', { method: 'POST', body: '{}' });
         host.innerHTML = `<section class="panel check-results">${Object.entries(result.checks).map(([name, check]) => `<div class="health-item"><span>${esc(name.toUpperCase())}<small>${esc(check.detail)}</small></span>${statusTag(check.ok ? 'Conectado' : 'Atenção')}</div>`).join('')}</section>`;
         toast('Verificação concluída.');
