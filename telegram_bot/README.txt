@@ -15,13 +15,16 @@ VARIÁVEIS
 - TELEGRAM_TOKEN: token do BotFather.
 - TELEGRAM_GROUP_ID: grupo de controle/auditoria.
 - TELEGRAM_LOG_CHAT_ID: opcional, grupo de auditoria separado.
-- ASAAS_API_KEY: chave privada do Asaas.
-- ASAAS_WEBHOOK_TOKEN: segredo configurado também no webhook do Asaas.
+- MERCADOPAGO_ACCESS_TOKEN: Access Token privado da aplicação Mercado Pago.
+- MERCADOPAGO_WEBHOOK_SECRET: chave secreta das notificações Webhooks do Mercado Pago.
+- MERCADOPAGO_WEBHOOK_URL: URL pública de notificação do pagamento.
 - PARTNER_API_URL, PARTNER_API_USER, PARTNER_API_KEY: acesso ao fornecedor.
 - BOT_DATABASE_PATH: banco persistente exclusivo do bot.
 
-Configure o webhook do Asaas em:
-https://kvcell.squareweb.app/webhooks/asaas
+Configure a notificação Webhooks de pagamentos do Mercado Pago em:
+https://kvcell.squareweb.app/webhooks/mercadopago
+
+O webhook valida a assinatura e consulta o status diretamente na API antes de liberar créditos. O bot solicita o e-mail do cliente para criar o Pix.
 
 Os registros de pedidos permanecem pendentes até que o formato oficial da API
 do parceiro seja documentado e validado. Não envie payloads experimentais. O

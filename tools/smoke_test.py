@@ -1,5 +1,6 @@
 import json
 import hashlib
+import hmac
 import os
 import secrets
 import socket
@@ -57,7 +58,7 @@ def start_server(data_dir):
     env.pop("TELEGRAM_TOKEN", None)
     env.pop("TELEGRAM_GROUP_ID", None)
     env.pop("TELEGRAM_LOG_CHAT_ID", None)
-    env.pop("ASAAS_API_KEY", None)
+    env.pop("MERCADOPAGO_ACCESS_TOKEN", None)
     env.pop("BOT_DATABASE_PATH", None)
     env.update({
         "PORT": str(port),
@@ -66,7 +67,7 @@ def start_server(data_dir):
         "KVCELL_DATA_DIR": data_dir,
         "BOT_DATABASE_PATH": os.path.join(data_dir, "kvcell_bot.db"),
         "PUBLIC_BASE_URL": f"http://127.0.0.1:{port}",
-        "ASAAS_WEBHOOK_TOKEN": "smoke-test-webhook-secret",
+        "MERCADOPAGO_WEBHOOK_SECRET": "smoke-test-webhook-secret",
     })
     process = subprocess.Popen(
         [PYTHON, os.path.join(ROOT, "app.py")],
@@ -181,15 +182,24 @@ def run_bot_panel_flows(opener, base, data_dir):
     code, user_rows = request(opener, base, "/api/bot/users?q=987654321")
     assert code == 200 and user_rows[0]["balance"] == 28.5
 
-    payload = {"event": "PAYMENT_RECEIVED", "payment": {"id": "pay_smoke"}}
-    code, _ = request(opener, base, "/webhooks/asaas", "POST", payload, {"asaas-access-token": "wrong"})
+    payload = {"type": "payment", "data": {"id": "123456"}}
+    code, _ = request(opener, base, "/webhooks/mercadopago?data.id=123456&type=payment", "POST", payload, {
+        "x-request-id": "smoke-test-request",
+        "x-signature": "ts=1,v1=invalid",
+    })
     assert code == 401
-    code, result = request(opener, base, "/webhooks/asaas", "POST", payload, {"asaas-access-token": "smoke-test-webhook-secret"})
-    assert code == 200 and result["ok"]
-    code, _ = request(opener, base, "/webhooks/asaas", "POST", payload, {"asaas-access-token": "smoke-test-webhook-secret"})
-    assert code == 200
+    timestamp = str(int(time.time()))
+    manifest = f"id:123456;request-id:smoke-test-request;ts:{timestamp};"
+    signature = hmac.new(
+        b"smoke-test-webhook-secret", manifest.encode(), hashlib.sha256
+    ).hexdigest()
+    code, result = request(opener, base, "/webhooks/mercadopago?data.id=123456&type=payment", "POST", payload, {
+        "x-request-id": "smoke-test-request",
+        "x-signature": f"ts={timestamp},v1={signature}",
+    })
+    assert code == 503 and result["error"] == "Mercado Pago não configurado."
     code, user_rows = request(opener, base, "/api/bot/users?q=987654321")
-    assert code == 200 and user_rows[0]["balance"] == 33.5
+    assert code == 200 and user_rows[0]["balance"] == 28.5
     code, logs = request(opener, base, "/api/bot/logs")
     assert code == 200 and any("Crédito adicionado" in row["event"] for row in logs)
     code, settings = request(opener, base, "/api/bot/settings", "PUT", {
@@ -966,7 +976,7 @@ def main():
         f"(OS #{service_id}, multi-device/edit/status/cancel, "
         f"quotes={','.join(quote_results)}, customer CRUD/integrity, "
         "ledger IDs preserved, atomic PDV/stock/fiado, duplicate sale guards, "
-        "bot panel/admin permissions, credits/refunds/webhook idempotency, "
+        "bot panel/admin permissions, credits/refunds/Mercado Pago webhook signatures, "
         "legacy migration, auth, Telegram sender mock, retired routes)"
     )
 

@@ -1,6 +1,7 @@
-import os, json, sqlite3, hashlib, secrets, base64, zipfile, io, csv, html, urllib.request, urllib.parse, urllib.error, time, re, threading, shutil, queue, math
+import os, json, sqlite3, hashlib, hmac, secrets, base64, zipfile, io, csv, html, urllib.request, urllib.parse, urllib.error, time, re, threading, shutil, queue, math
 import importlib.util, sys
 from datetime import datetime, date, timedelta
+from decimal import Decimal, InvalidOperation
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import qrcode
 from io import BytesIO
@@ -498,13 +499,16 @@ def bot_db():
     CREATE TABLE IF NOT EXISTS categories(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT UNIQUE,parent_id INTEGER);
     CREATE TABLE IF NOT EXISTS services(id INTEGER PRIMARY KEY AUTOINCREMENT,category_id INTEGER,name TEXT,description TEXT,provider_service_id TEXT,kind TEXT DEFAULT 'REGISTRO',cost_usd REAL DEFAULT 0,min_add REAL DEFAULT 0,margin_logista REAL DEFAULT 40,margin_unlocker REAL DEFAULT 30,margin_cliente REAL DEFAULT 30,fields_json TEXT DEFAULT '[]',active INTEGER DEFAULT 1,tutorial_url TEXT,download_url TEXT,before_message TEXT);
     CREATE TABLE IF NOT EXISTS orders(id INTEGER PRIMARY KEY AUTOINCREMENT,telegram_id INTEGER,service_id INTEGER,data_json TEXT,external_id TEXT,status TEXT DEFAULT 'PENDENTE',result TEXT,price REAL DEFAULT 0,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
-    CREATE TABLE IF NOT EXISTS payments(id INTEGER PRIMARY KEY AUTOINCREMENT,telegram_id INTEGER,payment_id TEXT UNIQUE,amount REAL,credits REAL,status TEXT DEFAULT 'PENDING',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS payments(id INTEGER PRIMARY KEY AUTOINCREMENT,telegram_id INTEGER,payment_id TEXT UNIQUE,external_reference TEXT,amount REAL,credits REAL,status TEXT DEFAULT 'PENDING',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS content(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT,body TEXT,price REAL DEFAULT 0,url TEXT,active INTEGER DEFAULT 1);
     CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT);
     CREATE TABLE IF NOT EXISTS notices(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT,body TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS credit_ledger(id INTEGER PRIMARY KEY AUTOINCREMENT,telegram_id INTEGER,amount REAL,balance_after REAL,note TEXT,actor TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS audit_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,event TEXT,telegram_id INTEGER,details TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
     ''')
+    payment_columns={row['name'] for row in c.execute('PRAGMA table_info(payments)').fetchall()}
+    if 'external_reference' not in payment_columns:
+        c.execute('ALTER TABLE payments ADD COLUMN external_reference TEXT')
     c.commit()
     return c
 
@@ -554,8 +558,8 @@ def bot_config_status():
     return {
         'telegram_token':bool(os.environ.get('TELEGRAM_TOKEN','').strip()),
         'telegram_group':bool((os.environ.get('TELEGRAM_LOG_CHAT_ID') or os.environ.get('TELEGRAM_GROUP_ID') or '').strip()),
-        'asaas_key':bool(os.environ.get('ASAAS_API_KEY','').strip()),
-        'asaas_webhook':bool(os.environ.get('ASAAS_WEBHOOK_TOKEN','').strip()),
+        'mercadopago_key':bool(os.environ.get('MERCADOPAGO_ACCESS_TOKEN','').strip()),
+        'mercadopago_webhook':bool(os.environ.get('MERCADOPAGO_WEBHOOK_SECRET','').strip()),
         'partner_url':bool(os.environ.get('PARTNER_API_URL','').strip()),
         'partner_user':bool(os.environ.get('PARTNER_API_USER','').strip()),
         'partner_key':bool(os.environ.get('PARTNER_API_KEY','').strip()),
@@ -775,22 +779,22 @@ def bot_api_response(handler,method,path,data,query,user):
                 except Exception as error:
                     checks['telegram']={'ok':False,'detail':f'Falha na verificação do Telegram ({type(error).__name__}).'}
             else: checks['telegram']={'ok':False,'detail':'Configure TELEGRAM_TOKEN no ambiente.'}
-            asaas=os.environ.get('ASAAS_API_KEY','').strip()
-            if asaas:
+            access_token=os.environ.get('MERCADOPAGO_ACCESS_TOKEN','').strip()
+            if access_token:
                 try:
-                    request=urllib.request.Request('https://api.asaas.com/v3/myAccount',headers={'access_token':asaas})
+                    request=urllib.request.Request('https://api.mercadopago.com/users/me',headers={'Authorization':f'Bearer {access_token}'})
                     with urllib.request.urlopen(request,timeout=8) as response: payload=json.loads(response.read(65536).decode('utf-8'))
-                    checks['asaas']={'ok':bool(payload.get('id')),'detail':'Asaas conectado' if payload.get('id') else 'Asaas não confirmou a conta.'}
+                    checks['mercadopago']={'ok':bool(payload.get('id')),'detail':'Mercado Pago conectado' if payload.get('id') else 'Mercado Pago não confirmou a conta.'}
                 except urllib.error.HTTPError as error:
-                    checks['asaas']={'ok':False,'detail':f'Asaas respondeu HTTP {error.code}.'}
+                    checks['mercadopago']={'ok':False,'detail':f'Mercado Pago respondeu HTTP {error.code}.'}
                 except Exception as error:
-                    checks['asaas']={'ok':False,'detail':f'Falha na verificação do Asaas ({type(error).__name__}).'}
-            else: checks['asaas']={'ok':False,'detail':'Configure ASAAS_API_KEY no ambiente.'}
+                    checks['mercadopago']={'ok':False,'detail':f'Falha na verificação do Mercado Pago ({type(error).__name__}).'}
+            else: checks['mercadopago']={'ok':False,'detail':'Configure MERCADOPAGO_ACCESS_TOKEN no ambiente.'}
             checks['partner']={'ok':False,'detail':'URL/credenciais: '+('configuradas' if all((os.environ.get('PARTNER_API_URL'),os.environ.get('PARTNER_API_USER'),os.environ.get('PARTNER_API_KEY'))) else 'incompletas')+'; catálogo aguardando especificação validada da API.'}
-            c.execute('INSERT INTO audit_logs(event,details) VALUES(?,?)',('Verificação das integrações','Telegram, Asaas e disponibilidade de configuração do parceiro verificados.')); c.commit()
+            c.execute('INSERT INTO audit_logs(event,details) VALUES(?,?)',('Verificação das integrações','Telegram, Mercado Pago e disponibilidade de configuração do parceiro verificados.')); c.commit()
             handler.json({'checks':checks,'credentials':bot_config_status()}); return True
         if method=='POST' and route=='webhook':
-            handler.json({'error':'Webhook Asaas tratado pelo endpoint dedicado.'},404); return True
+            handler.json({'error':'Webhook Mercado Pago tratado pelo endpoint dedicado.'},404); return True
         handler.json({'error':'Rota do painel do bot não encontrada.'},404)
         return True
     except ValueError as error:
@@ -1094,7 +1098,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send(404,b'Not found','text/plain')
     def do_POST(self):
         p=urlparse(self.path); path=p.path; data=self.body()
-        if path=='/webhooks/asaas': return self.asaas_bot_webhook(data)
+        if path=='/webhooks/mercadopago': return self.mercadopago_bot_webhook(data,parse_qs(p.query))
         if path.startswith('/api/ai/') or path=='/api/mdm' or path.startswith('/api/mdm/'):
             return self.json({'error':'Este módulo foi removido da versão ativa.'},404)
         if path.startswith('/public/mdm/'):
@@ -2504,25 +2508,76 @@ class Handler(BaseHTTPRequestHandler):
             cust=one('SELECT * FROM customers WHERE id=?',(x['customer_id'],)) if x['customer_id'] else None
             return self.send(200,public_unlock(x,cust),'text/html')
         self.send(404,b'Not found','text/plain')
-    def asaas_bot_webhook(self,data):
-        configured=os.environ.get('ASAAS_WEBHOOK_TOKEN','').strip()
-        supplied=(self.headers.get('asaas-access-token') or self.headers.get('x-webhook-token') or '').strip()
-        if not configured:
+    def mercadopago_bot_webhook(self,data,query):
+        secret_key=os.environ.get('MERCADOPAGO_WEBHOOK_SECRET','').strip()
+        access_token=os.environ.get('MERCADOPAGO_ACCESS_TOKEN','').strip()
+        if not secret_key:
             return self.json({'ok':False,'error':'Webhook não configurado.'},503)
-        if not secrets.compare_digest(configured,supplied):
-            return self.json({'ok':False,'error':'Não autorizado.'},401)
-        payment=data.get('payment') if isinstance(data,dict) else None
-        event=str(data.get('event') or '') if isinstance(data,dict) else ''
-        payment_id=str((payment or {}).get('id') or '')
-        if event not in ('PAYMENT_RECEIVED','PAYMENT_CONFIRMED') or not payment_id:
+        body_data=data.get('data') if isinstance(data,dict) else {}
+        body_data=body_data if isinstance(body_data,dict) else {}
+        payment_id=str((query.get('data.id') or query.get('id') or [body_data.get('id') or ''])[0] or '').strip()
+        body_payment_id=str(body_data.get('id') or '').strip()
+        notification_type=str((query.get('type') or query.get('topic') or [data.get('type') or ''])[0] or '').strip().lower() if isinstance(data,dict) else ''
+        if notification_type and notification_type not in ('payment','payments'):
             return self.json({'ok':True,'ignored':True})
+        if not payment_id:
+            return self.json({'ok':True,'ignored':True})
+        if body_payment_id and body_payment_id!=payment_id:
+            return self.json({'ok':False,'error':'IDs do pagamento não conferem.'},400)
+        signature=self.headers.get('x-signature','')
+        request_id=self.headers.get('x-request-id','')
+        signature_parts={}
+        for component in signature.split(','):
+            key,separator,value=component.strip().partition('=')
+            if separator:
+                signature_parts[key.strip()]=value.strip()
+        timestamp=signature_parts.get('ts','')
+        received_signature=signature_parts.get('v1','')
+        if not timestamp or not received_signature or not request_id:
+            return self.json({'ok':False,'error':'Assinatura do webhook inválida.'},401)
+        signed_id=payment_id.lower() if payment_id.isalnum() else payment_id
+        manifest=f'id:{signed_id};request-id:{request_id};ts:{timestamp};'
+        expected_signature=hmac.new(secret_key.encode(),manifest.encode(),hashlib.sha256).hexdigest()
+        if not secrets.compare_digest(expected_signature,received_signature):
+            return self.json({'ok':False,'error':'Assinatura do webhook inválida.'},401)
+        if not access_token:
+            return self.json({'ok':False,'error':'Mercado Pago não configurado.'},503)
+        try:
+            request=urllib.request.Request(
+                f'https://api.mercadopago.com/v1/payments/{urllib.parse.quote(payment_id,safe="")}',
+                headers={'Authorization':f'Bearer {access_token}'}
+            )
+            with urllib.request.urlopen(request,timeout=12) as response:
+                payment=json.loads(response.read(65536).decode('utf-8'))
+        except Exception as error:
+            print('KV CELL MERCADO PAGO PAYMENT LOOKUP FAILED:',type(error).__name__,flush=True)
+            return self.json({'ok':False,'error':'Não foi possível validar o pagamento agora.'},503)
+        if str(payment.get('id') or '')!=payment_id:
+            return self.json({'ok':False,'error':'Pagamento não corresponde à notificação.'},400)
+        external_reference=str(payment.get('external_reference') or '')
+        if not external_reference or payment.get('payment_method_id')!='pix':
+            return self.json({'ok':False,'error':'Pagamento PIX não reconhecido.'},400)
         c=bot_db()
         try:
             c.execute('BEGIN IMMEDIATE')
-            row=c.execute('SELECT * FROM payments WHERE payment_id=?',(payment_id,)).fetchone()
+            row=c.execute('SELECT * FROM payments WHERE payment_id=? OR external_reference=?',(payment_id,external_reference)).fetchone()
             if not row:
                 c.rollback()
                 return self.json({'ok':True,'ignored':True})
+            if row['payment_id'] not in (payment_id,f'MPREF:{external_reference}'):
+                c.rollback()
+                return self.json({'ok':False,'error':'Referência do pagamento não confere.'},400)
+            try:
+                amount_matches=Decimal(str(payment.get('transaction_amount'))).quantize(Decimal('0.01'))==Decimal(str(row['amount'])).quantize(Decimal('0.01'))
+            except (InvalidOperation,TypeError,ValueError):
+                amount_matches=False
+            if not amount_matches or payment.get('currency_id')!='BRL':
+                c.rollback()
+                return self.json({'ok':False,'error':'Valor ou moeda do pagamento não confere.'},400)
+            if str(payment.get('status') or '').lower()!='approved':
+                c.execute('UPDATE payments SET payment_id=?,status=? WHERE id=?',(payment_id,str(payment.get('status') or 'PENDING').upper(),row['id']))
+                c.commit()
+                return self.json({'ok':True,'pending':True})
             if row['status']=='RECEIVED':
                 c.commit()
                 return self.json({'ok':True,'duplicate':True})
@@ -2531,9 +2586,9 @@ class Handler(BaseHTTPRequestHandler):
                 c.rollback()
                 return self.json({'ok':False,'error':'Usuário associado ao pagamento não encontrado.'},409)
             balance=round(float(account['balance'] or 0)+float(row['credits'] or 0),2)
-            c.execute("UPDATE payments SET status='RECEIVED' WHERE payment_id=?",(payment_id,))
+            c.execute("UPDATE payments SET payment_id=?,external_reference=?,status='RECEIVED' WHERE id=?",(payment_id,external_reference,row['id']))
             c.execute('UPDATE users SET balance=? WHERE telegram_id=?',(balance,row['telegram_id']))
-            c.execute('INSERT INTO credit_ledger(telegram_id,amount,balance_after,note,actor) VALUES(?,?,?,?,?)',(row['telegram_id'],float(row['credits'] or 0),balance,'Recarga PIX confirmada pelo Asaas','Asaas'))
+            c.execute('INSERT INTO credit_ledger(telegram_id,amount,balance_after,note,actor) VALUES(?,?,?,?,?)',(row['telegram_id'],float(row['credits'] or 0),balance,'Recarga PIX confirmada pelo Mercado Pago','Mercado Pago'))
             c.commit()
             if BOT_RUNTIME_MODULE and getattr(BOT_RUNTIME_MODULE,'bot',None):
                 try: BOT_RUNTIME_MODULE.bot.send_message(row['telegram_id'],f"✅ <b>RECARGA CONFIRMADA</b>\n💎 +{float(row['credits'] or 0):.2f} CRD")
@@ -2542,7 +2597,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.json({'ok':True})
         except Exception as error:
             c.rollback()
-            print('KV CELL ASAAS WEBHOOK ERROR:',type(error).__name__,flush=True)
+            print('KV CELL MERCADO PAGO WEBHOOK ERROR:',type(error).__name__,flush=True)
             return self.json({'ok':False,'error':'Falha ao registrar pagamento.'},500)
         finally:
             c.close()

@@ -29,18 +29,19 @@ Configure estas variáveis no ambiente da Square Cloud antes de iniciar o servi�
 | `TELEGRAM_TOKEN` | Token do bot criado no BotFather. |
 | `TELEGRAM_GROUP_ID` | ID do grupo de controle; adicione o bot ao grupo e permita que envie mensagens. |
 | `TELEGRAM_LOG_CHAT_ID` | Opcional; substitui o grupo de auditoria sem mudar o grupo principal. |
-| `ASAAS_API_KEY` | Chave privada da conta Asaas que criará as cobranças PIX. |
-| `ASAAS_WEBHOOK_TOKEN` | Segredo aleatório compartilhado com o webhook configurado no Asaas. |
+| `MERCADOPAGO_ACCESS_TOKEN` | Access Token privado da aplicação Mercado Pago que cria cobranças PIX e consulta os pagamentos. |
+| `MERCADOPAGO_WEBHOOK_SECRET` | Chave secreta de assinatura gerada nas notificações Webhooks do Mercado Pago. |
+| `MERCADOPAGO_WEBHOOK_URL` | URL pública do webhook; use `https://kvcell.squareweb.app/webhooks/mercadopago`. |
 | `PARTNER_API_URL` | Endpoint oficial do servidor parceiro. |
 | `PARTNER_API_USER` | Usuário/chave de acesso do parceiro, se o fornecedor exigir. |
 | `PARTNER_API_KEY` | Chave privada do parceiro. |
 | `BOT_DATABASE_PATH` | Caminho persistente do banco exclusivo do bot; mantenha o padrão `/application/data/kvcell_bot.db`. |
 
-Não cole tokens ou chaves no chat, no código, no navegador ou em commits. Configure segredos somente no painel de variáveis do provedor, reinicie o serviço e abra `/bot_kv` com uma conta administradora já cadastrada no KV CELL. O webhook do Asaas deve apontar para `https://kvcell.squareweb.app/webhooks/asaas` e usar o mesmo `ASAAS_WEBHOOK_TOKEN`.
+Não cole tokens ou chaves no chat, no código, no navegador ou em commits. Configure segredos somente no painel de variáveis do provedor, reinicie o serviço e abra `/bot_kv` com uma conta administradora já cadastrada no KV CELL. No painel de desenvolvedores do Mercado Pago, configure notificações Webhooks para pagamentos na URL `https://kvcell.squareweb.app/webhooks/mercadopago`; coloque a chave secreta gerada ali em `MERCADOPAGO_WEBHOOK_SECRET`. O bot pedirá o e-mail do cliente para criar o pagamento Pix. O servidor valida a assinatura do webhook e consulta o pagamento na API do Mercado Pago antes de liberar créditos.
 
 O arquivo recebido do bot não continha credenciais reais nem a especificação do comando de listagem da API do fornecedor. Por isso, pedidos ficam na fila como **PENDENTE** até serem processados no painel; o cancelamento devolve os créditos. Não é feita sincronização de catálogo nem envio automático de pedidos ao parceiro por tentativa/erro. Solicite ao fornecedor a documentação oficial de autenticação, listagem e payload de pedidos antes de habilitar essa integração.
 
-Para validar a conexão, use **Integrações → Verificar conexões**. Telegram e Asaas são consultados somente após o clique; a chave nunca é exibida. A tela informa a presença/configuração das credenciais do parceiro, mas não declara a API do parceiro como conectada sem uma operação oficial de teste.
+Para validar a conexão, use **Integrações → Verificar conexões**. Telegram e Mercado Pago são consultados somente após o clique; a chave nunca é exibida. A tela informa a presença/configuração das credenciais do parceiro, mas não declara a API do parceiro como conectada sem uma operação oficial de teste.
 
 > Deployment note: only the V4000 runtime behavior described at the beginning
 > of this file is active. The V500/V810/V1000 sections below are historical

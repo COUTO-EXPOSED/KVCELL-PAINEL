@@ -1,6 +1,5 @@
 
-import os, sqlite3, json, time, uuid, threading, asyncio, html, secrets
-from datetime import datetime
+import os, sqlite3, json, time, uuid, threading, asyncio, html, secrets, re, math
 from decimal import Decimal, ROUND_UP
 
 import requests
@@ -13,8 +12,9 @@ from io import BytesIO
 import base64
 
 TOKEN = os.getenv("TELEGRAM_TOKEN", "")
-ASAAS_API_KEY = os.getenv("ASAAS_API_KEY", "")
-ASAAS_WEBHOOK_TOKEN = os.getenv("ASAAS_WEBHOOK_TOKEN", "")
+MERCADOPAGO_ACCESS_TOKEN = os.getenv("MERCADOPAGO_ACCESS_TOKEN", "").strip()
+MERCADOPAGO_WEBHOOK_SECRET = os.getenv("MERCADOPAGO_WEBHOOK_SECRET", "").strip()
+MERCADOPAGO_WEBHOOK_URL = os.getenv("MERCADOPAGO_WEBHOOK_URL", "").strip() or "https://kvcell.squareweb.app/webhooks/mercadopago"
 PARTNER_API_URL = os.getenv("PARTNER_API_URL", "")
 PARTNER_API_USER = os.getenv("PARTNER_API_USER", "")
 PARTNER_API_KEY = os.getenv("PARTNER_API_KEY", "")
@@ -58,7 +58,8 @@ def init_db():
       result TEXT, price REAL DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
     CREATE TABLE IF NOT EXISTS payments(
-      id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id INTEGER, payment_id TEXT UNIQUE,
+      id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id INTEGER,
+      payment_id TEXT UNIQUE, external_reference TEXT,
       amount REAL, credits REAL, status TEXT DEFAULT 'PENDING',
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
@@ -71,6 +72,9 @@ def init_db():
     CREATE TABLE IF NOT EXISTS credit_ledger(id INTEGER PRIMARY KEY AUTOINCREMENT,telegram_id INTEGER,amount REAL,balance_after REAL,note TEXT,actor TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS audit_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,event TEXT,telegram_id INTEGER,details TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
     """)
+    payment_columns={row["name"] for row in c.execute("PRAGMA table_info(payments)").fetchall()}
+    if "external_reference" not in payment_columns:
+        c.execute("ALTER TABLE payments ADD COLUMN external_reference TEXT")
     c.commit(); c.close()
 
 def audit_event(event, uid=None, details="", notify=False):
@@ -245,7 +249,7 @@ if bot:
             bot.send_message(q.message.chat.id,text)
             bot.answer_callback_query(q.id)
 
-    @bot.message_handler(func=lambda m: m.from_user.id in pending)
+    @bot.message_handler(func=lambda m: m.from_user.id in pending and "fields" in pending[m.from_user.id])
     def collect(m):
         if not m.text:
             return bot.reply_to(m,"Envie o dado solicitado em texto para continuar.")
@@ -291,70 +295,84 @@ if bot:
 
     @bot.callback_query_handler(func=lambda q: q.data=="recharge")
     def recharge(q):
-        pending[q.from_user.id]={"recharge":True,"chat_id":q.message.chat.id}
+        pending[q.from_user.id]={"recharge_amount":True,"chat_id":q.message.chat.id}
         bot.send_message(q.message.chat.id,"💳 Quantos <b>CRD</b> você deseja comprar?\n\nMínimo: <b>5 CRD</b>\nDigite somente a quantidade.")
 
-    @bot.message_handler(func=lambda m: pending.get(m.from_user.id,{}).get("recharge"))
+    @bot.message_handler(func=lambda m: pending.get(m.from_user.id,{}).get("recharge_amount"))
     def recharge_amount(m):
-        try: amount=round(float(m.text.replace(",",".")),2)
-        except: return bot.reply_to(m,"Digite uma quantidade válida.")
-        if amount<5:return bot.reply_to(m,"O mínimo é 5 CRD.")
-        pending.pop(m.from_user.id,None)
-        if not ASAAS_API_KEY:return bot.reply_to(m,"⚠️ Pagamento ainda não está configurado.")
         try:
-            headers={"access_token":ASAAS_API_KEY,"Content-Type":"application/json"}
-            payload={"customer":None,"billingType":"PIX","value":amount,"dueDate":datetime.now().strftime("%Y-%m-%d"),"externalReference":str(m.from_user.id)}
-            # Create/find customer
-            customer={"name":m.from_user.first_name or "Cliente Telegram","externalReference":str(m.from_user.id)}
-            cr=requests.post("https://api.asaas.com/v3/customers",headers=headers,json=customer,timeout=30)
-            cr.raise_for_status(); cid=cr.json()["id"]; payload["customer"]=cid
-            pr=requests.post("https://api.asaas.com/v3/payments",headers=headers,json=payload,timeout=30); pr.raise_for_status()
-            pay=pr.json(); pix=requests.get(f"https://api.asaas.com/v3/payments/{pay['id']}/pixQrCode",headers=headers,timeout=30); pix.raise_for_status()
-            pdata=pix.json(); c=conn(); c.execute("INSERT OR IGNORE INTO payments(telegram_id,payment_id,amount,credits,status) VALUES(?,?,?,?,?)",(m.from_user.id,pay["id"],amount,amount,"PENDING")); c.commit(); c.close()
-            img=qrcode.make(pdata["payload"]); bio=BytesIO(); img.save(bio,"PNG"); bio.seek(0)
-            bot.send_photo(m.chat.id,bio,caption=f"💳 <b>RECARGA DE {amount:.2f} CRD</b>\n\n💰 Pague R$ {amount:.2f} via PIX.\n📋 Copia e cola:\n<code>{html.escape(pdata['payload'])}</code>\n\nOs créditos são liberados automaticamente após confirmação.")
-        except Exception as e:
-            bot.reply_to(m,"❌ Não consegui gerar o PIX agora. Tente novamente em alguns instantes.")
-            print("ASAAS",repr(e))
+            amount=round(float(m.text.replace(",",".")),2)
+            if not math.isfinite(amount): raise ValueError
+        except (AttributeError,ValueError):
+            return bot.reply_to(m,"Digite uma quantidade válida.")
+        if amount<5:return bot.reply_to(m,"O mínimo é 5 CRD.")
+        if amount>100000:return bot.reply_to(m,"O máximo por recarga é R$ 100.000,00.")
+        pending[m.from_user.id]={"recharge_email":True,"amount":amount,"chat_id":m.chat.id}
+        bot.send_message(m.chat.id,"📧 Informe seu e-mail para gerar o Pix pelo Mercado Pago:")
 
-@app.post("/webhooks/asaas")
-async def asaas_webhook(request: Request):
-    token=(request.headers.get("asaas-access-token") or request.headers.get("x-webhook-token","")).strip()
-    if not ASAAS_WEBHOOK_TOKEN:
-        return JSONResponse({"ok":False,"error":"webhook_not_configured"},status_code=503)
-    if not secrets.compare_digest(ASAAS_WEBHOOK_TOKEN,token):
-        return JSONResponse({"ok":False,"error":"unauthorized"},status_code=401)
-    data=await request.json(); event=data.get("event",""); payment=data.get("payment",{}); pid=payment.get("id")
-    print(f"📥 Asaas webhook: evento={event} payment={pid}")
-    if event in ("PAYMENT_RECEIVED","PAYMENT_CONFIRMED") and pid:
+    @bot.message_handler(func=lambda m: pending.get(m.from_user.id,{}).get("recharge_email"))
+    def recharge_email(m):
+        email=(m.text or "").strip()
+        if len(email)>254 or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+",email):
+            return bot.reply_to(m,"Digite um e-mail válido para continuar.")
+        state=pending.pop(m.from_user.id)
+        amount=state["amount"]
+        if not MERCADOPAGO_ACCESS_TOKEN:
+            return bot.send_message(state["chat_id"],"⚠️ Pagamento ainda não está configurado. Fale com o suporte.")
+        external_reference=uuid.uuid4().hex
+        pending_payment_id=f"MPREF:{external_reference}"
         c=conn()
         try:
-            c.execute("BEGIN IMMEDIATE")
-            row=c.execute("SELECT * FROM payments WHERE payment_id=?",(pid,)).fetchone()
-            if row and row["status"]!="RECEIVED":
-                user=c.execute("SELECT balance FROM users WHERE telegram_id=?",(row["telegram_id"],)).fetchone()
-                if not user:
-                    c.rollback()
-                    return JSONResponse({"ok":False,"error":"payment_user_not_found"},status_code=409)
-                balance=round(float(user["balance"] or 0)+float(row["credits"] or 0),2)
-                c.execute("UPDATE payments SET status='RECEIVED' WHERE payment_id=?",(pid,))
-                c.execute("UPDATE users SET balance=? WHERE telegram_id=?",(balance,row["telegram_id"]))
-                c.execute("INSERT INTO credit_ledger(telegram_id,amount,balance_after,note,actor) VALUES(?,?,?,?,?)",(row["telegram_id"],row["credits"],balance,"Recarga PIX confirmada pelo Asaas","Asaas"))
-                c.execute("INSERT INTO audit_logs(event,telegram_id,details) VALUES(?,?,?)",("Pagamento confirmado",row["telegram_id"],f"PIX {pid}; +{row['credits']:.2f} CRD"))
-                c.commit()
-                if bot:
-                    try: bot.send_message(row["telegram_id"],f"✅ <b>RECARGA CONFIRMADA</b>\n💎 +{row['credits']:.2f} CRD")
-                    except Exception as error: print("TELEGRAM PAYMENT NOTICE FAILED:",type(error).__name__)
-                audit_event("Pagamento PIX confirmado",row["telegram_id"],f"Pagamento {pid}; +{row['credits']:.2f} CRD",notify=True)
-            else:
-                c.commit()
+            c.execute("INSERT INTO payments(telegram_id,payment_id,external_reference,amount,credits,status) VALUES(?,?,?,?,?,?)",(m.from_user.id,pending_payment_id,external_reference,amount,amount,"PENDING"))
+            c.commit()
         except Exception as error:
             c.rollback()
-            print("ASAAS WEBHOOK PROCESSING FAILED:",type(error).__name__)
-            return JSONResponse({"ok":False,"error":"payment_processing_failed"},status_code=500)
+            print("MERCADO PAGO PAYMENT RECORD FAILED:",type(error).__name__)
+            return bot.send_message(state["chat_id"],"❌ Não consegui iniciar a cobrança. Tente novamente.")
         finally:
             c.close()
-    return {"ok":True}
+        try:
+            payload={
+                "transaction_amount":amount,
+                "description":f"Recarga de {amount:.2f} créditos KV CELL",
+                "payment_method_id":"pix",
+                "external_reference":external_reference,
+                "notification_url":MERCADOPAGO_WEBHOOK_URL,
+                "payer":{"email":email,"first_name":(m.from_user.first_name or "Cliente")[:60]},
+            }
+            response=requests.post(
+                "https://api.mercadopago.com/v1/payments",
+                headers={"Authorization":f"Bearer {MERCADOPAGO_ACCESS_TOKEN}","Content-Type":"application/json","X-Idempotency-Key":external_reference},
+                json=payload,
+                timeout=30,
+            )
+            response.raise_for_status()
+            payment=response.json()
+            payment_id=str(payment.get("id") or "")
+            transaction_data=(payment.get("point_of_interaction") or {}).get("transaction_data") or {}
+            qr_payload=str(transaction_data.get("qr_code") or "")
+            if not payment_id or not qr_payload:
+                raise ValueError("Mercado Pago não retornou o ID e o código Pix.")
+            c=conn()
+            try:
+                c.execute("UPDATE payments SET payment_id=?,external_reference=? WHERE payment_id=?",(payment_id,external_reference,pending_payment_id))
+                c.commit()
+            finally:
+                c.close()
+            image=BytesIO()
+            qrcode.make(qr_payload).save(image,"PNG")
+            image.seek(0)
+            caption=f"💳 <b>RECARGA DE {amount:.2f} CRD</b>\n\n💰 Pague R$ {amount:.2f} via Pix.\n📋 Copia e cola:\n<code>{html.escape(qr_payload)}</code>\n\nOs créditos serão liberados após confirmação do Mercado Pago."
+            bot.send_photo(state["chat_id"],image,caption=caption)
+        except Exception as error:
+            c=conn()
+            try:
+                c.execute("UPDATE payments SET status='FAILED' WHERE payment_id=?",(pending_payment_id,))
+                c.commit()
+            finally:
+                c.close()
+            print("MERCADO PAGO PIX CREATION FAILED:",type(error).__name__)
+            bot.send_message(state["chat_id"],"❌ Não consegui gerar o Pix agora. Tente novamente em alguns instantes.")
 
 def admin_guard(password):
     raise HTTPException(410,"Painel legado desativado. Use o painel autenticado do KV CELL em /bot_kv.")
@@ -442,7 +460,7 @@ def admin_settings(p:str=""):
     admin_guard(p)
     return f"""<html><head>{STYLE}</head><body><main><h2>⚙️ Configurações</h2><div class=card><form method=post>
     <label>USD → BRL</label><input name=usd_rate value="{setting('usd_rate','5.40')}">
-    <label>Taxa fixa Asaas por cobrança</label><input name=payment_fee value="{setting('payment_fee','0.99')}">
+    <label>Acréscimo fixo por cobrança PIX</label><input name=payment_fee value="{setting('payment_fee','0.99')}">
     <label>Link do suporte</label><input name=support_url value="{setting('support_url','')}">
     <button>Salvar</button></form></div></main></body></html>"""
 
