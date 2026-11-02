@@ -2,7 +2,8 @@
   const root = document.querySelector('#bot-app');
   const items = [
     ['dashboard', 'Visão geral', '◫'],
-    ['services', 'Serviços', '▤'],
+    ['catalog', 'Catálogo API', '⌁'],
+    ['services', 'Meus serviços', '▤'],
     ['users', 'Usuários e créditos', '◉'],
     ['orders', 'Registros', '↗'],
     ['payments', 'Pagamentos', '＄'],
@@ -175,11 +176,20 @@
     </div>`;
   }
 
+  async function catalog() {
+    const list = await api('/api/bot/partner/catalog');
+    const render = items => items.map(item => `<tr><td><b>${esc(item.name)}</b><small>ID fornecedor: ${esc(item.provider_service_id)}</small></td><td>${esc(item.category || '—')}<small>${esc(item.subcategory || '')}</small></td><td>${Number(item.cost_usd || 0).toFixed(4)} USD</td><td><button class="button secondary" data-action="catalog-import" data-id="${esc(item.provider_service_id)}">Selecionar e editar</button></td></tr>`).join('') || '<tr><td colspan="4" class="empty-state">Sincronize o catálogo para carregar os serviços do servidor.</td></tr>';
+    root.querySelector('#content').innerHTML = `${pageHead('Catálogo direto da API', 'Aqui você vê os serviços encontrados no servidor. Nada é cadastrado manualmente: escolha um serviço, importe e edite nome, valor, descrição e mensagens.', '<button class="button primary" data-action="catalog-sync">↻ Buscar todos os serviços do servidor</button>')}
+      <section class="panel"><div class="notice">A sincronização usa <b>imeiservicelist</b> da API DHRU. O catálogo é salvo localmente apenas para você pesquisar e selecionar; importar não envia nenhum pedido ao fornecedor.</div><div class="search-row"><input id="catalog-search" class="input" placeholder="Pesquisar por nome, categoria, subcategoria ou ID"></div></section>
+      <section class="panel table-panel"><div class="table-wrap"><table><thead><tr><th>Serviço</th><th>Categoria</th><th>Custo fornecedor</th><th>Ação</th></tr></thead><tbody id="catalog-rows">${render(list)}</tbody></table></div></section>`;
+    root.querySelector('#catalog-search')?.addEventListener('input', event => { const q=event.target.value.toLowerCase(); root.querySelector('#catalog-rows').innerHTML=render(list.filter(x=>[x.name,x.category,x.subcategory,x.provider_service_id].join(' ').toLowerCase().includes(q))); });
+  }
+
   async function services() {
     const [servicesList, categories] = await Promise.all([api('/api/bot/services'), api('/api/bot/categories')]);
     const categoryButtons = categories.map(category => `<span class="category-chip">${esc(category.name)}<button type="button" class="category-remove" data-action="category-delete" data-id="${category.id}" aria-label="Remover categoria ${esc(category.name)}">×</button></span>`).join('');
     root.querySelector('#content').innerHTML = `${pageHead('Serviços e categorias', 'Cadastre o que o bot oferece, os campos do formulário e as margens por perfil.',
-      '<button class="button secondary" data-action="category-new">＋ Categoria</button><button class="button primary" data-action="service-new">＋ Novo serviço</button>')}
+      '<button class="button secondary" data-go="catalog">⌁ Escolher da API</button>')}
       <div class="category-row">${categoryButtons || '<span class="muted">Cadastre uma categoria para organizar os serviços.</span>'}</div>
       <section class="panel table-panel"><div class="table-wrap"><table><thead><tr><th>Serviço</th><th>Categoria</th><th>Custo USD</th><th>Preço cliente</th><th>Preço logista</th><th>Preço unlocker</th><th>Estado</th><th></th></tr></thead><tbody>
       ${servicesList.map(service => `<tr><td><b>${esc(service.name)}</b><small>${esc(service.kind)}${service.provider_service_id ? ` · ID ${esc(service.provider_service_id)}` : ''}</small></td><td>${esc(service.category_name || '—')}</td><td>${money(service.cost_usd)}</td><td>${money(clientPrice(service))}</td><td>${money(rolePrice(service, 'LOGISTA'))}</td><td>${money(rolePrice(service, 'UNLOCKER'))}</td><td>${statusTag(service.active ? 'Ativo' : 'Inativo')}</td><td class="actions"><button class="icon-button" data-action="service-edit" data-id="${service.id}" title="Editar">✎</button>${service.active ? `<button class="icon-button danger" data-action="service-disable" data-id="${service.id}" title="Desativar">×</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="8" class="empty-state">Nenhum serviço cadastrado.</td></tr>'}
@@ -260,7 +270,7 @@
           <button class="button primary">Salvar parâmetros</button>
         </form>
       </section></div>
-      <section class="panel partner-note"><div class="panel-heading"><div><h3>Catálogo do servidor parceiro</h3><p>Importação protegida para não criar pedidos ou preços incorretos.</p></div>${statusTag(data.credentials.partner_url && data.credentials.partner_key ? 'Configuração presente' : 'Não configurado')}</div><p>${esc(data.partner_sync)}</p><p class="subtle">O pacote enviado não inclui documentação do formato de listagem da API do fornecedor. Com as chaves disponíveis, o painel ainda precisa do endpoint/operação oficial para buscar o catálogo com segurança.</p></section>`;
+      <section class="panel partner-note"><div class="panel-heading"><div><h3>Catálogo do servidor parceiro</h3><p>Importação protegida para não criar pedidos ou preços incorretos.</p></div>${statusTag(data.credentials.partner_url && data.credentials.partner_key ? 'Configuração presente' : 'Não configurado')}</div><p>${esc(data.partner_sync)}</p><button class="button secondary" data-go="catalog">Abrir catálogo da API</button></section>`;
   }
 
   async function refreshLive() {
@@ -329,6 +339,8 @@
         modal.setAttribute('aria-hidden', 'true');
         return;
       }
+      if (action === 'catalog-sync') { button.disabled=true; button.textContent='Buscando...'; const r=await api('/api/bot/partner/catalog/sync',{method:'POST',body:'{}'}); toast(`${r.count} serviço(s) encontrados no servidor.`); return openPage('catalog'); }
+      if (action === 'catalog-import') { const r=await api('/api/bot/partner/catalog/import',{method:'POST',body:JSON.stringify({provider_service_id:id})}); toast(r.existing?'Serviço já estava importado.':'Serviço importado. Agora configure os dados.'); await openPage('services'); return showServiceForm(r.id); }
       if (action === 'service-new') return showServiceForm();
       if (action === 'service-edit') return showServiceForm(id);
       if (action === 'category-new') {
