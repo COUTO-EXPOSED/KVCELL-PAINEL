@@ -505,6 +505,7 @@ def bot_db():
     CREATE TABLE IF NOT EXISTS notices(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT,body TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS credit_ledger(id INTEGER PRIMARY KEY AUTOINCREMENT,telegram_id INTEGER,amount REAL,balance_after REAL,note TEXT,actor TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS audit_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,event TEXT,telegram_id INTEGER,details TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS api_catalog(id INTEGER PRIMARY KEY AUTOINCREMENT,provider_service_id TEXT UNIQUE,category TEXT,subcategory TEXT,name TEXT,description TEXT,cost_usd REAL DEFAULT 0,raw_json TEXT,updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
     ''')
     payment_columns={row['name'] for row in c.execute('PRAGMA table_info(payments)').fetchall()}
     if 'external_reference' not in payment_columns:
@@ -601,6 +602,55 @@ def bot_service_values(data):
     if isinstance(is_active,str): is_active=is_active.strip().lower() not in ('0','false','off','')
     return (category_id,name,str(data.get('description') or '')[:2000],str(data.get('provider_service_id') or '')[:120],category_kind,cost,minimum,*margins,fields,int(bool(is_active)),str(data.get('tutorial_url') or '')[:500],str(data.get('download_url') or '')[:500],str(data.get('before_message') or '')[:1000])
 
+def dhru_request(action, extra=None):
+    """DHRU Fusion compatible form request. Credentials stay in environment."""
+    url=os.environ.get('PARTNER_API_URL','').strip()
+    username=os.environ.get('PARTNER_API_USER','').strip()
+    key=os.environ.get('PARTNER_API_KEY','').strip()
+    if not (url and username and key):
+        raise ValueError('Configure PARTNER_API_URL, PARTNER_API_USER e PARTNER_API_KEY.')
+    payload={'username':username,'apiaccesskey':key,'action':action,'requestformat':'JSON'}
+    if extra: payload.update(extra)
+    encoded=urllib.parse.urlencode(payload).encode('utf-8')
+    req=urllib.request.Request(url,data=encoded,headers={'Content-Type':'application/x-www-form-urlencoded','User-Agent':'KV-CELL-UNLOCKER/1.0'},method='POST')
+    try:
+        with urllib.request.urlopen(req,timeout=25) as resp:
+            raw=resp.read(5_000_000).decode('utf-8','replace')
+    except urllib.error.HTTPError as e:
+        raw=e.read(100000).decode('utf-8','replace')
+        raise ValueError(f'DHRU HTTP {e.code}: {raw[:500]}')
+    try: return json.loads(raw)
+    except json.JSONDecodeError: raise ValueError('O servidor não retornou JSON válido: '+raw[:500])
+
+def dhru_extract_services(payload):
+    """Accepts different DHRU Fusion response layouts and extracts every service with SERVICEID."""
+    found=[]; seen=set()
+    def walk(node, category='', subcategory=''):
+        if isinstance(node,dict):
+            upper={str(k).upper():v for k,v in node.items()}
+            sid=upper.get('SERVICEID',upper.get('ID',upper.get('SERVICE_ID')))
+            name=upper.get('SERVICENAME',upper.get('SERVICE_NAME',upper.get('NAME')))
+            cat=upper.get('CATEGORYNAME',upper.get('CATEGORY',category))
+            sub=upper.get('SUBCATEGORYNAME',upper.get('SUBCATEGORY',subcategory))
+            if sid is not None and name:
+                key=str(sid)
+                if key not in seen:
+                    seen.add(key)
+                    cost=upper.get('COST',upper.get('PRICE',upper.get('COST_USD',0)))
+                    try: cost=float(str(cost).replace(',','.'))
+                    except: cost=0.0
+                    desc=upper.get('DESCRIPTION',upper.get('DESC',''))
+                    found.append({'provider_service_id':key,'category':str(cat or 'Sem categoria'),'subcategory':str(sub or ''),'name':str(name),'description':str(desc or ''),'cost_usd':cost,'raw':node})
+            for k,v in node.items():
+                kl=str(k).lower()
+                nextcat=category; nextsub=subcategory
+                if kl in ('category','categoryname') and isinstance(v,str): nextcat=v
+                walk(v,nextcat,nextsub)
+        elif isinstance(node,list):
+            for item in node: walk(item,category,subcategory)
+    walk(payload)
+    return found
+
 def bot_api_response(handler,method,path,data,query,user):
     if not path.startswith('/api/bot/'):
         return False
@@ -610,6 +660,45 @@ def bot_api_response(handler,method,path,data,query,user):
     route=path[len('/api/bot/'):]
     c=bot_db()
     try:
+        if method=='POST' and route=='partner/catalog/sync':
+            payload=dhru_request('imeiservicelist')
+            if isinstance(payload,dict) and payload.get('ERROR'):
+                msg='; '.join(str(x.get('MESSAGE',x)) for x in payload.get('ERROR',[]))
+                raise ValueError(msg or 'Servidor parceiro retornou erro.')
+            services=dhru_extract_services(payload)
+            if not services:
+                raise ValueError('Nenhum serviço foi identificado na resposta da API. A resposta foi mantida no log técnico; confirme o formato/autorizações do fornecedor.')
+            c.execute('DELETE FROM api_catalog')
+            for item in services:
+                c.execute('INSERT OR REPLACE INTO api_catalog(provider_service_id,category,subcategory,name,description,cost_usd,raw_json,updated_at) VALUES(?,?,?,?,?,?,?,CURRENT_TIMESTAMP)',(item['provider_service_id'],item['category'],item['subcategory'],item['name'],item['description'],item['cost_usd'],json.dumps(item['raw'],ensure_ascii=False)))
+            c.commit()
+            c.execute('INSERT INTO audit_logs(event,details) VALUES(?,?)',('Catálogo DHRU sincronizado',f'{len(services)} serviços encontrados')) ; c.commit()
+            handler.json({'ok':True,'count':len(services),'raw_keys':list(payload.keys()) if isinstance(payload,dict) else []}); return True
+        if method=='GET' and route=='partner/catalog':
+            q=(query.get('q',[''])[0] or '').strip()
+            sql='SELECT * FROM api_catalog'; args=[]
+            if q:
+                like='%'+q+'%'; sql+=' WHERE name LIKE ? OR category LIKE ? OR subcategory LIKE ? OR provider_service_id LIKE ?'; args=[like,like,like,like]
+            sql+=' ORDER BY category,subcategory,name LIMIT 5000'
+            handler.json([dict(row) for row in c.execute(sql,args).fetchall()]); return True
+        if method=='POST' and route=='partner/catalog/import':
+            pid=str(data.get('provider_service_id') or '').strip()
+            row=c.execute('SELECT * FROM api_catalog WHERE provider_service_id=?',(pid,)).fetchone()
+            if not row: raise ValueError('Serviço não encontrado no catálogo sincronizado.')
+            existing=c.execute('SELECT id FROM services WHERE provider_service_id=?',(pid,)).fetchone()
+            if existing: handler.json({'ok':True,'id':existing['id'],'existing':True}); return True
+            cat=c.execute('SELECT id FROM categories WHERE name=? AND parent_id IS NULL',(row['category'],)).fetchone()
+            if not cat:
+                cur=c.execute('INSERT INTO categories(name,parent_id) VALUES(?,NULL)',(row['category'],)); catid=cur.lastrowid
+            else: catid=cat['id']
+            if row['subcategory']:
+                sub=c.execute('SELECT id FROM categories WHERE name=? AND parent_id=?',(row['subcategory'],catid)).fetchone()
+                if not sub:
+                    cur=c.execute('INSERT INTO categories(name,parent_id) VALUES(?,?)',(row['subcategory'],catid)); category_id=cur.lastrowid
+                else: category_id=sub['id']
+            else: category_id=catid
+            cur=c.execute('INSERT INTO services(category_id,name,description,provider_service_id,cost_usd,active) VALUES(?,?,?,?,?,0)',(category_id,row['name'],row['description'],pid,row['cost_usd']))
+            c.commit(); handler.json({'ok':True,'id':cur.lastrowid}); return True
         if method=='GET' and route=='dashboard':
             result={
                 'users':c.execute('SELECT COUNT(*) n FROM users').fetchone()['n'],
@@ -682,7 +771,7 @@ def bot_api_response(handler,method,path,data,query,user):
             handler.json({'ok':True,'status':status}); return True
         if method=='GET' and route=='config':
             values={row['key']:row['value'] for row in c.execute('SELECT key,value FROM settings').fetchall()}
-            handler.json({'credentials':bot_config_status(),'settings':{'usd_rate':values.get('usd_rate','5.40'),'payment_fee':values.get('payment_fee','0.99'),'support_url':values.get('support_url',''),'telegram_group_id':os.environ.get('TELEGRAM_LOG_CHAT_ID') or os.environ.get('TELEGRAM_GROUP_ID','')},'partner_sync':'A sincronização de catálogo depende do protocolo/documentação do fornecedor; nenhuma chamada de pedido é feita sem validação.'}); return True
+            handler.json({'credentials':bot_config_status(),'settings':{'usd_rate':values.get('usd_rate','5.40'),'payment_fee':values.get('payment_fee','0.99'),'support_url':values.get('support_url',''),'telegram_group_id':os.environ.get('TELEGRAM_LOG_CHAT_ID') or os.environ.get('TELEGRAM_GROUP_ID','')},'partner_sync':'DHRU Fusion: use a aba Catálogo API para sincronizar imeiservicelist, escolher um serviço e importar apenas os selecionados para edição.'}); return True
         if method=='POST' and route=='categories':
             name=str(data.get('name','')).strip()
             parent_id=int(data['parent_id']) if str(data.get('parent_id') or '').strip() else None
