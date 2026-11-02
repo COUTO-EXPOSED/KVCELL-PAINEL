@@ -71,6 +71,7 @@ def init_db():
     CREATE TABLE IF NOT EXISTS notices(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT,body TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS credit_ledger(id INTEGER PRIMARY KEY AUTOINCREMENT,telegram_id INTEGER,amount REAL,balance_after REAL,note TEXT,actor TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS audit_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,event TEXT,telegram_id INTEGER,details TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS provider_services(id INTEGER PRIMARY KEY AUTOINCREMENT,provider_service_id TEXT UNIQUE,name TEXT,category TEXT,subcategory TEXT,cost_usd REAL DEFAULT 0,raw_json TEXT,imported_at TEXT DEFAULT CURRENT_TIMESTAMP);
     """)
     payment_columns={row["name"] for row in c.execute("PRAGMA table_info(payments)").fetchall()}
     if "external_reference" not in payment_columns:
@@ -97,6 +98,55 @@ def setting(key, default=""):
 
 def set_setting(key,val):
     c=conn(); c.execute("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(key,str(val))); c.commit(); c.close()
+
+
+def admin_guard(password):
+    expected=os.getenv("ADMIN_PASSWORD", "").strip()
+    if not expected:
+        raise HTTPException(503,"ADMIN_PASSWORD não configurada.")
+    if not secrets.compare_digest(str(password or ""),expected):
+        raise HTTPException(401,"Senha administrativa inválida.")
+
+def dhru_request(action, extra=None):
+    """Comunicação padrão DHRU Fusion: POST para index.php com action/requestformat."""
+    if not all([PARTNER_API_URL.strip(),PARTNER_API_USER.strip(),PARTNER_API_KEY.strip()]):
+        raise RuntimeError("PARTNER_API_URL, PARTNER_API_USER e PARTNER_API_KEY precisam estar configuradas.")
+    payload={"username":PARTNER_API_USER.strip(),"apiaccesskey":PARTNER_API_KEY.strip(),"action":action,"requestformat":"JSON"}
+    if extra: payload.update(extra)
+    r=requests.post(PARTNER_API_URL.strip(),data=payload,timeout=(10,45))
+    r.raise_for_status()
+    try: data=r.json()
+    except Exception: raise RuntimeError("O servidor não retornou JSON válido: "+r.text[:300])
+    if isinstance(data,dict) and data.get("ERROR"):
+        msg=data.get("ERROR")
+        if isinstance(msg,list): msg="; ".join(str(x.get("MESSAGE",x)) for x in msg)
+        raise RuntimeError(str(msg))
+    return data
+
+def flatten_provider_services(obj, category="", subcategory=""):
+    """Aceita variações de resposta DHRU sem inventar campos inexistentes."""
+    found=[]
+    def walk(x,cat,sub):
+        if isinstance(x,list):
+            for v in x: walk(v,cat,sub)
+        elif isinstance(x,dict):
+            keys={str(k).upper():v for k,v in x.items()}
+            sid=keys.get("SERVICEID") or keys.get("SERVICE_ID") or keys.get("ID")
+            name=keys.get("SERVICENAME") or keys.get("SERVICE_NAME") or keys.get("NAME")
+            ncat=keys.get("CATEGORY") or keys.get("CATEGORYNAME") or cat
+            nsub=keys.get("SUBCATEGORY") or keys.get("SUBCATEGORYNAME") or sub
+            cost=keys.get("COST") or keys.get("PRICE") or keys.get("CREDIT") or 0
+            if sid is not None and name:
+                try: cost=float(str(cost).replace(',','.'))
+                except: cost=0.0
+                found.append({"provider_service_id":str(sid),"name":str(name),"category":str(ncat or "Sem categoria"),"subcategory":str(nsub or ""),"cost_usd":cost,"raw_json":json.dumps(x,ensure_ascii=False)})
+            else:
+                for v in x.values():
+                    if isinstance(v,(dict,list)): walk(v,ncat,nsub)
+    walk(obj,category,subcategory)
+    unique={}
+    for x in found: unique[x['provider_service_id']]=x
+    return list(unique.values())
 
 def get_user(uid, username="", name=""):
     c=conn(); r=c.execute("SELECT * FROM users WHERE telegram_id=?",(uid,)).fetchone()
@@ -290,7 +340,22 @@ if bot:
             c.close()
         bot.send_message(st["chat_id"],f"✅ <b>PEDIDO #{oid} CRIADO</b>\n🛠 {html.escape(s['name'])}\n💎 {price:.2f} CRD\n📌 PENDENTE · aguardando processamento")
         audit_event("Pedido recebido",uid,f"Pedido #{oid}; serviço: {s['name']}; valor: {price:.2f} CRD. Dados do formulário mantidos fora do grupo.",notify=True)
-        # Provider requests stay disabled until the vendor's request format is verified.
+        # Envia para DHRU somente quando o serviço tiver SERVICEID importado.
+        if s["provider_service_id"]:
+            try:
+                # CUSTOMFIELD é enviado como JSON; alguns provedores exigem outro formato.
+                # O pedido é registrado primeiro para impedir perda de CRD em caso de falha local.
+                response=dhru_request("placeimeiorder",{"serviceid":str(s["provider_service_id"]),"quantity":"1","customfield":json.dumps(st["data"],ensure_ascii=False)})
+                raw=json.dumps(response,ensure_ascii=False)[:10000]
+                ext=""
+                if isinstance(response,dict):
+                    ext=str(response.get("ORDERID") or response.get("orderid") or response.get("ID") or "")
+                c=conn(); c.execute("UPDATE orders SET external_id=?,status=?,result=? WHERE id=?",(ext,"PROCESSANDO",raw,oid)); c.commit(); c.close()
+                bot.send_message(st["chat_id"],f"🔌 Pedido #{oid} enviado ao fornecedor e está em processamento.")
+            except Exception as error:
+                # Não reembolsa automaticamente: o pedido local permanece auditável para evitar crédito duplicado.
+                c=conn(); c.execute("UPDATE orders SET status=?,result=? WHERE id=?",("ERRO_API",str(error)[:1000],oid)); c.commit(); c.close()
+                bot.send_message(st["chat_id"],f"⚠️ O pedido #{oid} foi registrado, mas a API do fornecedor retornou erro. A equipe deve revisar antes de novo envio.")
         pending.pop(uid,None)
 
     @bot.callback_query_handler(func=lambda q: q.data=="recharge")
@@ -374,16 +439,13 @@ if bot:
             print("MERCADO PAGO PIX CREATION FAILED:",type(error).__name__)
             bot.send_message(state["chat_id"],"❌ Não consegui gerar o Pix agora. Tente novamente em alguns instantes.")
 
-def admin_guard(password):
-    raise HTTPException(410,"Painel legado desativado. Use o painel autenticado do KV CELL em /bot_kv.")
-
 STYLE="""<style>body{font-family:Arial;background:#0d0d0d;color:#eee;margin:0}main{max-width:1100px;margin:auto;padding:20px}.card{background:#181818;border:1px solid #333;padding:16px;margin:12px 0;border-radius:10px}input,textarea,select{width:100%;padding:9px;margin:5px 0;background:#111;color:#fff;border:1px solid #555;border-radius:6px}button,a.btn{background:#f4c400;color:#111;padding:9px 14px;border:0;border-radius:6px;font-weight:bold;text-decoration:none;display:inline-block}table{width:100%;border-collapse:collapse}td,th{padding:8px;border-bottom:1px solid #333;text-align:left}</style>"""
 
 @app.get("/admin",response_class=HTMLResponse)
 def admin(p:str=""):
     admin_guard(p)
     c=conn(); users=c.execute("SELECT COUNT(*) n FROM users").fetchone()["n"]; services=c.execute("SELECT COUNT(*) n FROM services").fetchone()["n"]; orders=c.execute("SELECT COUNT(*) n FROM orders").fetchone()["n"]; c.close()
-    nav=f'<p><a class="btn" href="/admin/services?p={p}">Serviços</a> <a class="btn" href="/admin/categories?p={p}">Categorias</a> <a class="btn" href="/admin/users?p={p}">Clientes</a> <a class="btn" href="/admin/content?p={p}">Conteúdos</a> <a class="btn" href="/admin/notices?p={p}">Avisos</a> <a class="btn" href="/admin/settings?p={p}">Configurações</a></p>'
+    nav=f'<p><a class="btn" href="/admin/services?p={p}">Serviços</a> <a class="btn" href="/admin/api-services?p={p}">API DHRU</a> <a class="btn" href="/admin/categories?p={p}">Categorias</a> <a class="btn" href="/admin/users?p={p}">Clientes</a> <a class="btn" href="/admin/content?p={p}">Conteúdos</a> <a class="btn" href="/admin/notices?p={p}">Avisos</a> <a class="btn" href="/admin/settings?p={p}">Configurações</a></p>'
     return f"<html><head>{STYLE}</head><body><main><h1>⚡ KV CELL UNLOCKER</h1>{nav}<div class=card>👤 Clientes: {users} | 🛠 Serviços: {services} | 📦 Pedidos: {orders}</div></main></body></html>"
 
 @app.get("/admin/categories",response_class=HTMLResponse)
@@ -396,6 +458,48 @@ def admin_categories(p:str=""):
 @app.post("/admin/categories")
 def add_category(p:str=Form(""),name:str=Form(...),parent_id:str=Form("")):
     admin_guard(p); c=conn(); c.execute("INSERT INTO categories(name,parent_id) VALUES(?,?)",(name.strip(),int(parent_id) if parent_id else None)); c.commit(); c.close(); return RedirectResponse(f"/admin/categories?p={p}",303)
+
+@app.get("/admin/api-services",response_class=HTMLResponse)
+def admin_api_services(p:str="",q:str=""):
+    admin_guard(p)
+    c=conn(); rows=c.execute("SELECT * FROM provider_services WHERE name LIKE ? OR category LIKE ? OR subcategory LIKE ? ORDER BY category,subcategory,name",('%'+q+'%',)*3).fetchall(); c.close()
+    table=''.join(f"<tr><td>{html.escape(r['category'] or '')}</td><td>{html.escape(r['subcategory'] or '')}</td><td>{html.escape(r['name'])}</td><td>{r['cost_usd']:.4f} USD</td><td><a class=btn href='/admin/api-services/{r['id']}/import?p={p}'>Importar</a></td></tr>" for r in rows)
+    return f"<html><head>{STYLE}</head><body><main><h2>🔌 Catálogo da API DHRU</h2><p><a class=btn href='/admin/services?p={p}'>⬅️ Serviços do Bot</a> <a class=btn href='/admin/api-services/sync?p={p}'>🔄 Buscar serviços no servidor</a></p><form><input type=hidden name=p value='{html.escape(p)}'><input name=q value='{html.escape(q)}' placeholder='🔎 Pesquisar nome, categoria ou subcategoria'><button>Pesquisar</button></form><div class=card>Os serviços são somente lidos da API. Clique em <b>Importar</b> para abrir a configuração do serviço no bot.</div><table><tr><th>Categoria</th><th>Subcategoria</th><th>Serviço</th><th>Custo API</th><th></th></tr>{table or '<tr><td colspan=5>Nenhum serviço sincronizado ainda.</td></tr>'}</table></main></body></html>"
+
+@app.get("/admin/api-services/sync")
+def sync_api_services(p:str=""):
+    admin_guard(p)
+    data=dhru_request("imeiservicelist")
+    items=flatten_provider_services(data)
+    if not items: raise HTTPException(502,"A API respondeu, mas nenhum SERVICEID/NOME reconhecível foi encontrado. A resposta foi preservada no log do servidor.")
+    c=conn()
+    try:
+        for x in items:
+            c.execute("INSERT INTO provider_services(provider_service_id,name,category,subcategory,cost_usd,raw_json,imported_at) VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(provider_service_id) DO UPDATE SET name=excluded.name,category=excluded.category,subcategory=excluded.subcategory,cost_usd=excluded.cost_usd,raw_json=excluded.raw_json,imported_at=CURRENT_TIMESTAMP",(x['provider_service_id'],x['name'],x['category'],x['subcategory'],x['cost_usd'],x['raw_json']))
+        c.commit()
+    finally: c.close()
+    return RedirectResponse(f"/admin/api-services?p={p}",303)
+
+@app.get("/admin/api-services/{pid}/import")
+def import_api_service(pid:int,p:str=""):
+    admin_guard(p); c=conn(); r=c.execute("SELECT * FROM provider_services WHERE id=?",(pid,)).fetchone()
+    if not r: c.close(); raise HTTPException(404)
+    # cria categoria/subcategoria preservando a árvore
+    cat=c.execute("SELECT id FROM categories WHERE name=? AND parent_id IS NULL",(r['category'],)).fetchone()
+    if not cat:
+        cur=c.execute("INSERT INTO categories(name,parent_id) VALUES(?,NULL)",(r['category'],)); cat_id=cur.lastrowid
+    else: cat_id=cat['id']
+    target=cat_id
+    if r['subcategory']:
+        sub=c.execute("SELECT id FROM categories WHERE name=? AND parent_id=?",(r['subcategory'],cat_id)).fetchone()
+        if not sub: cur=c.execute("INSERT INTO categories(name,parent_id) VALUES(?,?)",(r['subcategory'],cat_id)); target=cur.lastrowid
+        else: target=sub['id']
+    exists=c.execute("SELECT id FROM services WHERE provider_service_id=?",(r['provider_service_id'],)).fetchone()
+    if exists: sid=exists['id']
+    else:
+        cur=c.execute("INSERT INTO services(category_id,name,description,provider_service_id,cost_usd,fields_json) VALUES(?,?,?,?,?,?)",(target,r['name'],f"Importado da API DHRU • ID {r['provider_service_id']}",r['provider_service_id'],r['cost_usd'],'[]')); sid=cur.lastrowid
+    c.commit(); c.close()
+    return RedirectResponse(f"/admin/services/{sid}/edit?p={p}",303)
 
 @app.get("/admin/services",response_class=HTMLResponse)
 def admin_services(p:str="",q:str=""):
@@ -419,17 +523,17 @@ def edit_service(sid:int,p:str=""):
     def esc(v): return str(v or "").replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace('"',"&quot;")
     return f"""<html><head>{STYLE}</head><body><main><h2>✏️ Editar serviço #{sid}</h2><div class=card><form method=post>
     <select name=category_id>{opts}</select><input name=name value="{esc(s['name'])}"><textarea name=description>{esc(s['description'])}</textarea>
-    <input name=cost_usd value="{s['cost_usd']}" placeholder="Custo USD"><input name=min_add value="{s['min_add']}" placeholder="Acréscimo mínimo">
+    <input name=provider_service_id value="{esc(s['provider_service_id'])}" placeholder="ID original da API DHRU"><input name=cost_usd value="{s['cost_usd']}" placeholder="Custo USD"><input name=min_add value="{s['min_add']}" placeholder="Acréscimo mínimo">
     <input name=margin_logista value="{s['margin_logista']}"><input name=margin_unlocker value="{s['margin_unlocker']}"><input name=margin_cliente value="{s['margin_cliente']}">
     <textarea name=fields_json>{esc(s['fields_json'])}</textarea><input name=tutorial_url value="{esc(s['tutorial_url'])}" placeholder="Tutorial"><input name=download_url value="{esc(s['download_url'])}" placeholder="Download">
     <button>💾 Salvar serviço</button></form></div></main></body></html>"""
 
 @app.post("/admin/services/{sid}/edit")
-def save_service(sid:int,p:str=Form(""),category_id:int=Form(...),name:str=Form(...),description:str=Form(""),cost_usd:float=Form(0),min_add:float=Form(0),margin_logista:float=Form(40),margin_unlocker:float=Form(30),margin_cliente:float=Form(30),fields_json:str=Form("[]"),tutorial_url:str=Form(""),download_url:str=Form("")):
+def save_service(sid:int,p:str=Form(""),category_id:int=Form(...),name:str=Form(...),description:str=Form(""),cost_usd:float=Form(0),min_add:float=Form(0),margin_logista:float=Form(40),margin_unlocker:float=Form(30),margin_cliente:float=Form(30),fields_json:str=Form("[]"),tutorial_url:str=Form(""),download_url:str=Form(""),provider_service_id:str=Form("")):
     admin_guard(p)
     try: json.loads(fields_json or "[]")
     except: raise HTTPException(400,"JSON dos campos inválido")
-    c=conn(); c.execute("""UPDATE services SET category_id=?,name=?,description=?,cost_usd=?,min_add=?,margin_logista=?,margin_unlocker=?,margin_cliente=?,fields_json=?,tutorial_url=?,download_url=? WHERE id=?""",(category_id,name,description,cost_usd,min_add,margin_logista,margin_unlocker,margin_cliente,fields_json,tutorial_url,download_url,sid)); c.commit(); c.close()
+    c=conn(); c.execute("""UPDATE services SET category_id=?,name=?,description=?,provider_service_id=?,cost_usd=?,min_add=?,margin_logista=?,margin_unlocker=?,margin_cliente=?,fields_json=?,tutorial_url=?,download_url=? WHERE id=?""",(category_id,name,description,provider_service_id.strip(),cost_usd,min_add,margin_logista,margin_unlocker,margin_cliente,fields_json,tutorial_url,download_url,sid)); c.commit(); c.close()
     return RedirectResponse(f"/admin/services?p={p}",303)
 
 @app.get("/admin/users",response_class=HTMLResponse)
