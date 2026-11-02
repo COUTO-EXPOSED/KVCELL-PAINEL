@@ -660,7 +660,19 @@ def bot_api_response(handler,method,path,data,query,user):
     route=path[len('/api/bot/'):]
     c=bot_db()
     try:
+        if method=='POST' and route=='partner/test':
+            account=dhru_request('accountinfo')
+            if isinstance(account,dict) and account.get('ERROR'):
+                msg='; '.join(str(x.get('MESSAGE',x)) for x in account.get('ERROR',[]))
+                raise ValueError(msg or 'Servidor parceiro recusou a conexão.')
+            handler.json({'ok':True,'account':account}); return True
         if method=='POST' and route=='partner/catalog/sync':
+            # Primeiro contato real com accountinfo: o fornecedor registra/atualiza
+            # o IP de saída do servidor. Depois buscamos o catálogo completo.
+            account=dhru_request('accountinfo')
+            if isinstance(account,dict) and account.get('ERROR'):
+                msg='; '.join(str(x.get('MESSAGE',x)) for x in account.get('ERROR',[]))
+                raise ValueError(msg or 'Falha ao autorizar o acesso DHRU. Verifique o IP/API Key.')
             payload=dhru_request('imeiservicelist')
             if isinstance(payload,dict) and payload.get('ERROR'):
                 msg='; '.join(str(x.get('MESSAGE',x)) for x in payload.get('ERROR',[]))
@@ -1035,12 +1047,14 @@ class Handler(BaseHTTPRequestHandler):
         try:return json.loads(raw or b'{}')
         except:return {}
     def user(self):
-        # Painel em modo aberto: sempre opera como administrador local.
-        return {'id': 1, 'name': 'Administrador', 'email': 'admin@kvcell.local', 'role': 'admin', 'unit': 'TODOS', 'permissions': json.dumps({'all': True}), 'active': 1}
+        c=self.headers.get('Cookie',''); sid=''
+        for p in c.split(';'):
+            if p.strip().startswith('sid='): sid=p.strip()[4:]
+        return SESSIONS.get(sid)
     def require(self):
-        # Sem tela de login/sessão. Mantemos o mesmo formato de usuário para
-        # compatibilidade com todas as rotas existentes do KV CELL OS e KVBOT.
-        return {'id': 1, 'name': 'Administrador', 'email': 'admin@kvcell.local', 'role': 'admin', 'unit': 'TODOS', 'permissions': json.dumps({'all': True}), 'active': 1}
+        # Painel administrativo sem tela de login. Mantém um contexto admin estável
+        # para o frontend e para as APIs que dependem de permissões.
+        return {'id':1,'name':'Administrador','email':'kvcelladmin@gmail.com','role':'admin','unit':'TODOS','permissions':{'all':True},'active':1}
     def authorize_module(self,u,path):
         if u.get('role')=='admin': return True
         route=path[5:].strip('/').split('/',1)[0] if path.startswith('/api/') else ''
@@ -1176,8 +1190,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.json({'error':'Este módulo foi removido da versão ativa.'},404)
         if path.startswith('/public/mdm/'):
             return self.json({'error':'Este módulo foi removido da versão ativa.'},404)
-        if path=='/api/login': return self.json({'ok':True,'user':self.require()})
-        if path=='/api/logout': return self.json({'ok':True})
+        if path=='/api/login': return self.login(data)
+        if path=='/api/logout': return self.logout()
         if path.startswith('/public/quote/'):
             return self.public_quote_action(path.split('/')[-1], data)
         if path.startswith('/public/mdm/enroll/'):
