@@ -1,0 +1,1 @@
+<device-admin xmlns:android="http://schemas.android.com/apk/res/android"><uses-policies><force-lock /><disable-keyguard-features /><limit-password /><watch-login /></uses-policies></device-admin>
