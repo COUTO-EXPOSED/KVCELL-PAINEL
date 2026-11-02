@@ -1,6 +1,0 @@
-fastapi
-uvicorn
-pyTelegramBotAPI
-requests
-qrcode[pil]
-python-multipart
